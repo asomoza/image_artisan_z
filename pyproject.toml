@@ -1,0 +1,52 @@
+[project]
+name = "ImageArtisanZ"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "attrs>=25.4.0",
+    "diffusers>=0.35.2",
+    "peft>=0.18.0",
+    "pyqt6>=6.10.0",
+    "torch>=2.6.0",
+    "torchvision>=0.21.0",
+    "transformers>=4.57.3",
+]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+
+[tool.ruff.format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+diffusers = { git = "https://github.com/huggingface/diffusers" }
+
+[project.gui-scripts]
+iartisanz = "iartisanz.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv]
+package = true
