@@ -56,19 +56,35 @@ class GenerationModule(BaseModule):
         self.setLayout(main_layout)
 
     def on_generate(self, seed: int, positive_prompt: str, negative_prompt: str):
+        self.progress_bar.setMaximum(9)
+
         self.thread.seed = seed
         self.thread.positive_prompt = positive_prompt
         self.thread.negative_prompt = negative_prompt
         self.thread.start()
 
     def step_progress_update(self, step: int, latents: torch.Tensor):
+        self.progress_bar.setValue(step)
+
         latent_rgb_factors = torch.tensor(LATENT_RGB_FACTORS, dtype=latents.dtype).to(device=latents.device)
 
         latent_image = latents.squeeze(0).permute(1, 2, 0) @ latent_rgb_factors
         latents_ubyte = ((latent_image + 1.0) / 2.0).clamp(0, 1).mul(0xFF)
         image = Image.fromarray(latents_ubyte.byte().cpu().numpy())
 
-        self.show_preview(image)
+        qimage = QImage(image.tobytes(), image.width, image.height, QImage.Format.Format_RGB888)
+        qpixmap = QPixmap.fromImage(qimage)
+
+        label_size = self.image_viewer.size()
+
+        scaled_pixmap = qpixmap.scaled(
+            label_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+
+        self.image_viewer.set_pixmap(scaled_pixmap)
+
+        if step == 0:
+            self.image_viewer.reset_view()
 
     def generation_finished(self, image: Image):
         self.progress_bar.setMaximum(100)
@@ -80,22 +96,3 @@ class GenerationModule(BaseModule):
 
         self.image_viewer.set_pixmap(image_processor.get_qpixmap())
         self.image_viewer.reset_view()
-
-        self.show_preview(image)
-
-    def show_preview(self, image: Image):
-        if image is None:
-            return
-
-        qimage = QImage(image.tobytes(), image.width, image.height, QImage.Format.Format_RGB888)
-        qpixmap = QPixmap.fromImage(qimage)
-
-        label_size = self.image_viewer.size()
-
-        scaled_pixmap = qpixmap.scaled(
-            label_size,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-
-        self.image_viewer.set_pixmap(scaled_pixmap)
