@@ -5,17 +5,17 @@ from PyQt6.QtCore import QPointF, Qt
 from PyQt6.QtGui import QAction, QContextMenuEvent, QKeySequence, QMouseEvent, QScreen, QShortcut, QWheelEvent
 from PyQt6.QtWidgets import QApplication, QFileDialog, QGraphicsScene, QGraphicsView, QMenu
 
-from iartisanz.modules.generation.full_screen_preview import FullScreenPreview
+from iartisanz.modules.generation.dialogs.full_screen_preview import FullScreenPreview
 from iartisanz.utils.image_processor import ImageProcessor
 
 
 class ImageViewerSimple(QGraphicsView):
-    def __init__(self, output_path, *args, **kwargs):
+    def __init__(self, output_path, preferences, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setAcceptDrops(True)
 
         self.output_path = output_path
-
+        self.preferences = preferences
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)

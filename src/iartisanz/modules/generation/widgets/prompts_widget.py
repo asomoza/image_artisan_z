@@ -4,8 +4,8 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
 from transformers import Qwen2Tokenizer
 
-from iartisanz.modules.generation.generate_button import GenerateButton
-from iartisanz.modules.generation.prompt_input import PromptInput
+from iartisanz.modules.generation.buttons.generate_button import GenerateButton
+from iartisanz.modules.generation.widgets.prompt_input import PromptInput
 
 
 class PromptsWidget(QFrame):

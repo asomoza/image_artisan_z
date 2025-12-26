@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout
 
-from iartisanz.modules.generation.image_label import ImageLabel
+from iartisanz.modules.generation.widgets.image_label import ImageLabel
 
 
 class FullScreenPreview(QDialog):

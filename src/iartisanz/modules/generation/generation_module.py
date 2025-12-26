@@ -1,17 +1,20 @@
 import logging
+import random
 
 import torch
 from PIL import Image
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QProgressBar, QSizePolicy, QSpacerItem, QVBoxLayout
 
 from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
-from iartisanz.modules.generation.generation_thread import DiffusersThread
-from iartisanz.modules.generation.image_viewer_simple import ImageViewerSimple
-from iartisanz.modules.generation.prompts_widget import PromptsWidget
+from iartisanz.modules.generation.graph.new_graph import create_default_graph
+from iartisanz.modules.generation.threads.generation_thread import NodeGraphThread
+from iartisanz.modules.generation.widgets.image_viewer_simple import ImageViewerSimple
+from iartisanz.modules.generation.widgets.prompts_widget import PromptsWidget
+from iartisanz.utils.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
 from iartisanz.utils.image_processor import ImageProcessor
+from iartisanz.utils.image_utils import fast_upscale_and_denoise
 
 
 class GenerationModule(BaseModule):
@@ -20,9 +23,15 @@ class GenerationModule(BaseModule):
 
         self.logger = logging.getLogger(__name__)
 
-        self.thread = DiffusersThread()
-        self.thread.progress_update.connect(self.step_progress_update)
-        self.thread.generation_finished.connect(self.generation_finished)
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.dtype = torch.bfloat16
+        self.node_graph = create_default_graph()
+
+        self.generation_thread = NodeGraphThread(self.directories, self.node_graph, self.dtype, self.device)
+        self.generation_thread.progress_update.connect(self.step_progress_update)
+        self.generation_thread.status_changed.connect(self.update_status_bar)
+        self.generation_thread.generation_finished.connect(self.generation_finished)
+        self.generation_thread.force_new_run = True
 
         self.init_ui()
 
@@ -31,7 +40,7 @@ class GenerationModule(BaseModule):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        self.image_viewer = ImageViewerSimple(self.directories.outputs_images)
+        self.image_viewer = ImageViewerSimple(self.directories.outputs_images, self.preferences)
         self.image_viewer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.image_viewer)
 
@@ -58,35 +67,38 @@ class GenerationModule(BaseModule):
     def on_generate(self, seed: int, positive_prompt: str, negative_prompt: str):
         self.progress_bar.setMaximum(9)
 
-        self.thread.seed = seed
-        self.thread.positive_prompt = positive_prompt
-        self.thread.negative_prompt = negative_prompt
-        self.thread.start()
+        self.generation_thread.seed = random.randint(0, 2**32 - 1)
+        self.generation_thread.positive_prompt = positive_prompt
+        self.generation_thread.negative_prompt = negative_prompt
+        self.generation_thread.image_width = 1024
+        self.generation_thread.image_height = 1024
+        self.generation_thread.start()
 
     def step_progress_update(self, step: int, latents: torch.Tensor):
         self.progress_bar.setValue(step)
 
-        latent_rgb_factors = torch.tensor(LATENT_RGB_FACTORS, dtype=latents.dtype).to(device=latents.device)
+        numpy_image = convert_latents_to_rgb(latents, LATENT_RGB_FACTORS)
+        high = 50
+        low = 3
+        denoise_strength = high + (low - high) * step / (9 - 1)
+        numpy_image = fast_upscale_and_denoise(numpy_image, 1, denoise_strength)
 
-        latent_image = latents.squeeze(0).permute(1, 2, 0) @ latent_rgb_factors
-        latents_ubyte = ((latent_image + 1.0) / 2.0).clamp(0, 1).mul(0xFF)
-        image = Image.fromarray(latents_ubyte.byte().cpu().numpy())
+        qpixmap = convert_numpy_to_pixmap(numpy_image)
 
-        qimage = QImage(image.tobytes(), image.width, image.height, QImage.Format.Format_RGB888)
-        qpixmap = QPixmap.fromImage(qimage)
-
-        label_size = self.image_viewer.size()
-
-        scaled_pixmap = qpixmap.scaled(
-            label_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-        )
-
-        self.image_viewer.set_pixmap(scaled_pixmap)
+        self.image_viewer.set_pixmap(qpixmap)
 
         if step == 0:
             self.image_viewer.reset_view()
 
     def generation_finished(self, image: Image):
+        denoise_node = self.node_graph.get_node_by_name("denoise")
+        duration = denoise_node.elapsed_time
+
+        if duration is not None:
+            self.status_bar.showMessage(f"Ready - {round(duration, 1)} s ({round(duration * 1000, 2)} ms)")
+        else:
+            self.status_bar.showMessage("Ready")
+
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(100)
 
