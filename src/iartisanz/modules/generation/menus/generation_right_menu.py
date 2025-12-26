@@ -16,12 +16,7 @@ class GenerationRightMenu(QFrame):
     EXPANDED_WIDTH = 400
     NORMAL_WIDTH = 40
 
-    def __init__(
-        self,
-        module_options: dict,
-        preferences: PreferencesObject,
-        directories: DirectoriesObject,
-    ):
+    def __init__(self, module_options: dict, preferences: PreferencesObject, directories: DirectoriesObject):
         super().__init__()
 
         self.logger = logging.getLogger(__name__)
@@ -48,11 +43,14 @@ class GenerationRightMenu(QFrame):
         self.current_panel = None
         self.current_panel_text = None
 
+        self.panel_instances: dict[str, QFrame] = {}
+
         self.init_ui()
 
-        # Add panels
         self.add_panel("Generation", GenerationPanel)
         self.add_panel("LoRA", LoraPanel)
+
+        self.loras = []
 
     def init_ui(self):
         self.main_layout = QHBoxLayout()
@@ -129,7 +127,9 @@ class GenerationRightMenu(QFrame):
         if self.animating:
             return
 
-        self.current_panel.setParent(None)
+        if self.current_panel is not None:
+            self.current_panel.setVisible(False)
+
         self.animation.setStartValue(self.EXPANDED_WIDTH)
         self.animation.setEndValue(self.NORMAL_WIDTH)
         self.animation.start()
@@ -140,12 +140,21 @@ class GenerationRightMenu(QFrame):
         panel_class = panel_info["class"]
         args = panel_info["args"]
 
-        if hasattr(self, "current_panel") and self.current_panel is not None and self.current_panel != panel_class:
-            self.current_panel.setParent(None)
-            del self.current_panel
+        panel = self.panel_instances.get(text)
+        if panel is None:
+            panel = panel_class(*args)
+            self.panel_container.panel_layout.addWidget(panel)
+            self.panel_instances[text] = panel
 
-        panel = panel_class(*args)
-        self.panel_container.panel_layout.addWidget(panel)
+        for key, widget in self.panel_instances.items():
+            widget.setVisible(key == text)
 
         self.current_panel = panel
         self.current_panel_text = text
+
+    def closeEvent(self, event):
+        for key, panel in self.panel_instances.items():
+            panel.setParent(None)
+        self.panel_instances.clear()
+
+        super().closeEvent(event)
