@@ -9,7 +9,7 @@ from iartisanz.app.event_bus import EventBus
 from iartisanz.modules.generation.dialogs.full_screen_preview import FullScreenPreview
 
 
-class ImageViewerSimple(QGraphicsView):
+class ImageViewerSimpleWidget(QGraphicsView):
     def __init__(self, output_path, preferences, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setAcceptDrops(True)

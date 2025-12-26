@@ -200,7 +200,7 @@ QSpinBox::down-button
 }
 
 /* Custom widgets */
-ImageViewerSimple {
+ImageViewerSimpleWidget {
     background: #29292b;
 }
 

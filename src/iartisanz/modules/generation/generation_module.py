@@ -1,14 +1,15 @@
 import logging
 
 import torch
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QProgressBar, QSizePolicy, QSpacerItem, QVBoxLayout
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem, QVBoxLayout
 
 from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
+from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
 from iartisanz.modules.generation.threads.generation_thread import NodeGraphThread
-from iartisanz.modules.generation.widgets.image_viewer_simple import ImageViewerSimple
+from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.widgets.prompts_widget import PromptsWidget
 from iartisanz.utils.image.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
 from iartisanz.utils.image.image_utils import fast_upscale_and_denoise
@@ -20,6 +21,16 @@ class GenerationModule(BaseModule):
 
         self.logger = logging.getLogger(__name__)
 
+        self.settings = QSettings("ZCode", "ImageArtisanZ")
+
+        self.settings.beginGroup("generation")
+        self.module_options = {
+            "right_menu_expanded": self.settings.value("right_menu_expanded", True, type=bool),
+            "image_width": self.settings.value("image_width", 1024, type=int),
+            "image_height": self.settings.value("image_height", 1024, type=int),
+        }
+        self.settings.endGroup()
+
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.dtype = torch.bfloat16
         self.node_graph = create_default_graph()
@@ -30,16 +41,34 @@ class GenerationModule(BaseModule):
         self.generation_thread.generation_finished.connect(self.generation_finished)
         self.generation_thread.force_new_run = True
 
+        # set initial values for generation
+        self.image_width = self.module_options.get("image_width")
+        self.image_height = self.module_options.get("image_height")
+        self.generation_thread.update_node("image_width", self.image_width)
+        self.generation_thread.update_node("image_height", self.image_height)
+
         self.init_ui()
+
+        self.event_bus.subscribe("generation_change", self.on_generation_change_event)
+        self.event_bus.subscribe("open_dialog", self.on_open_dialog_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        self.image_viewer = ImageViewerSimple(self.directories.outputs_images, self.preferences)
+        top_layout = QHBoxLayout()
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(0)
+        self.image_viewer = ImageViewerSimpleWidget(self.directories.outputs_images, self.preferences)
         self.image_viewer.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(self.image_viewer)
+        top_layout.addWidget(self.image_viewer)
+
+        self.right_menu = GenerationRightMenu(self.module_options, self.preferences, self.directories)
+        top_layout.addWidget(self.right_menu)
+        top_layout.setStretch(0, 1)
+
+        main_layout.addLayout(top_layout)
 
         spacer = QSpacerItem(5, 5, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         main_layout.addSpacerItem(spacer)
@@ -61,6 +90,13 @@ class GenerationModule(BaseModule):
 
         self.setLayout(main_layout)
 
+    def closeEvent(self, event):
+        self.settings.beginGroup("generation")
+        self.settings.setValue("right_menu_expanded", self.module_options.get("right_menu_expanded"))
+        self.settings.setValue("image_width", self.image_width)
+        self.settings.setValue("image_height", self.image_height)
+        self.settings.endGroup()
+
     def on_generate(
         self,
         seed: int,
@@ -81,8 +117,6 @@ class GenerationModule(BaseModule):
         if seed_changed:
             self.generation_thread.update_seed(seed)
 
-        self.generation_thread.image_width = 1024
-        self.generation_thread.image_height = 1024
         self.generation_thread.start()
 
     def step_progress_update(self, step: int, latents: torch.Tensor):
@@ -123,3 +157,14 @@ class GenerationModule(BaseModule):
 
         self.image_viewer.set_pixmap(pixmap)
         self.image_viewer.reset_view()
+
+    def on_generation_change_event(self, data):
+        attribute = data.get("attr")
+        value = data.get("value")
+
+        if attribute == "image_width":
+            self.image_width = value
+        elif attribute == "image_height":
+            self.image_height = value
+
+        self.generation_thread.update_node(attribute, value)

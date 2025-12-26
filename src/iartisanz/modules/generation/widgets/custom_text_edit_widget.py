@@ -3,7 +3,7 @@ from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QTextEdit
 
 
-class CustomTextEdit(QTextEdit):
+class CustomTextEditWidget(QTextEdit):
     def __init__(self, parent):
         super().__init__(parent)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)

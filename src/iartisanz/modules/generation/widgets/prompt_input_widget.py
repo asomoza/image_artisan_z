@@ -1,10 +1,10 @@
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
 
-from iartisanz.modules.generation.widgets.custom_text_edit import CustomTextEdit
+from iartisanz.modules.generation.widgets.custom_text_edit_widget import CustomTextEditWidget
 
 
-class PromptInput(QWidget):
+class PromptInputWidget(QWidget):
     text_changed = pyqtSignal()
 
     def __init__(self, positive: bool, token_count: int, max_tokens: int, title: str = None):
@@ -27,7 +27,7 @@ class PromptInput(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.custom_text_edit = CustomTextEdit(self)
+        self.custom_text_edit = CustomTextEditWidget(self)
         self.custom_text_edit.textChanged.connect(self.text_changed.emit)
 
         self.count_widget = QWidget(self)

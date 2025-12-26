@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
 from transformers import Qwen2Tokenizer
 
 from iartisanz.modules.generation.buttons.generate_button import GenerateButton
-from iartisanz.modules.generation.widgets.prompt_input import PromptInput
+from iartisanz.modules.generation.widgets.prompt_input_widget import PromptInputWidget
 
 
 class PromptsWidget(QFrame):
@@ -33,13 +33,13 @@ class PromptsWidget(QFrame):
         text_layout = QVBoxLayout()
 
         positive_prompt_layout = QGridLayout()
-        self.positive_prompt = PromptInput(True, 0, self.max_tokens)
+        self.positive_prompt = PromptInputWidget(True, 0, self.max_tokens)
         self.positive_prompt.text_changed.connect(self.on_prompt_changed)
         positive_prompt_layout.addWidget(self.positive_prompt, 0, 0)
         text_layout.addLayout(positive_prompt_layout)
 
         negative_prompt_layout = QGridLayout()
-        self.negative_prompt = PromptInput(False, 0, self.max_tokens)
+        self.negative_prompt = PromptInputWidget(False, 0, self.max_tokens)
         self.negative_prompt.text_changed.connect(self.on_prompt_changed)
         negative_prompt_layout.addWidget(self.negative_prompt, 0, 0)
         text_layout.addLayout(negative_prompt_layout)

@@ -35,6 +35,7 @@ class MainWindow(QMainWindow):
 
         self.directories = directories
         self.preferences = preferences
+        self.module = None
 
         self.settings = QSettings("ZCode", "ImageArtisanZ")
 
@@ -132,6 +133,9 @@ class MainWindow(QMainWindow):
         self.settings.beginGroup("gui")
         self.settings.setValue("current_module", self.gui_options.get("current_module"))
         self.settings.endGroup()
+
+        if self.module is not None:
+            self.module.close()
 
         for child in self.findChildren(QWidget):
             child.deleteLater()

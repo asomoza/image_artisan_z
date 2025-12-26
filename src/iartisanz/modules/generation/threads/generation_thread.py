@@ -34,12 +34,6 @@ class NodeGraphThread(QThread):
         self.directories = directories
 
         self.force_new_run = False
-        self.seed = None
-        self.positive_prompt = None
-        self.negative_prompt = None
-        self.image_width = 1024
-        self.image_height = 1024
-
         self.node_graph.set_abort_function(self.on_aborted)
 
     def run(self):
@@ -48,12 +42,6 @@ class NodeGraphThread(QThread):
         self.status_changed.emit("Generating image...")
 
         if self.force_new_run:
-            node = self.node_graph.get_node_by_name("image_width")
-            node.update_value(self.image_width)
-
-            node = self.node_graph.get_node_by_name("image_height")
-            node.update_value(self.image_height)
-
             node = self.node_graph.get_node_by_name("num_inference_steps")
             node.update_value(9)
 
@@ -96,6 +84,10 @@ class NodeGraphThread(QThread):
     def update_negative_prompt(self, prompt: str):
         node = self.node_graph.get_node_by_name("negative_prompt")
         node.update_value(prompt)
+
+    def update_node(self, node_name: str, value):
+        node = self.node_graph.get_node_by_name(node_name)
+        node.update_value(value)
 
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)

@@ -3,7 +3,7 @@ from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtWidgets import QLabel
 
 
-class ImageLabel(QLabel):
+class ImageLabelWidget(QLabel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setScaledContents(True)
