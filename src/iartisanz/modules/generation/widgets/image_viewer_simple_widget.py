@@ -165,7 +165,7 @@ class ImageViewerSimpleWidget(QGraphicsView):
 
     def save_image(self):
         if self.pixmap_item is None:
-            self.event_bus.publish("show_snackbar", {"attr": "message", "value": "No image to save"})
+            self.event_bus.publish("show_snackbar", {"action": "show", "message": "No image to save"})
             return
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")

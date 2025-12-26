@@ -8,6 +8,7 @@ from iartisanz.app.directories import DirectoriesObject
 from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
+from iartisanz.modules.generation.graph.nodes.lora_node import LoraNode
 
 
 class NodeGraphThread(QThread):
@@ -73,21 +74,45 @@ class NodeGraphThread(QThread):
             self.logger.debug(f"Error in node: '{e.node_name}': {e}")
             self.generation_error.emit(f"Error in node '{e.node_name}': {e}", False)
 
-    def update_seed(self, seed: int):
-        node = self.node_graph.get_node_by_name("seed")
-        node.update_value(seed)
-
-    def update_positive_prompt(self, prompt: str):
-        node = self.node_graph.get_node_by_name("positive_prompt")
-        node.update_value(prompt)
-
-    def update_negative_prompt(self, prompt: str):
-        node = self.node_graph.get_node_by_name("negative_prompt")
-        node.update_value(prompt)
-
     def update_node(self, node_name: str, value):
         node = self.node_graph.get_node_by_name(node_name)
         node.update_value(value)
+
+    def add_lora(self, lora_data):
+        lora_node = self.node_graph.get_node_by_name(f"{lora_data.name}_{lora_data.version}_lora")
+
+        if lora_node is not None:
+            lora_node.update_lora(
+                enabled=lora_data.enabled,
+                transformer_weight=lora_data.transformer_weight,
+                is_slider=lora_data.is_slider,
+            )
+            return
+
+        lora_node = LoraNode(
+            path=lora_data.path,
+            adapter_name=lora_data.name,
+            lora_name=lora_data.name,
+            version=lora_data.version,
+            transformer_weight=1.0,
+            is_slider=False,
+        )
+        lora_node.connect("transformer", self.node_graph.get_node_by_name("model"), "transformer")
+        self.node_graph.add_node(lora_node, f"{lora_data.name}_{lora_data.version}_lora")
+
+        denoise = self.node_graph.get_node_by_name("denoise")
+        denoise.connect("lora", lora_node, "lora")
+
+    def remove_lora(self, lora_data):
+        lora_node = None
+        for node in self.node_graph.nodes:
+            if isinstance(node, LoraNode):
+                if node.lora_name == lora_data.name and node.version == lora_data.version:
+                    lora_node = node
+                    break
+
+        if lora_node is not None:
+            self.node_graph.delete_node(lora_node)
 
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)

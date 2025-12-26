@@ -3,6 +3,7 @@ from typing import Optional, Union
 
 import torch
 
+from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
@@ -16,7 +17,7 @@ class DenoiseNode(Node):
         "negative_prompt_embeds",
         "guidance_scale",
     ]
-    OPTIONAL_INPUTS = ["cfg_truncation", "cfg_normalization", "sigmas"]
+    OPTIONAL_INPUTS = ["cfg_truncation", "cfg_normalization", "sigmas", "lora"]
     OUTPUTS = ["latents"]
 
     def __init__(self, callback: callable = None):
@@ -29,6 +30,17 @@ class DenoiseNode(Node):
         do_classifier_free_guidance = True if self.guidance_scale > 1 else False
         cfg_truncation = self.cfg_truncation if self.cfg_truncation is not None else 1.0
         cfg_normalization = self.cfg_normalization if self.cfg_normalization is not None else False
+
+        if self.lora:
+            try:
+                if isinstance(self.lora, list):
+                    keys = [item[0] for item in self.lora]
+                    transformer_values = [item[1]["transformer"] for item in self.lora]
+                    self.transformer.set_adapters(keys, transformer_values)
+                else:
+                    self.transformer.set_adapters([self.lora[0]], self.lora[1])
+            except RuntimeError as e:
+                raise IArtisanZNodeError(e, self.__class__.__name__)
 
         prompt_embeds = self.prompt_embeds.to(self.device)
         negative_prompt_embeds = self.negative_prompt_embeds.to(self.device)

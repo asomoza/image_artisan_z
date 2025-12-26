@@ -204,6 +204,135 @@ ImageViewerSimpleWidget {
     background: #29292b;
 }
 
+GenerationRightMenu {
+    background: #27272b;
+    border-radius: 10;
+}
+
+PanelContainer {
+    background-color: #2a3541;
+}
+
+PanelContainer QWidget#panel_container QSlider, 
+PanelContainer QWidget#panel_container QLabel, 
+PanelContainer QWidget#panel_container QCheckBox {
+    background-color: #2a3541;
+    border: 0px;
+}
+
+PanelContainer QWidget#panel_container QFrame {
+    background-color: #2a3541;
+    border: 1px solid #fff;
+}
+
+PanelContainer QWidget#panel_container QLabel {
+    border: 0;
+}
+
+QLabel#model_name {
+    color: #dadada;
+    font-size: 17px;
+    font-weight: bold;
+}
+
+QLabel#model_type {
+    color: #dadada;
+    font-weight: bold;
+}
+
+QLabel#version_title {
+    color: #dadada;
+    font-weight: bold;
+}
+
+QLabel#tags_title {    
+    color: #dadada;
+    font-weight: bold;
+}
+
+QLabel#tags {    
+    color: #8d8d8d;
+}
+
+QLabel#trigger_words {    
+    color: #afad42;
+    font-weight: bold;
+}
+
+QPushButton#trigger_item {    
+    background-color: #2d334b;
+    padding: 2px 4px; 
+    border-radius: 5px;
+}
+
+QPushButton#trigger_item:hover {    
+    background-color: #434b6e;
+}
+
+QPushButton#trigger_item:pressed {    
+    background-color: #555f8b;
+}
+
+QLabel#prompt_label {    
+    font-weight: bold;
+}
+
+ModelItemsView QPushButton {
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #236092, stop: 1 #122e4e);
+    padding: 3px 5px;
+}
+
+ModelItemsView QPushButton:hover {
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #2971ac, stop: 1 #19406d);
+}
+
+ModelItemsView QPushButton:pressed {
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #2e7dbe, stop: 1 #205592);
+}
+
+ModelItemsView QComboBox {
+    padding: 2px 5px;
+}
+
+ModelItemsView QProgressBar:horizontal {
+    background-color: #353636;
+    border: 10px solid #181b28;
+    border-radius: 0.13em;
+    padding: 0em;
+}
+
+ItemSelector QFrame {
+    background: #424246;
+}
+
+ModelImageWidget QLabel#item_name {
+    background-color: rgba(0, 0, 0, 127);
+    color: white;
+    padding: 2px;
+}
+
+ModelImageWidget QLabel#item_version {
+    background-color: rgba(0, 0, 0, 127);
+    color: white;
+    padding: 2px;
+}
+
+ModelImageWidget QLabel#item_type {
+    background-color: rgba(0, 0, 0, 127);
+    color: white;
+    padding: 2px;
+}
+
+ModelInfoWidget QProgressBar:horizontal {
+    background-color: #353636;
+    border: 10px solid #181b28;
+    border-radius: 0.13em;
+    padding: 0em;
+}
+
+LoraPanel LoraAddedItem {
+    border: 1px solid #3a3a3a;
+}
 
 /* Custom buttons */
 QPushButton#green_button {

@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem,
 from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
+from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
 from iartisanz.modules.generation.threads.generation_thread import NodeGraphThread
 from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
@@ -49,8 +50,11 @@ class GenerationModule(BaseModule):
 
         self.init_ui()
 
+        self.dialogs = {}
+
         self.event_bus.subscribe("generation_change", self.on_generation_change_event)
-        self.event_bus.subscribe("open_dialog", self.on_open_dialog_event)
+        self.event_bus.subscribe("manage_dialog", self.on_manage_dialog_event)
+        self.event_bus.subscribe("lora", self.on_lora_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -97,6 +101,9 @@ class GenerationModule(BaseModule):
         self.settings.setValue("image_height", self.image_height)
         self.settings.endGroup()
 
+        self.event_bus.unsubscribe("manage_dialog", self.on_manage_dialog_event)
+        self.close_all_dialogs()
+
     def on_generate(
         self,
         seed: int,
@@ -109,13 +116,13 @@ class GenerationModule(BaseModule):
         self.progress_bar.setMaximum(9)
 
         if positive_prompt_changed:
-            self.generation_thread.update_positive_prompt(positive_prompt)
+            self.generation_thread.update_node("positive_prompt", positive_prompt)
 
         if negative_prompt_changed:
-            self.generation_thread.update_negative_prompt(negative_prompt)
+            self.generation_thread.update_node("negative_prompt", negative_prompt)
 
         if seed_changed:
-            self.generation_thread.update_seed(seed)
+            self.generation_thread.update_node("seed", seed)
 
         self.generation_thread.start()
 
@@ -136,7 +143,7 @@ class GenerationModule(BaseModule):
             self.image_viewer.reset_view()
 
     def on_status_changed(self, message: str):
-        self.event_bus.publish("change_status_message", {"value": message})
+        self.event_bus.publish("status_message", {"action": "change", "message": message})
 
     def generation_finished(self, image):
         denoise_node = self.node_graph.get_node_by_name("denoise")
@@ -144,12 +151,14 @@ class GenerationModule(BaseModule):
 
         if duration is not None:
             self.event_bus.publish(
-                "change_status_message",
-                {"value": f"Ready - last generation time: {round(duration, 1)} s ({round(duration * 1000, 2)} ms)"},
+                "status_message",
+                {
+                    "action": "change",
+                    "message": f"Ready - last generation time: {round(duration, 1)} s ({round(duration * 1000, 2)} ms)",
+                },
             )
         else:
-            self.event_bus.publish("change_status_message", {"value": "Ready"})
-
+            self.event_bus.publish("status_message", {"action": "change", "message": "Ready"})
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(100)
 
@@ -168,3 +177,34 @@ class GenerationModule(BaseModule):
             self.image_height = value
 
         self.generation_thread.update_node(attribute, value)
+
+    def on_manage_dialog_event(self, data):
+        dialog_type = data.get("dialog_type")
+        action = data.get("action")
+
+        if dialog_type == "lora_manager":
+            if action == "open":
+                if "lora_manager" not in self.dialogs:
+                    self.dialogs[dialog_type] = LoraManagerDialog(dialog_type, self.directories, self.preferences)
+
+                self.dialogs[dialog_type].show()
+                self.dialogs[dialog_type].raise_()
+                self.dialogs[dialog_type].activateWindow()
+            elif action == "close":
+                self.dialogs[dialog_type].close()
+                del self.dialogs[dialog_type]
+
+    def close_all_dialogs(self):
+        for dialog in self.dialogs.values():
+            dialog.close()
+
+        self.dialogs = {}
+
+    def on_lora_event(self, data: dict):
+        action = data.get("action")
+        if action == "add":
+            lora_data = data.get("lora")
+            self.generation_thread.add_lora(lora_data)
+        elif action == "remove":
+            lora_data = data.get("lora")
+            self.generation_thread.remove_lora(lora_data)

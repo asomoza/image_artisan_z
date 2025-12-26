@@ -117,7 +117,7 @@ class PromptsWidget(QFrame):
             try:
                 seed = int(self.seed_text.text())
             except ValueError:
-                self.event_bus.publish("show_snackbar", {"value": "Seed is not valid."})
+                self.event_bus.publish("show_snackbar", {"action": "show", "message": "Seed is not valid."})
                 return
 
         seed_changed = self.previous_seed != seed

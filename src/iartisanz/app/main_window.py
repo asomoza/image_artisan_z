@@ -8,7 +8,7 @@ from iartisanz.app.directories import DirectoriesObject
 from iartisanz.app.event_bus import EventBus
 from iartisanz.app.modules import MODULES
 from iartisanz.app.preferences import PreferencesObject
-from iartisanz.app.widgets.snackbar import SnackBar
+from iartisanz.app.snackbar import SnackBar
 from iartisanz.utils.database.database import Database
 
 
@@ -67,7 +67,7 @@ class MainWindow(QMainWindow):
         self.event_bus = EventBus()
 
         self.event_bus.subscribe("show_snackbar", self.on_show_snackbar_event)
-        self.event_bus.subscribe("change_status_message", self.on_change_status_message_event)
+        self.event_bus.subscribe("status_message", self.on_status_message_event)
 
         # import heavy libraries like torch here
         import torch  # noqa: F401
@@ -259,9 +259,15 @@ class MainWindow(QMainWindow):
             self.show_snackbar(f"{module_error}")
 
     def on_show_snackbar_event(self, data):
-        message = data.get("value", "")
-        self.show_snackbar(message)
+        action = data.get("action", "")
 
-    def on_change_status_message_event(self, data):
-        message = data.get("value", "")
-        self.status_bar.showMessage(message)
+        if action == "show":
+            message = data.get("message", "")
+            self.show_snackbar(message)
+
+    def on_status_message_event(self, data):
+        action = data.get("action", "")
+        message = data.get("message", "")
+
+        if action == "change":
+            self.status_bar.showMessage(message)

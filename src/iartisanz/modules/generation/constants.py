@@ -18,3 +18,5 @@ LATENT_RGB_FACTORS = [
     [-0.0280, -0.0881, -0.0499],
     [-0.1262, -0.0982, -0.0778],
 ]
+
+MODEL_TYPES = {1: "Z-Image Turbo"}
