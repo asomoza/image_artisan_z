@@ -5,6 +5,7 @@ from PyQt6.QtCore import QPointF, Qt
 from PyQt6.QtGui import QAction, QContextMenuEvent, QKeySequence, QMouseEvent, QScreen, QShortcut, QWheelEvent
 from PyQt6.QtWidgets import QApplication, QFileDialog, QGraphicsScene, QGraphicsView, QMenu
 
+from iartisanz.app.event_bus import EventBus
 from iartisanz.modules.generation.dialogs.full_screen_preview import FullScreenPreview
 
 
@@ -42,6 +43,8 @@ class ImageViewerSimple(QGraphicsView):
         self.total_translation = QPointF(0, 0)
         self.min_scale_factor = 0.1
         self.max_scale_factor = 20.0
+
+        self.event_bus = EventBus()
 
     def set_pixmap(self, pixmap):
         self.scene().clear()
@@ -162,7 +165,7 @@ class ImageViewerSimple(QGraphicsView):
 
     def save_image(self):
         if self.pixmap_item is None:
-            # TODO: Show error message to user
+            self.event_bus.publish("show_snackbar", {"attr": "message", "value": "No image to save"})
             return
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")

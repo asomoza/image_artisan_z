@@ -63,6 +63,9 @@ class MainWindow(QMainWindow):
 
         self.event_bus = EventBus()
 
+        self.event_bus.subscribe("show_snackbar", self.on_show_snackbar_event)
+        self.event_bus.subscribe("change_status_message", self.on_change_status_message_event)
+
         # import heavy libraries like torch here
         import torch  # noqa: F401
 
@@ -195,10 +198,18 @@ class MainWindow(QMainWindow):
             current_module.deleteLater()
 
         try:
-            self.module = module_class(self.status_bar, self.show_snackbar, self.directories, self.preferences)
+            self.module = module_class(self.directories, self.preferences)
             self.workspace_layout.addWidget(self.module)
             self.gui_options["current_module"] = label
         except TypeError as module_error:
             self.logger.error("Error loading the module with this message: %s", str(module_error))
             self.logger.debug("TypeError exception", exc_info=True)
             self.show_snackbar(f"{module_error}")
+
+    def on_show_snackbar_event(self, data):
+        message = data.get("value", "")
+        self.show_snackbar(message)
+
+    def on_change_status_message_event(self, data):
+        message = data.get("value", "")
+        self.status_bar.showMessage(message)

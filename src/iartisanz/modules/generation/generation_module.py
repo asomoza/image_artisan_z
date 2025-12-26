@@ -27,7 +27,7 @@ class GenerationModule(BaseModule):
 
         self.generation_thread = NodeGraphThread(self.directories, self.node_graph, self.dtype, self.device)
         self.generation_thread.progress_update.connect(self.step_progress_update)
-        self.generation_thread.status_changed.connect(self.update_status_bar)
+        self.generation_thread.status_changed.connect(self.on_status_changed)
         self.generation_thread.generation_finished.connect(self.generation_finished)
         self.generation_thread.force_new_run = True
 
@@ -88,14 +88,20 @@ class GenerationModule(BaseModule):
         if step == 0:
             self.image_viewer.reset_view()
 
+    def on_status_changed(self, message: str):
+        self.event_bus.publish("change_status_message", {"value": message})
+
     def generation_finished(self, image):
         denoise_node = self.node_graph.get_node_by_name("denoise")
         duration = denoise_node.elapsed_time
 
         if duration is not None:
-            self.status_bar.showMessage(f"Ready - {round(duration, 1)} s ({round(duration * 1000, 2)} ms)")
+            self.event_bus.publish(
+                "change_status_message",
+                {"value": f"Ready - last generation time: {round(duration, 1)} s ({round(duration * 1000, 2)} ms)"},
+            )
         else:
-            self.status_bar.showMessage("Ready")
+            self.event_bus.publish("change_status_message", {"value": "Ready"})
 
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(100)
