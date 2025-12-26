@@ -2,7 +2,6 @@ import logging
 import random
 
 import torch
-from PIL import Image
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QProgressBar, QSizePolicy, QSpacerItem, QVBoxLayout
 
@@ -12,9 +11,8 @@ from iartisanz.modules.generation.graph.new_graph import create_default_graph
 from iartisanz.modules.generation.threads.generation_thread import NodeGraphThread
 from iartisanz.modules.generation.widgets.image_viewer_simple import ImageViewerSimple
 from iartisanz.modules.generation.widgets.prompts_widget import PromptsWidget
-from iartisanz.utils.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
-from iartisanz.utils.image_processor import ImageProcessor
-from iartisanz.utils.image_utils import fast_upscale_and_denoise
+from iartisanz.utils.image.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
+from iartisanz.utils.image.image_utils import fast_upscale_and_denoise
 
 
 class GenerationModule(BaseModule):
@@ -90,7 +88,7 @@ class GenerationModule(BaseModule):
         if step == 0:
             self.image_viewer.reset_view()
 
-    def generation_finished(self, image: Image):
+    def generation_finished(self, image):
         denoise_node = self.node_graph.get_node_by_name("denoise")
         duration = denoise_node.elapsed_time
 
@@ -102,9 +100,7 @@ class GenerationModule(BaseModule):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(100)
 
-        image_processor = ImageProcessor()
-        image_processor.set_pillow_image(image)
-        image = None
+        pixmap = convert_numpy_to_pixmap(image)
 
-        self.image_viewer.set_pixmap(image_processor.get_qpixmap())
+        self.image_viewer.set_pixmap(pixmap)
         self.image_viewer.reset_view()

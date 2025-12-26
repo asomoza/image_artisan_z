@@ -6,7 +6,6 @@ from PyQt6.QtGui import QAction, QContextMenuEvent, QKeySequence, QMouseEvent, Q
 from PyQt6.QtWidgets import QApplication, QFileDialog, QGraphicsScene, QGraphicsView, QMenu
 
 from iartisanz.modules.generation.dialogs.full_screen_preview import FullScreenPreview
-from iartisanz.utils.image_processor import ImageProcessor
 
 
 class ImageViewerSimple(QGraphicsView):
@@ -162,23 +161,21 @@ class ImageViewerSimple(QGraphicsView):
             self.full_screen_preview = None
 
     def save_image(self):
-        if self.pixmap_item is not None:
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        if self.pixmap_item is None:
+            # TODO: Show error message to user
+            return
 
-            output_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save image",
-                f"{self.output_path}/{timestamp}.png",
-                "Images (*.png *.jpg)",
-            )
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
-            image = ImageProcessor()
-            image.set_pixmap(self.pixmap_item.pixmap())
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save image",
+            f"{self.output_path}/{timestamp}.png",
+            "Images (*.png *.jpg)",
+        )
 
-            if self.preferences.save_image_metadata:
-                image.set_serialized_data(self.serialized_data)
-
-            image.save_to_png(output_path)
+        image = self.pixmap_item.pixmap().toImage()
+        image.save(output_path)
 
     def dragMoveEvent(self, event):
         pass

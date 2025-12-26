@@ -1,7 +1,7 @@
 import logging
 
+import numpy as np
 import torch
-from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from iartisanz.app.directories import DirectoriesObject
@@ -13,7 +13,7 @@ from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisan
 class NodeGraphThread(QThread):
     status_changed = pyqtSignal(str)
     progress_update = pyqtSignal(int, torch.Tensor)
-    generation_finished = pyqtSignal(Image.Image)
+    generation_finished = pyqtSignal(np.ndarray)
     generation_error = pyqtSignal(str, bool)
     generation_aborted = pyqtSignal()
 

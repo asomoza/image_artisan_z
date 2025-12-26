@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from PIL import Image
 
 from iartisanz.modules.generation.graph.nodes.node import Node
 
@@ -20,8 +19,12 @@ class LatentsDecoderNode(Node):
         decoded = self.vae.decode(latents, return_dict=False)[0]
         image = decoded[0]
         image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.cpu().permute(1, 2, 0).float().numpy()
 
-        self.values["image"] = Image.fromarray(np.uint8(image * 255))
+        image = image.detach().cpu().permute(1, 2, 0).float().numpy()
+
+        image = (image * 255.0).round().clip(0, 255).astype(np.uint8)
+        image = np.ascontiguousarray(image)
+
+        self.values["image"] = image
 
         return self.values
