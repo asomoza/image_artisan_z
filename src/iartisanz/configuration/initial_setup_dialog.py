@@ -87,6 +87,9 @@ class InitialSetupDialog(QDialog):
         base_dirs = ["Documents", "Image Artisan Z"]
 
         sub_dirs = {
+            "data_path": "data",
+            "models_diffusers": os.path.join("models", "diffusers"),
+            "models_loras": os.path.join("models", "loras"),
             "outputs_images": os.path.join("outputs", "images"),
         }
 
@@ -104,5 +107,8 @@ class InitialSetupDialog(QDialog):
             setattr(self.directories, key, sub_dir)
 
         settings = QSettings("ZCode", "ImageArtisanZ")
+        settings.setValue("data_path", self.directories.data_path)
+        settings.setValue("models_diffusers", self.directories.models_diffusers)
+        settings.setValue("models_loras", self.directories.models_loras)
         settings.setValue("outputs_images", self.directories.outputs_images)
         self.close()

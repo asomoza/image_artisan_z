@@ -60,15 +60,22 @@ class BaseTorchAppApplication(QApplication):
             save_image_metadata=save_image_metadata,
         )
 
+        data_path = settings.value("data_path", None, type=str)
+        models_diffusers = settings.value("models_diffusers", None, type=str)
+        models_loras = settings.value("models_loras", None, type=str)
         outputs_images = settings.value("outputs_images", None, type=str)
 
         self.directories = DirectoriesObject(
+            data_path=data_path,
+            models_diffusers=models_diffusers,
+            models_loras=models_loras,
             outputs_images=outputs_images,
         )
 
         if any(
             not v
             for v in [
+                data_path,
                 outputs_images,
             ]
         ):

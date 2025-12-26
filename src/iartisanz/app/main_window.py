@@ -1,4 +1,5 @@
 import logging
+import os
 
 from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSettings, QTimer
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QMainWindow, QStatusBar, QVBoxLayout, QWidget
@@ -8,6 +9,7 @@ from iartisanz.app.event_bus import EventBus
 from iartisanz.app.modules import MODULES
 from iartisanz.app.preferences import PreferencesObject
 from iartisanz.app.widgets.snackbar import SnackBar
+from iartisanz.utils.database.database import Database
 
 
 class MainWindow(QMainWindow):
@@ -70,6 +72,9 @@ class MainWindow(QMainWindow):
         # import heavy libraries like torch here
         import torch  # noqa: F401
 
+        self.database = None
+        self.init_database()
+
         self.settings.beginGroup("gui")
         self.gui_options = {
             "left_menu_expanded": self.settings.value("left_menu_expanded", True, type=bool),
@@ -123,6 +128,49 @@ class MainWindow(QMainWindow):
             QApplication.instance().close_splash()
         else:
             self.timer_finished = True
+
+    def init_database(self):
+        self.database = Database(os.path.join(self.directories.data_path, "app.db"))
+
+        # even if redundant I think it's cleaner to keep a separate table for
+        # loras and full models
+        self.database.create_table(
+            "lora_model",
+            [
+                "id INTEGER PRIMARY KEY AUTOINCREMENT",
+                "root_filename TEXT",
+                "filepath TEXT",
+                "name TEXT",
+                "version TEXT",
+                "model_type INT",
+                "model_format INT DEFAULT 0",
+                "hash TEXT",
+                "tags TEXT",
+                "thumbnail TEXT",
+                "triggers TEXT",
+                "example TEXT",
+                "deleted BOOLEAN DEFAULT 0",
+            ],
+        )
+
+        self.database.create_table(
+            "model",
+            [
+                "id INTEGER PRIMARY KEY AUTOINCREMENT",
+                "root_filename TEXT",
+                "filepath TEXT",
+                "name TEXT",
+                "version TEXT",
+                "model_type INT",
+                "model_format INT DEFAULT 0",
+                "hash TEXT",
+                "tags TEXT",
+                "thumbnail TEXT",
+                "triggers TEXT",
+                "example TEXT",
+                "deleted BOOLEAN DEFAULT 0",
+            ],
+        )
 
     def closeEvent(self, event):
         self.settings.beginGroup("main_window")
