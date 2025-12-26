@@ -1,20 +1,14 @@
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QTextEdit, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
+
+from iartisanz.modules.generation.widgets.custom_text_edit import CustomTextEdit
 
 
 class PromptInput(QWidget):
     text_changed = pyqtSignal()
 
-    def __init__(
-        self,
-        positive: bool,
-        token_count: int,
-        max_tokens: int,
-        *args,
-        title: str = None,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
+    def __init__(self, positive: bool, token_count: int, max_tokens: int, title: str = None):
+        super().__init__()
 
         self.setMinimumSize(QSize(511, 80))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -33,8 +27,8 @@ class PromptInput(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.weighted_text_edit = QTextEdit(self)
-        self.weighted_text_edit.textChanged.connect(self.text_changed.emit)
+        self.custom_text_edit = CustomTextEdit(self)
+        self.custom_text_edit.textChanged.connect(self.text_changed.emit)
 
         self.count_widget = QWidget(self)
         top_layout = QHBoxLayout(self.count_widget)
@@ -56,7 +50,7 @@ class PromptInput(QWidget):
                 " border-radius: 5px;"
                 " padding: 1px;"
             )
-            self.weighted_text_edit.setStyleSheet(text_style)
+            self.custom_text_edit.setStyleSheet(text_style)
             self.title_label.setStyleSheet(label_style)
             self.token_count_label.setStyleSheet(label_style)
         else:
@@ -68,20 +62,20 @@ class PromptInput(QWidget):
                 " border-radius: 5px;"
                 " padding: 1px;"
             )
-            self.weighted_text_edit.setStyleSheet(text_style)
+            self.custom_text_edit.setStyleSheet(text_style)
             self.title_label.setStyleSheet(label_style)
             self.token_count_label.setStyleSheet(label_style)
 
     def resizeEvent(self, _event):
         self.count_widget.setFixedWidth(self.width())
-        self.weighted_text_edit.setFixedSize(QSize(self.width(), self.height() - 12))
-        self.weighted_text_edit.move(0, 12)
+        self.custom_text_edit.setFixedSize(QSize(self.width(), self.height() - 12))
+        self.custom_text_edit.move(0, 12)
 
     def setPlainText(self, text):
-        self.weighted_text_edit.setPlainText(text)
+        self.custom_text_edit.setPlainText(text)
 
     def toPlainText(self):
-        return self.weighted_text_edit.toPlainText()
+        return self.custom_text_edit.toPlainText()
 
     def update_token_count(self, count: int):
         self.token_count_label.setText(f"{count}/{self.max_tokens}")
@@ -90,10 +84,10 @@ class PromptInput(QWidget):
         self.title_label.setText(title)
 
     def insertTextAtCursor(self, text):
-        self.weighted_text_edit.insertTextAtCursor(text)
+        self.custom_text_edit.insertTextAtCursor(text)
 
     def insertTriggerAtCursor(self, text):
-        self.weighted_text_edit.insertTriggerAtCursor(text)
+        self.custom_text_edit.insertTriggerAtCursor(text)
 
     def clear(self):
-        self.weighted_text_edit.clear()
+        self.custom_text_edit.clear()

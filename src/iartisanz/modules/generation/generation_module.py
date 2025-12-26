@@ -1,5 +1,4 @@
 import logging
-import random
 
 import torch
 from PyQt6.QtCore import Qt
@@ -62,12 +61,26 @@ class GenerationModule(BaseModule):
 
         self.setLayout(main_layout)
 
-    def on_generate(self, seed: int, positive_prompt: str, negative_prompt: str):
+    def on_generate(
+        self,
+        seed: int,
+        positive_prompt: str,
+        negative_prompt: str,
+        positive_prompt_changed: bool,
+        negative_prompt_changed: bool,
+        seed_changed: bool,
+    ):
         self.progress_bar.setMaximum(9)
 
-        self.generation_thread.seed = random.randint(0, 2**32 - 1)
-        self.generation_thread.positive_prompt = positive_prompt
-        self.generation_thread.negative_prompt = negative_prompt
+        if positive_prompt_changed:
+            self.generation_thread.update_positive_prompt(positive_prompt)
+
+        if negative_prompt_changed:
+            self.generation_thread.update_negative_prompt(negative_prompt)
+
+        if seed_changed:
+            self.generation_thread.update_seed(seed)
+
         self.generation_thread.image_width = 1024
         self.generation_thread.image_height = 1024
         self.generation_thread.start()

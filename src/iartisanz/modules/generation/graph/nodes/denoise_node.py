@@ -30,8 +30,8 @@ class DenoiseNode(Node):
         cfg_truncation = self.cfg_truncation if self.cfg_truncation is not None else 1.0
         cfg_normalization = self.cfg_normalization if self.cfg_normalization is not None else False
 
-        self.prompt_embeds = self.prompt_embeds.to(self.device)
-        self.negative_prompt_embeds = self.negative_prompt_embeds.to(self.device)
+        prompt_embeds = self.prompt_embeds.to(self.device)
+        negative_prompt_embeds = self.negative_prompt_embeds.to(self.device)
         latents = self.latents
 
         timesteps, num_inference_steps = self.retrieve_timesteps(
@@ -39,7 +39,6 @@ class DenoiseNode(Node):
             self.num_inference_steps,
             self.device,
             sigmas=self.sigmas,
-            # **scheduler_kwargs,
         )
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
 
@@ -63,11 +62,11 @@ class DenoiseNode(Node):
             if apply_cfg:
                 latents_typed = latents.to(self.transformer.dtype)
                 latent_model_input = latents_typed.repeat(2, 1, 1, 1)
-                prompt_embeds_model_input = self.prompt_embeds + self.negative_prompt_embeds
+                prompt_embeds_model_input = prompt_embeds + negative_prompt_embeds
                 timestep_model_input = timestep.repeat(2)
             else:
                 latent_model_input = latents.to(self.transformer.dtype)
-                prompt_embeds_model_input = self.prompt_embeds
+                prompt_embeds_model_input = prompt_embeds
                 timestep_model_input = timestep
 
             latent_model_input = latent_model_input.unsqueeze(2)

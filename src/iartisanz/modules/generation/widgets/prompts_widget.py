@@ -1,4 +1,5 @@
 import logging
+import random
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
@@ -9,12 +10,17 @@ from iartisanz.modules.generation.widgets.prompt_input import PromptInput
 
 
 class PromptsWidget(QFrame):
-    generate_signal = pyqtSignal(int, str, str)
+    generate_signal = pyqtSignal(int, str, str, bool, bool, bool)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.logger = logging.getLogger(__name__)
+
+        self.previous_positive_prompt = None
+        self.previous_negative_prompt = None
+        self.previous_seed = None
+        self.use_random_seed = True
 
         self.tokenizer = Qwen2Tokenizer.from_pretrained("./configs/Qwen2Tokenizer")
         self.max_tokens = 510
@@ -77,8 +83,10 @@ class PromptsWidget(QFrame):
     def randomize_clicked(self):
         if self.random_checkbox.isChecked():
             self.seed_text.setDisabled(True)
+            self.use_random_seed = True
         else:
             self.seed_text.setDisabled(False)
+            self.use_random_seed = False
 
     def on_prompt_changed(self):
         prompt = self.sender()
@@ -90,12 +98,35 @@ class PromptsWidget(QFrame):
         prompt.update_token_count(num_tokens)
 
     def generate(self):
-        try:
-            seed = int(self.seed_text.text())
-        except ValueError:
-            seed = -1
+        positive_prompt = self.positive_prompt.toPlainText()
+        negative_prompt = self.negative_prompt.toPlainText()
 
-        self.generate_signal.emit(seed, self.positive_prompt.toPlainText(), self.negative_prompt.toPlainText())
+        positive_prompt_changed = self.previous_positive_prompt != positive_prompt
+
+        if positive_prompt_changed:
+            self.previous_positive_prompt = positive_prompt
+
+        negative_prompt_changed = self.previous_negative_prompt != negative_prompt
+        if negative_prompt_changed:
+            self.previous_negative_prompt = negative_prompt
+
+        if self.use_random_seed:
+            seed = random.randint(0, 2**32 - 1)
+            self.seed_text.setText(str(seed))
+        else:
+            try:
+                seed = int(self.seed_text.text())
+            except ValueError:
+                self.event_bus.publish("show_snackbar", {"value": "Seed is not valid."})
+                return
+
+        seed_changed = self.previous_seed != seed
+        if seed_changed:
+            self.previous_seed = seed
+
+        self.generate_signal.emit(
+            seed, positive_prompt, negative_prompt, positive_prompt_changed, negative_prompt_changed, seed_changed
+        )
 
     def set_button_generate(self):
         self.generate_button.setStyleSheet(

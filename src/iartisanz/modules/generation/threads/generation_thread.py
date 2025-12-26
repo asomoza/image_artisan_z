@@ -48,9 +48,6 @@ class NodeGraphThread(QThread):
         self.status_changed.emit("Generating image...")
 
         if self.force_new_run:
-            node = self.node_graph.get_node_by_name("seed")
-            node.update_value(self.seed)
-
             node = self.node_graph.get_node_by_name("image_width")
             node.update_value(self.image_width)
 
@@ -62,12 +59,6 @@ class NodeGraphThread(QThread):
 
             node = self.node_graph.get_node_by_name("guidance_scale")
             node.update_value(1.0)
-
-            node = self.node_graph.get_node_by_name("positive_prompt")
-            node.update_value(self.positive_prompt)
-
-            node = self.node_graph.get_node_by_name("negative_prompt")
-            node.update_value(self.negative_prompt)
 
             node = self.node_graph.get_node_by_name("model")
             node.update_model(
@@ -87,15 +78,24 @@ class NodeGraphThread(QThread):
             node.image_callback = self.preview_image
 
             self.force_new_run = False
-        else:
-            node = self.node_graph.get_node_by_name("seed")
-            node.update_value(self.seed)
 
         try:
             self.node_graph()
         except IArtisanZNodeError as e:
             self.logger.debug(f"Error in node: '{e.node_name}': {e}")
             self.generation_error.emit(f"Error in node '{e.node_name}': {e}", False)
+
+    def update_seed(self, seed: int):
+        node = self.node_graph.get_node_by_name("seed")
+        node.update_value(seed)
+
+    def update_positive_prompt(self, prompt: str):
+        node = self.node_graph.get_node_by_name("positive_prompt")
+        node.update_value(prompt)
+
+    def update_negative_prompt(self, prompt: str):
+        node = self.node_graph.get_node_by_name("negative_prompt")
+        node.update_value(prompt)
 
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)

@@ -16,8 +16,8 @@ class PromptEncoderNode(Node):
         if self.negative_prompt is None:
             self.negative_prompt = ""
 
-        prompt_embeds = self.encode_prompt(prompt=self.positive_prompt)
-        negative_prompt_embeds = self.encode_prompt(prompt=self.negative_prompt)
+        prompt_embeds = self.encode_prompt(self.positive_prompt)
+        negative_prompt_embeds = self.encode_prompt(self.negative_prompt)
 
         self.values["prompt_embeds"] = prompt_embeds.to("cpu").detach().clone()
         self.values["negative_prompt_embeds"] = negative_prompt_embeds.to("cpu").detach().clone()
