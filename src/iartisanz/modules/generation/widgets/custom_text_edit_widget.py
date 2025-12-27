@@ -16,29 +16,47 @@ class CustomTextEditWidget(QTextEdit):
         cursor = self.textCursor()
         cursor.insertText(text)
 
-    def insertTriggerAtCursor(self, text):
+    def insertTriggerAtCursor(self, text: str, add_comas: bool = False):
         cursor = self.textCursor()
-        cursor_position = cursor.position()
+        pos = cursor.position()
+        plain = self.toPlainText()
+        n = len(plain)
 
-        if cursor_position > 0:
-            cursor.setPosition(cursor_position - 1, QTextCursor.MoveMode.KeepAnchor)
-            if cursor.selectedText() == " ":
-                if cursor_position > 1:
-                    cursor.setPosition(cursor_position - 2, QTextCursor.MoveMode.KeepAnchor)
-                    if cursor.selectedText()[0] != ",":
-                        text = ", " + text
-            elif cursor.selectedText() != ",":
-                text = ", " + text
-            else:
-                text = " " + text
+        def char_at(i: int) -> str:
+            if 0 <= i < n:
+                return plain[i]
+            return ""
 
-        cursor.setPosition(cursor_position)
+        prev = char_at(pos - 1)
+        prevprev = char_at(pos - 2)
+        nextc = char_at(pos)
 
-        if cursor_position < len(self.toPlainText()):
-            cursor.setPosition(cursor_position + 1, QTextCursor.MoveMode.KeepAnchor)
-            if cursor.selectedText() != "," and cursor.selectedText() != "":
-                text = text + ", "
+        prefix = ""
+        suffix = ""
 
-        cursor.setPosition(cursor_position)
-        cursor.insertText(text)
-        cursor.setPosition(cursor_position + len(text))
+        if add_comas:
+            if pos > 0:
+                if prev == " ":
+                    if pos > 1 and prevprev != ",":
+                        prefix = ", "
+                elif prev != ",":
+                    prefix = ", "
+                else:
+                    prefix = " "
+
+            if pos < n and nextc not in ("", ",") and not nextc.isspace():
+                suffix = ", "
+        else:
+            if pos > 0 and prev not in ("", " ") and not prev.isspace():
+                prefix = " "
+            if pos < n and nextc not in ("", " ") and not nextc.isspace():
+                suffix = " "
+
+        insert_text = f"{prefix}{text}{suffix}"
+
+        cursor.beginEditBlock()
+        cursor.setPosition(pos)
+        cursor.insertText(insert_text)
+        cursor.setPosition(pos + len(insert_text))
+        cursor.endEditBlock()
+        self.setTextCursor(cursor)
