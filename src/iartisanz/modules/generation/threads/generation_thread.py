@@ -82,11 +82,6 @@ class NodeGraphThread(QThread):
         lora_node = self.node_graph.get_node_by_name(f"{lora_data.name}_{lora_data.version}_lora")
 
         if lora_node is not None:
-            lora_node.update_lora(
-                enabled=lora_data.enabled,
-                transformer_weight=lora_data.transformer_weight,
-                is_slider=lora_data.is_slider,
-            )
             return
 
         lora_node = LoraNode(
