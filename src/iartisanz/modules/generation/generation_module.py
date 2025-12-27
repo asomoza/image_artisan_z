@@ -41,6 +41,7 @@ class GenerationModule(BaseModule):
         self.generation_thread.progress_update.connect(self.step_progress_update)
         self.generation_thread.status_changed.connect(self.on_status_changed)
         self.generation_thread.generation_finished.connect(self.generation_finished)
+        self.generation_thread.generation_error.connect(self.on_generation_error)
         self.generation_thread.generation_aborted.connect(self.generation_aborted)
         self.generation_thread.force_new_run = True
 
@@ -185,6 +186,13 @@ class GenerationModule(BaseModule):
 
     def generation_aborted(self):
         self.event_bus.publish("status_message", {"action": "change", "message": "Generation aborted"})
+        self.prompts_widget.set_button_generate()
+        self.generating = False
+
+    def on_generation_error(self, message: str):
+        self.event_bus.publish("show_snackbar", {"action": "show", "message": message})
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
         self.prompts_widget.set_button_generate()
         self.generating = False
 

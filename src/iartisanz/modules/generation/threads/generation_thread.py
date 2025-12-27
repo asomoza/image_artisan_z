@@ -74,6 +74,9 @@ class NodeGraphThread(QThread):
             self.logger.debug(f"Error in node: '{e.node_name}': {e}")
             self.generation_error.emit(f"Error in node '{e.node_name}': {e}", False)
 
+        if not self.node_graph.updated:
+            self.generation_error.emit("Nothing was changed", False)
+
     def update_node(self, node_name: str, value):
         node = self.node_graph.get_node_by_name(node_name)
         node.update_value(value)
