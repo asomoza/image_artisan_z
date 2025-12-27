@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QComboBox, QGridLayout, QLabel, QLineEdit, QPushButt
 from iartisanz.app.directories import DirectoriesObject
 from iartisanz.modules.generation.constants import MODEL_TYPES
 from iartisanz.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
+from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.widgets.simple_custom_text_edit import SimpleCustomTextEdit
 from iartisanz.utils.database.database import Database
 
@@ -15,12 +16,19 @@ from iartisanz.utils.database.database import Database
 class LoraEditWidget(QWidget):
     lora_info_saved = pyqtSignal(ModelItemDataObject, object)
 
-    def __init__(self, directories: DirectoriesObject, model_data: ModelItemDataObject, pixmap: QPixmap):
+    def __init__(
+        self,
+        directories: DirectoriesObject,
+        model_data: ModelItemDataObject,
+        pixmap: QPixmap,
+        image_viewer: ImageViewerSimpleWidget,
+    ):
         super().__init__()
 
         self.directories = directories
         self.model_data = model_data
         self.pixmap = pixmap
+        self.image_viewer = image_viewer
 
         self.image_width = 345
         self.image_height = 345

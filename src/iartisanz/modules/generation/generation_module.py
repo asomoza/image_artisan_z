@@ -35,11 +35,13 @@ class GenerationModule(BaseModule):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.dtype = torch.bfloat16
         self.node_graph = create_default_graph()
+        self.generating = False
 
         self.generation_thread = NodeGraphThread(self.directories, self.node_graph, self.dtype, self.device)
         self.generation_thread.progress_update.connect(self.step_progress_update)
         self.generation_thread.status_changed.connect(self.on_status_changed)
         self.generation_thread.generation_finished.connect(self.generation_finished)
+        self.generation_thread.generation_aborted.connect(self.generation_aborted)
         self.generation_thread.force_new_run = True
 
         # set initial values for generation
@@ -113,7 +115,15 @@ class GenerationModule(BaseModule):
         negative_prompt_changed: bool,
         seed_changed: bool,
     ):
+        if self.generating:
+            self.on_abort()
+            return
+
+        self.generating = True
+        self.prompts_widget.set_button_abort()
+
         self.progress_bar.setMaximum(9)
+        self.progress_bar.setValue(0)
 
         if positive_prompt_changed:
             self.generation_thread.update_node("positive_prompt", positive_prompt)
@@ -167,6 +177,17 @@ class GenerationModule(BaseModule):
         self.image_viewer.set_pixmap(pixmap)
         self.image_viewer.reset_view()
 
+        self.prompts_widget.set_button_generate()
+        self.generating = False
+
+    def on_abort(self):
+        self.generation_thread.abort_graph()
+
+    def generation_aborted(self):
+        self.event_bus.publish("status_message", {"action": "change", "message": "Generation aborted"})
+        self.prompts_widget.set_button_generate()
+        self.generating = False
+
     def on_generation_change_event(self, data):
         attribute = data.get("attr")
         value = data.get("value")
@@ -185,7 +206,9 @@ class GenerationModule(BaseModule):
         if dialog_type == "lora_manager":
             if action == "open":
                 if "lora_manager" not in self.dialogs:
-                    self.dialogs[dialog_type] = LoraManagerDialog(dialog_type, self.directories, self.preferences)
+                    self.dialogs[dialog_type] = LoraManagerDialog(
+                        dialog_type, self.directories, self.preferences, self.image_viewer
+                    )
 
                 self.dialogs[dialog_type].show()
                 self.dialogs[dialog_type].raise_()

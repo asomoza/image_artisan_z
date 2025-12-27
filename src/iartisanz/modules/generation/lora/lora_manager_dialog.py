@@ -28,6 +28,11 @@ class LoraManagerDialog(BaseDialog):
 
         self.logger = logging.getLogger(__name__)
 
+        if len(args) <= 3:
+            self.logger.warning("LoraManagerDialog requires the image viewer argument to be able to set images.")
+
+        self.image_viewer = args[3] if len(args) > 3 else None
+
         self.loading_loras = False
         self.selected_lora = None
 
@@ -142,7 +147,7 @@ class LoraManagerDialog(BaseDialog):
     def on_lora_edit_clicked(self, model_data: ModelItemDataObject, pixmap: QPixmap):
         self.clear_selected_lora()
 
-        lora_edit_widget = LoraEditWidget(self.directories, model_data, pixmap)
+        lora_edit_widget = LoraEditWidget(self.directories, model_data, pixmap, self.image_viewer)
         lora_edit_widget.lora_info_saved.connect(self.on_info_saved)
         self.lora_frame_layout.addWidget(lora_edit_widget)
 

@@ -35,7 +35,7 @@ class DenoiseNode(Node):
             try:
                 if isinstance(self.lora, list):
                     keys = [item[0] for item in self.lora]
-                    transformer_values = [item[1]["transformer"] for item in self.lora]
+                    transformer_values = [item[1] for item in self.lora]
                     self.transformer.set_adapters(keys, transformer_values)
                 else:
                     self.transformer.set_adapters([self.lora[0]], self.lora[1])
@@ -113,6 +113,9 @@ class DenoiseNode(Node):
                 noise_pred = torch.stack(noise_pred, dim=0)
             else:
                 noise_pred = torch.stack([t.float() for t in model_out_list], dim=0)
+
+            if self.abort:
+                return
 
             noise_pred = noise_pred.squeeze(2)
             noise_pred = -noise_pred

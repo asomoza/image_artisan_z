@@ -73,6 +73,9 @@ class ZImageModelNode(Node):
             device_map=self.device,
         )
 
+        if self.abort:
+            return
+
         if "text_encoder" not in self.values or self.values["text_encoder"] is None:
             raise IArtisanZNodeError(
                 "Error trying to load the text encoder, probably the file doesn't exists.", self.name
@@ -87,6 +90,9 @@ class ZImageModelNode(Node):
             device_map=self.device,
         )
 
+        if self.abort:
+            return
+
         if "transformer" not in self.values or self.values["transformer"] is None:
             raise IArtisanZNodeError(
                 "Error trying to load the transformer, probably the file doesn't exists.", self.name
@@ -100,6 +106,9 @@ class ZImageModelNode(Node):
             low_cpu_mem_usage=True,
             device_map=self.device,
         )
+
+        if self.abort:
+            return
 
         if "vae" not in self.values or self.values["vae"] is None:
             raise IArtisanZNodeError("Error trying to load the VAE, probably the file doesn't exists.", self.name)

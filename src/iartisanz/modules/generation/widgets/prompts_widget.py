@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
 from transformers import Qwen2Tokenizer
 
+from iartisanz.app.event_bus import EventBus
 from iartisanz.modules.generation.buttons.generate_button import GenerateButton
 from iartisanz.modules.generation.widgets.prompt_input_widget import PromptInputWidget
 
@@ -17,6 +18,8 @@ class PromptsWidget(QFrame):
 
         self.logger = logging.getLogger(__name__)
 
+        self.event_bus = EventBus()
+
         self.previous_positive_prompt = None
         self.previous_negative_prompt = None
         self.previous_seed = None
@@ -26,6 +29,9 @@ class PromptsWidget(QFrame):
         self.max_tokens = 510
 
         self.init_ui()
+
+        self.event_bus.subscribe("lora", self.on_lora_event)
+
         self.set_button_generate()
 
     def init_ui(self):
@@ -187,3 +193,9 @@ class PromptsWidget(QFrame):
             }
             """
         )
+
+    def on_lora_event(self, data):
+        action = data.get("action")
+        if action == "trigger_clicked":
+            trigger = data.get("trigger")
+            self.positive_prompt.insertTriggerAtCursor(trigger)

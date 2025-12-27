@@ -199,3 +199,4 @@ class LoraInfoWidget(QWidget):
     def on_trigger_clicked(self):
         button = self.sender()
         self.trigger_clicked.emit(button.text())
+        self.event_bus.publish("lora", {"action": "trigger_clicked", "trigger": button.text()})
