@@ -33,7 +33,7 @@ class BaseTorchAppApplication(QApplication):
         stylesheet = style_data.decode("utf-8")
         self.setStyleSheet(stylesheet)
 
-        self.temp_dir = tempfile.mkdtemp(prefix="iravision_")
+        self.temp_dir = tempfile.mkdtemp(prefix="iartisanz_")
 
         self.window = None
         self.splash = None
