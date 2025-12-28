@@ -16,12 +16,8 @@ class Node:
     SERIALIZE_INCLUDE: ClassVar[Optional[set[str]]] = None
     SERIALIZE_EXCLUDE: ClassVar[set[str]] = set()
 
-    # Per-field converters: {"field": (to_json, from_json)}
-    # - to_json(value) must return JSON-safe data (dict/list/str/num/bool/None)
-    # - from_json(data) reconstructs the python object
     SERIALIZE_CONVERTERS: ClassVar[dict[str, tuple[Callable[[Any], Any], Callable[[Any], Any]]]] = {}
 
-    # Strict mode: raise if any selected field can't be serialized
     STRICT_SERIALIZATION: ClassVar[bool] = True
 
     _RUNTIME_EXCLUDE: ClassVar[set[str]] = {
@@ -157,9 +153,6 @@ class Node:
     def __call__(self):
         pass
 
-    # ----------------------------
-    # Automatic JSON serialization
-    # ----------------------------
     def _is_json_primitive(self, v: Any) -> bool:
         return v is None or isinstance(v, (str, int, float, bool))
 
@@ -189,16 +182,6 @@ class Node:
         )
 
     def get_state(self) -> dict:
-        """
-        JSON-safe node configuration.
-
-        STRICT_SERIALIZATION=True:
-        - Raises if any selected field can't be serialized.
-
-        To fix failures:
-        - add the field to SERIALIZE_EXCLUDE, or
-        - add a per-field converter in SERIALIZE_CONVERTERS.
-        """
         if self.SERIALIZE_INCLUDE is None:
             keys = set(self.__dict__.keys())
         else:
