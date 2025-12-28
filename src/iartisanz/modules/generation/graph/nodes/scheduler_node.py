@@ -12,28 +12,21 @@ class SchedulerNode(Node):
         "FlowMatchEulerDiscreteScheduler": FlowMatchEulerDiscreteScheduler,
     }
 
-    def __init__(self, scheduler_data_object: SchedulerDataObject, **kwargs):
-        super().__init__(**kwargs)
+    SERIALIZE_INCLUDE = {"scheduler_data_object"}
+    SERIALIZE_CONVERTERS = {
+        "scheduler_data_object": (
+            lambda obj: None if obj is None else obj.to_dict(),
+            lambda data: None if data is None else SchedulerDataObject.from_dict(data),
+        )
+    }
 
+    def __init__(self, scheduler_data_object: SchedulerDataObject | None = None):
+        super().__init__()
         self.scheduler_data_object = scheduler_data_object
 
     def update_value(self, scheduler_data_object: SchedulerDataObject):
         self.scheduler_data_object = scheduler_data_object
         self.set_updated()
-
-    def to_dict(self):
-        node_dict = super().to_dict()
-        node_dict["scheduler_data_object"] = self.scheduler_data_object.to_dict()
-        return node_dict
-
-    @classmethod
-    def from_dict(cls, node_dict, _callbacks=None):
-        node = super(SchedulerNode, cls).from_dict(node_dict)
-        node.scheduler_data_object = node_dict["scheduler_data_object"]
-        return node
-
-    def update_inputs(self, node_dict):
-        self.scheduler_data_object = SchedulerDataObject.from_dict(node_dict["scheduler_data_object"])
 
     def __call__(self):
         scheduler = self.load_scheduler(self.scheduler_data_object)
@@ -41,6 +34,9 @@ class SchedulerNode(Node):
         return self.values
 
     def load_scheduler(self, scheduler_data_object: SchedulerDataObject):
+        if scheduler_data_object is None:
+            raise IArtisanZNodeError("scheduler_data_object is None", self.__class__.__name__)
+
         scheduler_class_name = scheduler_data_object.scheduler_class
         scheduler_class = self.SCHEDULER_MAPPING.get(scheduler_class_name)
 
@@ -52,5 +48,4 @@ class SchedulerNode(Node):
             scheduler_additional_configs["shift"] = 3.0
 
         scheduler = scheduler_class.from_config(scheduler_data_object.to_config_dict(), **scheduler_additional_configs)
-
         return scheduler

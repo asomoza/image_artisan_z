@@ -8,6 +8,8 @@ class ImageLoadNode(Node):
     PRIORITY = 2
     OUTPUTS = ["image"]
 
+    SERIALIZE_EXCLUDE = {"image"}
+
     def __init__(
         self, path: str = None, image: Image = None, weight: float = None, noise: float = None, noise_index: int = 0
     ):
@@ -51,32 +53,6 @@ class ImageLoadNode(Node):
         self.noise = noise
         self.noise_index = noise_index
         self.set_updated()
-
-    def to_dict(self):
-        node_dict = super().to_dict()
-        node_dict["path"] = self.path
-        node_dict["image"] = self.image
-        node_dict["weight"] = self.weight
-        node_dict["noise"] = self.noise
-        node_dict["noise_index"] = self.noise_index
-        return node_dict
-
-    @classmethod
-    def from_dict(cls, node_dict, _callbacks=None):
-        node = super(ImageLoadNode, cls).from_dict(node_dict)
-        node.path = node_dict["path"]
-        node.image = node_dict["image"]
-        node.weight = node_dict["weight"]
-        node.noise = node_dict["noise"]
-        node.noise_index = node_dict["noise_index"]
-        return node
-
-    def update_inputs(self, node_dict):
-        self.path = node_dict["path"]
-        self.image = node_dict["image"]
-        self.weight = node_dict["weight"]
-        self.noise = node_dict["noise"]
-        self.noise_index = node_dict["noise_index"]
 
     def __call__(self):
         if self.image is None:

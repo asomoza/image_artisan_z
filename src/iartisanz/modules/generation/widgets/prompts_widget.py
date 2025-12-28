@@ -31,6 +31,7 @@ class PromptsWidget(QFrame):
         self.init_ui()
 
         self.event_bus.subscribe("lora", self.on_lora_event)
+        self.event_bus.subscribe("json_graph", self.on_json_graph_event)
 
         self.set_button_generate()
 
@@ -194,8 +195,26 @@ class PromptsWidget(QFrame):
             """
         )
 
+    #########################################################
+    ## SUBSCRIBED BUS EVENTS
+    #########################################################
     def on_lora_event(self, data):
         action = data.get("action")
         if action == "trigger_clicked":
             trigger = data.get("trigger")
             self.positive_prompt.insertTriggerAtCursor(trigger)
+
+    def on_json_graph_event(self, data):
+        action = data.get("action")
+        if action == "loaded":
+            data = data.get("data", {})
+            positive_prompt = data.get("positive_prompt", "")
+            negative_prompt = data.get("negative_prompt", "")
+            seed = data.get("seed", "")
+
+            self.positive_prompt.setPlainText(positive_prompt)
+            self.negative_prompt.setPlainText(negative_prompt)
+            self.seed_text.setText(str(seed))
+            self.random_checkbox.setChecked(False)
+            self.seed_text.setDisabled(False)
+            self.use_random_seed = False

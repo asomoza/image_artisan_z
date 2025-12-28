@@ -82,13 +82,20 @@ class GenerationRightMenu(QFrame):
 
         button.clicked.connect(lambda: self.on_button_clicked(text))
 
+        panel = self.panel_instances.get(text)
+        if panel is None:
+            panel = panel_class(*self.panels[text]["args"])
+            self.panel_container.panel_layout.addWidget(panel)
+            self.panel_instances[text] = panel
+        panel.setVisible(False)
+
         if self.current_panel_text is None:
+            self.current_panel_text = text
             if self.expanded:
                 self.show_panel(text)
             else:
                 self.setFixedWidth(self.NORMAL_WIDTH)
                 self.expand_btn.extended = False
-                self.current_panel_text = text
 
     def on_button_clicked(self, text):
         self.current_panel_text = text
@@ -136,15 +143,7 @@ class GenerationRightMenu(QFrame):
         self.animating = True
 
     def show_panel(self, text):
-        panel_info = self.panels[text]
-        panel_class = panel_info["class"]
-        args = panel_info["args"]
-
         panel = self.panel_instances.get(text)
-        if panel is None:
-            panel = panel_class(*args)
-            self.panel_container.panel_layout.addWidget(panel)
-            self.panel_instances[text] = panel
 
         for key, widget in self.panel_instances.items():
             widget.setVisible(key == text)

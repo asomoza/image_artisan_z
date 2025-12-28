@@ -9,7 +9,7 @@ from iartisanz.app.event_bus import EventBus
 from iartisanz.app.modules import MODULES
 from iartisanz.app.preferences import PreferencesObject
 from iartisanz.app.snackbar import SnackBar
-from iartisanz.utils.database.database import Database
+from iartisanz.utils.database import Database
 
 
 class MainWindow(QMainWindow):

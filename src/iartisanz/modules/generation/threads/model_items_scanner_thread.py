@@ -5,8 +5,8 @@ from io import BytesIO
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from iartisanz.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
-from iartisanz.utils.database.database import Database
-from iartisanz.utils.models.model_utils import calculate_file_hash
+from iartisanz.utils.database import Database
+from iartisanz.utils.model_utils import calculate_file_hash
 
 
 class ModelItemsScannerThread(QThread):

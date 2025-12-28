@@ -10,7 +10,7 @@ from iartisanz.modules.generation.constants import MODEL_TYPES
 from iartisanz.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
 from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.widgets.simple_custom_text_edit import SimpleCustomTextEdit
-from iartisanz.utils.database.database import Database
+from iartisanz.utils.database import Database
 
 
 class LoraEditWidget(QWidget):
@@ -34,7 +34,6 @@ class LoraEditWidget(QWidget):
         self.image_height = 345
 
         self.image_updated = False
-        self.lora_serialized_data = None
 
         self.init_ui()
 
@@ -110,7 +109,6 @@ class LoraEditWidget(QWidget):
     def set_lora_image(self):
         if self.image_viewer.pixmap_item is not None:
             self.pixmap = self.image_viewer.pixmap_item.pixmap()
-            self.lora_serialized_data = self.image_viewer.serialized_data
 
             scaled_pixmap = self.pixmap.scaled(
                 self.image_width,
@@ -135,8 +133,8 @@ class LoraEditWidget(QWidget):
         self.model_data.tags = self.tags_edit.text()
         self.model_data.triggers = self.triggers_edit.toPlainText()
 
-        if self.lora_serialized_data is not None:
-            self.model_data.example = json.dumps(self.lora_serialized_data)
+        if self.image_viewer.json_graph is not None:
+            self.model_data.example = self.image_viewer.json_graph
 
         database.update(
             "lora_model",

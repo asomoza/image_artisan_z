@@ -8,9 +8,6 @@ class LatentsDecoderNode(Node):
     REQUIRED_INPUTS = ["vae", "latents"]
     OUTPUTS = ["image"]
 
-    def __init__(self):
-        super().__init__()
-
     @torch.inference_mode()
     def __call__(self):
         latents = self.latents.to(self.device, self.vae.dtype)
@@ -21,10 +18,8 @@ class LatentsDecoderNode(Node):
         image = (image / 2 + 0.5).clamp(0, 1)
 
         image = image.detach().cpu().permute(1, 2, 0).float().numpy()
-
         image = (image * 255.0).round().clip(0, 255).astype(np.uint8)
         image = np.ascontiguousarray(image)
 
         self.values["image"] = image
-
         return self.values

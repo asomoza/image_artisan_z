@@ -1,13 +1,18 @@
+from __future__ import annotations
+
 import gc
 import json
 import time
 from collections import defaultdict, deque
+from typing import TYPE_CHECKING
 
 import torch
 
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
-from iartisanz.modules.generation.graph.nodes.image_load_node import ImageLoadNode
-from iartisanz.modules.generation.graph.nodes.node import Node
+
+
+if TYPE_CHECKING:
+    from iartisanz.modules.generation.graph.nodes.node import Node
 
 
 class ImageArtisanZNodeGraph:
@@ -20,6 +25,8 @@ class ImageArtisanZNodeGraph:
 
         self.device = None
         self.dtype = None
+
+        self.additional_generation_data = {}
 
     def add_node(self, node: Node, name: str = None):
         if name is not None:
@@ -63,7 +70,9 @@ class ImageArtisanZNodeGraph:
     def delete_node(self, node):
         node.before_delete()
 
-        for other_node in node.dependencies + node.dependents:
+        # Make copies to avoid mutation during iteration
+        related = list(set(node.dependencies + node.dependents))
+        for other_node in related:
             other_node.disconnect_from_node(node)
             node.disconnect_from_node(other_node)
 
@@ -72,8 +81,12 @@ class ImageArtisanZNodeGraph:
         del node
 
         gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
 
     @torch.no_grad()
     def __call__(self):
@@ -123,23 +136,28 @@ class ImageArtisanZNodeGraph:
 
                 node.updated = False
 
-    def to_json(self, additional_generation_data: dict):
+    def to_json(self, additional_generation_data: dict | None = None):
+        if additional_generation_data is None:
+            additional_generation_data = self.additional_generation_data or {}
+
         graph_dict = {
-            "nodes": [node.to_dict() for node in self.nodes if not isinstance(node, ImageLoadNode)],
+            "format_version": 1,
+            "nodes": [node.to_dict() for node in self.nodes],
             "connections": [],
+            "additional_generation_data": additional_generation_data,
         }
+
         for node in self.nodes:
             for input_name, connections in node.connections.items():
                 for connected_node, output_name in connections:
-                    connection_dict = {
-                        "from_node_id": connected_node.id,
-                        "from_output_name": output_name,
-                        "to_node_id": node.id,
-                        "to_input_name": input_name,
-                    }
-                    graph_dict["connections"].append(connection_dict)
-
-        graph_dict["additional_generation_data"] = additional_generation_data
+                    graph_dict["connections"].append(
+                        {
+                            "from_node_id": connected_node.id,
+                            "from_output_name": output_name,
+                            "to_node_id": node.id,
+                            "to_input_name": input_name,
+                        }
+                    )
 
         return json.dumps(graph_dict)
 
@@ -149,6 +167,8 @@ class ImageArtisanZNodeGraph:
         self.nodes.clear()
         self.node_counter = 0
 
+        self.additional_generation_data = graph_dict.get("additional_generation_data", {}) or {}
+
         id_to_node = {}
         max_id = 0
 
@@ -157,9 +177,7 @@ class ImageArtisanZNodeGraph:
             node = NodeClass.from_dict(node_dict, callbacks)
             id_to_node[node.id] = node
             self.nodes.append(node)
-
-            if node.id > max_id:
-                max_id = node.id
+            max_id = max(max_id, node.id)
 
         for connection_dict in graph_dict["connections"]:
             from_node = id_to_node[connection_dict["from_node_id"]]
@@ -172,8 +190,8 @@ class ImageArtisanZNodeGraph:
 
         self.node_counter = max_id + 1
 
-    def save_to_json(self, filename):
-        json_str = self.to_json()
+    def save_to_json(self, filename, additional_generation_data: dict | None = None):
+        json_str = self.to_json(additional_generation_data=additional_generation_data)
         with open(filename, "w", encoding="utf-8") as f:
             f.write(json_str)
 
@@ -188,6 +206,10 @@ class ImageArtisanZNodeGraph:
         current_id_to_node = {node.id: node for node in self.nodes}
         updated_nodes = set()
 
+        self.additional_generation_data = (
+            graph_dict.get("additional_generation_data", self.additional_generation_data) or {}
+        )
+
         new_id_to_node = {}
         max_id = 0
 
@@ -199,7 +221,7 @@ class ImageArtisanZNodeGraph:
                 new_node = node_class.from_dict(node_dict, callbacks)
 
                 if node.to_dict() != new_node.to_dict():
-                    node.update_inputs(node_dict)
+                    node.update_inputs(node_dict, callbacks=callbacks)
                     node.set_updated(updated_nodes)
             else:
                 node = node_class.from_dict(node_dict, callbacks)
@@ -209,38 +231,33 @@ class ImageArtisanZNodeGraph:
                 self.nodes.append(node)
 
             new_id_to_node[node.id] = node
+            max_id = max(max_id, node.id)
 
-            if node.id > max_id:
-                max_id = node.id
-
-        for node_id, node in current_id_to_node.items():
+        for node_id in list(current_id_to_node.keys()):
             if node_id not in new_id_to_node:
                 self.delete_node_by_id(node_id)
 
-        new_connections = defaultdict(list)
-        input_names = {}
-
+        # Include input name so we detect re-wires between inputs
+        new_connections = defaultdict(list)  # to_node_id -> [(to_input_name, from_node_id, from_output_name)]
         for connection_dict in graph_dict["connections"]:
-            from_node = new_id_to_node[connection_dict["from_node_id"]]
-            to_node = new_id_to_node[connection_dict["to_node_id"]]
-            new_connections[to_node.id].append((from_node.id, connection_dict["from_output_name"]))
-            input_names[(to_node.id, from_node.id, connection_dict["from_output_name"])] = connection_dict[
-                "to_input_name"
-            ]
+            to_id = connection_dict["to_node_id"]
+            new_connections[to_id].append(
+                (
+                    connection_dict["to_input_name"],
+                    connection_dict["from_node_id"],
+                    connection_dict["from_output_name"],
+                )
+            )
 
         for node in self.nodes:
-            if node.connections_changed(new_connections[node.id]):
-                node.dependencies = []
-                node.connections = defaultdict(list)
+            desired = new_connections[node.id]
+            if node.connections_changed(desired):
+                # Fully clear old wiring (including reverse links)
+                node.clear_all_connections()
 
-                for from_node_id, output_name in new_connections[node.id]:
+                for to_input_name, from_node_id, output_name in desired:
                     from_node = new_id_to_node[from_node_id]
-                    input_name = input_names[(node.id, from_node_id, output_name)]
-                    node.connect(
-                        input_name,
-                        from_node,
-                        output_name,
-                    )
+                    node.connect(to_input_name, from_node, output_name)
 
         for node in self.nodes:
             if node.id not in updated_nodes:

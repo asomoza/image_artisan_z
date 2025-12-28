@@ -8,6 +8,7 @@ from iartisanz.app.directories import DirectoriesObject
 from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
+from iartisanz.modules.generation.graph.nodes import NODE_CLASSES
 from iartisanz.modules.generation.graph.nodes.lora_node import LoraNode
 
 
@@ -36,8 +37,22 @@ class NodeGraphThread(QThread):
 
         self.force_new_run = False
         self.node_graph.set_abort_function(self.on_aborted)
+        self.loaded_node_graph = None
 
     def run(self):
+        callbacks = {
+            "preview_image": self.preview_image,
+        }
+
+        if self.loaded_node_graph is not None:
+            self.node_graph.from_json(self.loaded_node_graph, node_classes=NODE_CLASSES, callbacks=callbacks)
+
+            node = self.node_graph.get_node_by_name("denoise")
+            node.callback = self.step_progress_update
+
+            self.force_new_run = False
+            self.loaded_node_graph = None
+
         self.node_graph.dtype = self.dtype
         self.node_graph.device = self.device
         self.status_changed.emit("Generating image...")
@@ -94,6 +109,7 @@ class NodeGraphThread(QThread):
             version=lora_data.version,
             transformer_weight=1.0,
             is_slider=False,
+            database_id=lora_data.id,
         )
         lora_node.connect("transformer", self.node_graph.get_node_by_name("model"), "transformer")
         self.node_graph.add_node(lora_node, f"{lora_data.name}_{lora_data.version}_lora")

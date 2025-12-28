@@ -5,21 +5,21 @@ class ImageSendNode(Node):
     REQUIRED_INPUTS = ["image"]
     OUTPUTS = []
 
-    def __init__(self, image_callback: callable = None, **kwargs):
-        super().__init__(**kwargs)
+    SERIALIZE_INCLUDE = {"image_callback"}
+    SERIALIZE_CONVERTERS = {
+        "image_callback": (
+            # to_json
+            lambda cb: cb.__name__ if cb else None,
+            # from_json (value, callbacks)
+            lambda name, callbacks: None if not name else (callbacks or {}).get(name),
+        )
+    }
 
+    def __init__(self, image_callback: callable = None):
+        super().__init__()
         self.image_callback = image_callback
 
-    def to_dict(self):
-        node_dict = super().to_dict()
-        node_dict["image_callback"] = self.image_callback.__name__ if self.image_callback else None
-        return node_dict
-
-    @classmethod
-    def from_dict(cls, node_dict, callbacks=None):
-        node = super(ImageSendNode, cls).from_dict(node_dict)
-        node.image_callback = callbacks.get(node_dict["image_callback"]) if callbacks else None
-        return node
-
     def __call__(self):
+        if self.image_callback is None:
+            return
         self.image_callback(self.image)

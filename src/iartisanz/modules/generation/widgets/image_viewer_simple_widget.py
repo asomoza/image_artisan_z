@@ -1,17 +1,33 @@
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from PyQt6.QtCore import QPointF, Qt
-from PyQt6.QtGui import QAction, QContextMenuEvent, QKeySequence, QMouseEvent, QScreen, QShortcut, QWheelEvent
+from PyQt6.QtGui import (
+    QAction,
+    QContextMenuEvent,
+    QImageWriter,
+    QKeySequence,
+    QMouseEvent,
+    QScreen,
+    QShortcut,
+    QWheelEvent,
+)
 from PyQt6.QtWidgets import QApplication, QFileDialog, QGraphicsScene, QGraphicsView, QMenu
 
 from iartisanz.app.event_bus import EventBus
 from iartisanz.modules.generation.dialogs.full_screen_preview import FullScreenPreview
 
 
+if TYPE_CHECKING:
+    from iartisanz.app.preferences import PreferencesObject
+
+
 class ImageViewerSimpleWidget(QGraphicsView):
-    def __init__(self, output_path, preferences, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, output_path, preferences: PreferencesObject):
+        super().__init__()
+
         self.setAcceptDrops(True)
 
         self.output_path = output_path
@@ -33,7 +49,7 @@ class ImageViewerSimpleWidget(QGraphicsView):
         save_shortcut.activated.connect(self.save_image)
 
         self.initial_scale_factor = None
-        self.serialized_data = None
+        self.json_graph = None
         self.pixmap_item = None
 
         self.moving = False
@@ -163,6 +179,9 @@ class ImageViewerSimpleWidget(QGraphicsView):
         else:
             self.full_screen_preview = None
 
+    def set_json_graph(self, json_graph: str):
+        self.json_graph = json_graph
+
     def save_image(self):
         if self.pixmap_item is None:
             self.event_bus.publish("show_snackbar", {"action": "show", "message": "No image to save"})
@@ -174,11 +193,25 @@ class ImageViewerSimpleWidget(QGraphicsView):
             self,
             "Save image",
             f"{self.output_path}/{timestamp}.png",
-            "Images (*.png *.jpg)",
+            "PNG Images (*.png)",
         )
+        if not output_path:
+            return  # user cancelled
+
+        if not output_path.lower().endswith(".png"):
+            output_path += ".png"
 
         image = self.pixmap_item.pixmap().toImage()
-        image.save(output_path)
+
+        writer = QImageWriter(output_path, b"png")
+        if self.preferences.save_image_metadata and self.json_graph:
+            writer.setText("iartisanz_json_graph", self.json_graph)
+
+        if not writer.write(image):
+            self.event_bus.publish(
+                "show_snackbar",
+                {"action": "show", "message": f"Failed to save image: {writer.errorString()}"},
+            )
 
     def dragMoveEvent(self, event):
         pass

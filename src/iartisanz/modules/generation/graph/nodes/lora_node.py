@@ -20,6 +20,7 @@ class LoraNode(Node):
         version: str = None,
         transformer_weight: float = None,
         is_slider: bool = False,
+        database_id: int = 0,
     ):
         super().__init__()
         self.path = path
@@ -28,6 +29,7 @@ class LoraNode(Node):
         self.version = version
         self.transformer_weight = transformer_weight
         self.is_slider = is_slider
+        self.database_id = database_id
 
     def update_lora(self, enabled: bool, transformer_weight: float, is_slider: bool):
         self.enabled = enabled
@@ -36,8 +38,14 @@ class LoraNode(Node):
         self.set_updated()
 
     def __call__(self):
+        if not self.path:
+            raise IArtisanZNodeError("LoRA path is empty.", self.name)
+
         if not os.path.isfile(self.path):
             raise IArtisanZNodeError(f"LoRA file not found: {self.path}", self.name)
+
+        if not self.adapter_name:
+            raise IArtisanZNodeError("adapter_name is empty.", self.name)
 
         state_dict = load_state_dict(self.path)
 
@@ -54,7 +62,7 @@ class LoraNode(Node):
 
         is_correct_format = all("lora" in key for key in state_dict.keys())
         if not is_correct_format:
-            raise ValueError("Invalid LoRA checkpoint.")
+            raise IArtisanZNodeError("Invalid LoRA checkpoint.", self.name)
 
         self.transformer.load_lora_adapter(
             state_dict,
@@ -66,13 +74,20 @@ class LoraNode(Node):
             hotswap=False,
         )
 
+        weight = float(self.transformer_weight) if self.transformer_weight is not None else 1.0
         if not self.enabled:
-            self.transformer_weight = 0.0
+            weight = 0.0
 
-        self.values["lora"] = (self.adapter_name, self.transformer_weight)
+        self.values["lora"] = (self.adapter_name, weight)
+        return self.values
 
     def before_delete(self):
         try:
-            self.transformer.delete_adapters([self.adapter_name])
-        except IArtisanZNodeError:
+            transformer = self.transformer
+        except Exception:
+            return
+
+        try:
+            transformer.delete_adapters([self.adapter_name])
+        except Exception:
             pass

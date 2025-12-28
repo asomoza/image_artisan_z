@@ -32,8 +32,8 @@ from iartisanz.modules.generation.threads.model_items_scanner_thread import Mode
 from iartisanz.modules.generation.widgets.drop_lightbox_widget import DropLightBox
 from iartisanz.modules.generation.widgets.item_selector_widget import ItemSelectorWidget
 from iartisanz.modules.generation.widgets.model_item_widget import ModelItemWidget
-from iartisanz.utils.database.database import Database
-from iartisanz.utils.models.model_utils import calculate_file_hash
+from iartisanz.utils.database import Database
+from iartisanz.utils.model_utils import calculate_file_hash
 
 
 class ModelItemsView(QWidget):

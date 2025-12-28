@@ -2,6 +2,7 @@ import logging
 
 import torch
 from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtGui import QImageReader
 from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem, QVBoxLayout
 
 from iartisanz.modules.base_module import BaseModule
@@ -10,10 +11,12 @@ from iartisanz.modules.generation.graph.new_graph import create_default_graph
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
 from iartisanz.modules.generation.threads.generation_thread import NodeGraphThread
+from iartisanz.modules.generation.widgets.drop_lightbox_widget import DropLightBox
 from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.widgets.prompts_widget import PromptsWidget
-from iartisanz.utils.image.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
-from iartisanz.utils.image.image_utils import fast_upscale_and_denoise
+from iartisanz.utils.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
+from iartisanz.utils.image_utils import fast_upscale_and_denoise
+from iartisanz.utils.json_utils import extract_dict_from_json_graph
 
 
 class GenerationModule(BaseModule):
@@ -31,6 +34,8 @@ class GenerationModule(BaseModule):
             "image_height": self.settings.value("image_height", 1024, type=int),
         }
         self.settings.endGroup()
+
+        self.setAcceptDrops(True)
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.dtype = torch.bfloat16
@@ -58,6 +63,7 @@ class GenerationModule(BaseModule):
         self.event_bus.subscribe("generation_change", self.on_generation_change_event)
         self.event_bus.subscribe("manage_dialog", self.on_manage_dialog_event)
         self.event_bus.subscribe("lora", self.on_lora_event)
+        self.event_bus.subscribe("generate", self.on_generate_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -96,6 +102,9 @@ class GenerationModule(BaseModule):
         main_layout.setStretch(3, 4)
 
         self.setLayout(main_layout)
+
+        self.drop_lightbox = DropLightBox(self)
+        self.drop_lightbox.setText("Drop image here")
 
     def closeEvent(self, event):
         self.settings.beginGroup("generation")
@@ -178,6 +187,9 @@ class GenerationModule(BaseModule):
         self.image_viewer.set_pixmap(pixmap)
         self.image_viewer.reset_view()
 
+        json_graph = self.node_graph.to_json()
+        self.image_viewer.set_json_graph(json_graph)
+
         self.prompts_widget.set_button_generate()
         self.generating = False
 
@@ -196,6 +208,65 @@ class GenerationModule(BaseModule):
         self.prompts_widget.set_button_generate()
         self.generating = False
 
+    def close_all_dialogs(self):
+        for dialog in self.dialogs.values():
+            dialog.close()
+
+        self.dialogs = {}
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self.drop_lightbox.show()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.drop_lightbox.hide()
+        event.accept()
+
+    def dropEvent(self, event):
+        self.drop_lightbox.hide()
+
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if path.endswith(".png"):
+                reader = QImageReader(path)
+
+                fmt = bytes(reader.format()).decode("ascii", errors="ignore").lower()
+                if fmt and fmt != "png":
+                    self.event_bus.publish(
+                        "show_snackbar", {"action": "show", "message": "Only PNG images are supported"}
+                    )
+
+                key = "iartisanz_json_graph"
+                json_graph = None
+
+                if key not in reader.textKeys():
+                    self.event_bus.publish(
+                        "show_snackbar", {"action": "show", "message": "No generation data found in image."}
+                    )
+
+                json_graph = reader.text(key)
+                self.generation_thread.loaded_node_graph = json_graph
+
+                wanted_nodes = [
+                    "positive_prompt",
+                    "negative_prompt",
+                    "num_inference_steps",
+                    "image_width",
+                    "image_height",
+                    "seed",
+                    "guidance_scale",
+                    "loras",
+                ]
+                subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
+
+                self.event_bus.publish("json_graph", {"action": "loaded", "data": subset})
+
+    #########################################################
+    ## SUBSCRIBED BUS EVENTS
+    #########################################################
     def on_generation_change_event(self, data):
         attribute = data.get("attr")
         value = data.get("value")
@@ -225,12 +296,6 @@ class GenerationModule(BaseModule):
                 self.dialogs[dialog_type].close()
                 del self.dialogs[dialog_type]
 
-    def close_all_dialogs(self):
-        for dialog in self.dialogs.values():
-            dialog.close()
-
-        self.dialogs = {}
-
     def on_lora_event(self, data: dict):
         action = data.get("action")
         if action == "add":
@@ -239,3 +304,32 @@ class GenerationModule(BaseModule):
         elif action == "remove":
             lora_data = data.get("lora")
             self.generation_thread.remove_lora(lora_data)
+
+    def on_generate_event(self, data: dict):
+        action = data.get("action")
+        if action == "generate_from_json":
+            json_graph = data.get("json_graph")
+
+            wanted_nodes = [
+                "positive_prompt",
+                "negative_prompt",
+                "num_inference_steps",
+                "image_width",
+                "image_height",
+                "seed",
+                "guidance_scale",
+                "loras",
+            ]
+            subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
+            self.generation_thread.loaded_node_graph = json_graph
+
+            self.event_bus.publish("json_graph", {"action": "loaded", "data": subset})
+
+            self.on_generate(
+                subset.get("seed", 0),
+                subset.get("positive_prompt", ""),
+                subset.get("negative_prompt", ""),
+                True,
+                True,
+                True,
+            )

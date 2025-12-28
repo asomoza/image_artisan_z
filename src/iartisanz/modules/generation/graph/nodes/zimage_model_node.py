@@ -58,7 +58,6 @@ class ZImageModelNode(Node):
 
     def __call__(self):
         self.values["tokenizer"] = Qwen2Tokenizer.from_pretrained(os.path.join(self.path, "tokenizer"))
-
         if "tokenizer" not in self.values or self.values["tokenizer"] is None:
             raise IArtisanZNodeError(
                 "Error trying to load the tokenizer, probably the file doesn't exists.", self.name
@@ -72,10 +71,8 @@ class ZImageModelNode(Node):
             low_cpu_mem_usage=True,
             device_map=self.device,
         )
-
         if self.abort:
             return
-
         if "text_encoder" not in self.values or self.values["text_encoder"] is None:
             raise IArtisanZNodeError(
                 "Error trying to load the text encoder, probably the file doesn't exists.", self.name
@@ -89,10 +86,8 @@ class ZImageModelNode(Node):
             low_cpu_mem_usage=True,
             device_map=self.device,
         )
-
         if self.abort:
             return
-
         if "transformer" not in self.values or self.values["transformer"] is None:
             raise IArtisanZNodeError(
                 "Error trying to load the transformer, probably the file doesn't exists.", self.name
@@ -106,16 +101,13 @@ class ZImageModelNode(Node):
             low_cpu_mem_usage=True,
             device_map=self.device,
         )
-
         if self.abort:
             return
-
         if "vae" not in self.values or self.values["vae"] is None:
             raise IArtisanZNodeError("Error trying to load the VAE, probably the file doesn't exists.", self.name)
 
         self.values["num_channels_latents"] = self.values["transformer"].in_channels
         self.values["vae_scale_factor"] = 2 ** (len(self.values["vae"].config.block_out_channels) - 1)
-
         return self.values
 
     def delete(self):
@@ -126,4 +118,5 @@ class ZImageModelNode(Node):
         self.values["transformer"] = None
         self.values["text_encoder"] = None
         self.values["tokenizer"] = None
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()

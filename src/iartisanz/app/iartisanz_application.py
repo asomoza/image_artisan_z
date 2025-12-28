@@ -54,10 +54,18 @@ class BaseTorchAppApplication(QApplication):
 
         intermediate_images = settings.value("intermediate_images", False, type=bool)
         save_image_metadata = settings.value("save_image_metadata", False, type=bool)
+        hide_nsfw = settings.value("hide_nsfw", True, type=bool)
+        delete_lora_on_import = settings.value("delete_lora_on_import", False, type=bool)
+        delete_model_on_import = settings.value("delete_model_on_import", False, type=bool)
+        delete_model_after_conversion = settings.value("delete_model_after_conversion", False, type=bool)
 
         self.preferences = PreferencesObject(
             intermediate_images=intermediate_images,
             save_image_metadata=save_image_metadata,
+            hide_nsfw=hide_nsfw,
+            delete_lora_on_import=delete_lora_on_import,
+            delete_model_on_import=delete_model_on_import,
+            delete_model_after_conversion=delete_model_after_conversion,
         )
 
         data_path = settings.value("data_path", None, type=str)

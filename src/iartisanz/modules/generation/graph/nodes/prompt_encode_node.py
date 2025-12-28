@@ -13,11 +13,10 @@ class PromptEncoderNode(Node):
 
     @torch.inference_mode()
     def __call__(self):
-        if self.negative_prompt is None:
-            self.negative_prompt = ""
+        negative_prompt = self.negative_prompt if self.negative_prompt is not None else ""
 
         prompt_embeds = self.encode_prompt(self.positive_prompt)
-        negative_prompt_embeds = self.encode_prompt(self.negative_prompt)
+        negative_prompt_embeds = self.encode_prompt(negative_prompt)
 
         self.values["prompt_embeds"] = prompt_embeds.to("cpu").detach().clone()
         self.values["negative_prompt_embeds"] = negative_prompt_embeds.to("cpu").detach().clone()

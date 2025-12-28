@@ -16,21 +16,6 @@ class NumberNode(Node):
         self.number = number
         self.set_updated()
 
-    def to_dict(self):
-        node_dict = super().to_dict()
-        node_dict["number"] = self.number
-        return node_dict
-
-    @classmethod
-    def from_dict(cls, node_dict, _callbacks=None):
-        node = super(NumberNode, cls).from_dict(node_dict)
-        node.number = node_dict["number"]
-        return node
-
-    def update_inputs(self, node_dict):
-        self.number = node_dict["number"]
-
     def __call__(self):
         self.values["value"] = self.number
-
         return self.values

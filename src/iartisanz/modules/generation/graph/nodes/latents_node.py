@@ -13,6 +13,7 @@ class LatentsNode(Node):
         "seed",
     ]
     OUTPUTS = ["latents"]
+    SERIALIZE_EXCLUDE = {"latents"}
 
     def __init__(self, latents=None):
         super().__init__()

@@ -19,6 +19,7 @@ class DenoiseNode(Node):
     ]
     OPTIONAL_INPUTS = ["cfg_truncation", "cfg_normalization", "sigmas", "lora"]
     OUTPUTS = ["latents"]
+    SERIALIZE_EXCLUDE = {"callback"}
 
     def __init__(self, callback: callable = None):
         super().__init__()

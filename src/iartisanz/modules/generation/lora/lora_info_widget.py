@@ -21,7 +21,6 @@ from iartisanz.modules.generation.constants import MODEL_TYPES
 from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
 from iartisanz.modules.generation.widgets.model_item_widget import ModelItemWidget
-from iartisanz.utils.database.database import Database
 
 
 class LoraInfoWidget(QWidget):
@@ -35,7 +34,7 @@ class LoraInfoWidget(QWidget):
         super().__init__()
 
         self.model_item = model_item
-        self.generation_data = None
+        self.json_graph = None
         self.pixmap = model_item.pixmap
 
         self.directories = directories
@@ -147,8 +146,6 @@ class LoraInfoWidget(QWidget):
     def load_info(self):
         self.lora_image_label.setPixmap(self.pixmap)
 
-        self.database = Database(os.path.join(self.directories.data_path, "app.db"))
-
         lora_type_string = "Z-Image Turbo"
         if self.model_item.model_data.model_type is not None:
             lora_type_string = MODEL_TYPES[self.model_item.model_data.model_type]
@@ -176,7 +173,7 @@ class LoraInfoWidget(QWidget):
             self.trigger_label.setVisible(False)
 
         if self.model_item.model_data.example is not None:
-            self.generation_data = json.loads(self.model_item.model_data.example)
+            self.json_graph = self.model_item.model_data.example
             self.generate_example_button.setVisible(True)
 
     def on_delete_clicked(self):
@@ -194,7 +191,7 @@ class LoraInfoWidget(QWidget):
         self.lora_edit.emit(self.model_item.model_data, self.model_item.pixmap)
 
     def on_generate_example(self):
-        self.event_bus.publish("auto_generate", {"generation_data": self.generation_data})
+        self.event_bus.publish("generate", {"action": "generate_from_json", "json_graph": self.json_graph})
 
     def on_trigger_clicked(self):
         button = self.sender()

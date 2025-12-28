@@ -3,7 +3,7 @@ import os
 from PyQt6.QtCore import QMutex, QThread, QWaitCondition, pyqtSignal
 
 from iartisanz.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
-from iartisanz.utils.database.database import Database
+from iartisanz.utils.database import Database
 
 
 class ModelItemsLoaderThread(QThread):
