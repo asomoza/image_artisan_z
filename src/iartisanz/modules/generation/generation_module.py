@@ -294,10 +294,11 @@ class GenerationModule(BaseModule):
                     self.dialogs[dialog_type] = LoraManagerDialog(
                         dialog_type, self.directories, self.preferences, self.image_viewer
                     )
-
-                self.dialogs[dialog_type].show()
-                self.dialogs[dialog_type].raise_()
-                self.dialogs[dialog_type].activateWindow()
+                    self.dialogs[dialog_type].setParent(None)
+                    self.dialogs[dialog_type].show()
+                else:
+                    self.dialogs[dialog_type].raise_()
+                    self.dialogs[dialog_type].activateWindow()
             elif action == "close":
                 self.dialogs[dialog_type].close()
                 del self.dialogs[dialog_type]

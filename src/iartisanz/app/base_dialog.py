@@ -36,9 +36,6 @@ class BaseDialog(QDialog):
         self.dialog_layout.setContentsMargins(0, 0, 0, 0)
         self.dialog_layout.setSpacing(0)
 
-        if parent is None:
-            self.setWindowFlags(Qt.WindowType.Window)
-
         self.main_layout = QVBoxLayout()
         self.main_layout.setContentsMargins(1, 3, 0, 0)
         self.main_layout.setSpacing(0)
