@@ -32,6 +32,7 @@ class GenerationModule(BaseModule):
             "right_menu_expanded": self.settings.value("right_menu_expanded", True, type=bool),
             "image_width": self.settings.value("image_width", 1024, type=int),
             "image_height": self.settings.value("image_height", 1024, type=int),
+            "num_inference_steps": self.settings.value("num_inference_steps", 24, type=int),
         }
         self.settings.endGroup()
 
@@ -53,8 +54,10 @@ class GenerationModule(BaseModule):
         # set initial values for generation
         self.image_width = self.module_options.get("image_width")
         self.image_height = self.module_options.get("image_height")
+        self.num_inference_steps = self.module_options.get("num_inference_steps")
         self.generation_thread.update_node("image_width", self.image_width)
         self.generation_thread.update_node("image_height", self.image_height)
+        self.generation_thread.update_node("num_inference_steps", self.num_inference_steps)
 
         self.init_ui()
 
@@ -111,6 +114,7 @@ class GenerationModule(BaseModule):
         self.settings.setValue("right_menu_expanded", self.module_options.get("right_menu_expanded"))
         self.settings.setValue("image_width", self.image_width)
         self.settings.setValue("image_height", self.image_height)
+        self.settings.setValue("num_inference_steps", self.num_inference_steps)
         self.settings.endGroup()
 
         self.event_bus.unsubscribe("manage_dialog", self.on_manage_dialog_event)
@@ -132,7 +136,7 @@ class GenerationModule(BaseModule):
         self.generating = True
         self.prompts_widget.set_button_abort()
 
-        self.progress_bar.setMaximum(9)
+        self.progress_bar.setMaximum(self.num_inference_steps)
         self.progress_bar.setValue(0)
 
         if positive_prompt_changed:
@@ -275,6 +279,8 @@ class GenerationModule(BaseModule):
             self.image_width = value
         elif attribute == "image_height":
             self.image_height = value
+        elif attribute == "num_inference_steps":
+            self.num_inference_steps = value
 
         self.generation_thread.update_node(attribute, value)
 

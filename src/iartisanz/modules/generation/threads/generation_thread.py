@@ -58,9 +58,6 @@ class NodeGraphThread(QThread):
         self.status_changed.emit("Generating image...")
 
         if self.force_new_run:
-            node = self.node_graph.get_node_by_name("num_inference_steps")
-            node.update_value(9)
-
             node = self.node_graph.get_node_by_name("guidance_scale")
             node.update_value(1.0)
 
