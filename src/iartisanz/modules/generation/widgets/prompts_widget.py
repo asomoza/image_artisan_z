@@ -11,7 +11,7 @@ from iartisanz.modules.generation.widgets.prompt_input_widget import PromptInput
 
 
 class PromptsWidget(QFrame):
-    generate_signal = pyqtSignal(int, str, str, bool, bool, bool)
+    generate_signal = pyqtSignal(object, str, str, bool, bool, bool)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
