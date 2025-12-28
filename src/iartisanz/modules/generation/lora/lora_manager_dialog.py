@@ -24,7 +24,7 @@ class LoraManagerDialog(BaseDialog):
         super().__init__(*args)
 
         self.setWindowTitle("LoRA Manager")
-        self.setMinimumSize(1160, 800)
+        self.setMinimumSize(1160, 950)
 
         self.logger = logging.getLogger(__name__)
 
