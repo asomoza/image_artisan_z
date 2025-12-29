@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
+from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
+
 
 def extract_dict_from_json_graph(json_graph: Any, wanted: Iterable[Any], *, include_missing: bool = False) -> dict:
     data = _coerce_to_dict(json_graph)
@@ -124,3 +126,29 @@ def cast_number_range(value) -> list[float]:
         raise ValueError("the number range values must be int|float (not bool)")
 
     return [float(a), float(b)]
+
+
+def cast_scheduler(value) -> SchedulerDataObject:
+    if isinstance(value, SchedulerDataObject):
+        return value
+
+    if value is None:
+        return SchedulerDataObject()
+
+    if isinstance(value, dict):
+        try:
+            return SchedulerDataObject.from_dict(value)
+        except Exception:
+            return SchedulerDataObject()
+
+    if isinstance(value, str):
+        try:
+            data = json.loads(value)
+            if isinstance(data, dict):
+                return SchedulerDataObject.from_dict(data)
+        except Exception:
+            pass
+        return SchedulerDataObject()
+
+    # Unknown type -> fallback
+    return SchedulerDataObject()

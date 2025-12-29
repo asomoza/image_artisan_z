@@ -5,7 +5,6 @@ import torch
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from iartisanz.app.directories import DirectoriesObject
-from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
 from iartisanz.modules.generation.graph.nodes import NODE_CLASSES
@@ -66,9 +65,6 @@ class NodeGraphThread(QThread):
                 version="1.0",
                 model_type="Turbo",
             )
-
-            node = self.node_graph.get_node_by_name("scheduler")
-            node.update_value(SchedulerDataObject())
 
             node = self.node_graph.get_node_by_name("denoise")
             node.callback = self.step_progress_update

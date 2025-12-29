@@ -7,7 +7,7 @@ class SchedulerDataObject:
     scheduler_index: int = attr.ib(default=0)
     scheduler_class: str = attr.ib(default="FlowMatchEulerDiscreteScheduler")
     num_train_timesteps: int = attr.ib(default=1000)
-    shift: float = attr.ib(default=1.0)
+    shift: float = attr.ib(default=3.0)
     use_dynamic_shifting: bool = attr.ib(default=False)
     base_shift: float = attr.ib(default=0.5)
     max_shift: float = attr.ib(default=1.15)
@@ -27,7 +27,7 @@ class SchedulerDataObject:
         self.scheduler_index = 0
         self.scheduler_class = "FlowMatchEulerDiscreteScheduler"
         self.num_train_timesteps = 1000
-        self.shift = 1.0
+        self.shift = 3.0
         self.use_dynamic_shifting = False
         self.base_shift = 0.5
         self.max_shift = 1.15

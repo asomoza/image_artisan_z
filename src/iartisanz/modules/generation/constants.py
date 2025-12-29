@@ -1,3 +1,15 @@
+from diffusers import (
+    DEISMultistepScheduler,
+    DPMSolverMultistepScheduler,
+    DPMSolverSinglestepScheduler,
+    FlowMatchEulerDiscreteScheduler,
+    FlowMatchHeunDiscreteScheduler,
+    FlowMatchLCMScheduler,
+    SASolverScheduler,
+    UniPCMultistepScheduler,
+)
+
+
 # Factors taken from ComfyUI:
 # https://github.com/comfyanonymous/ComfyUI/blob/092ee8a5008c8d558b0a72cc7961a31d9cc5400b/comfy/latent_formats.py#L155
 LATENT_RGB_FACTORS = [
@@ -20,3 +32,27 @@ LATENT_RGB_FACTORS = [
 ]
 
 MODEL_TYPES = {1: "Z-Image Turbo"}
+
+SCHEDULER_CLASS_MAPPING = {
+    "DEISMultistepScheduler": DEISMultistepScheduler,
+    "DPMSolverMultistepScheduler": DPMSolverMultistepScheduler,
+    "DPMSolverSinglestepScheduler": DPMSolverSinglestepScheduler,
+    "FlowMatchEulerDiscreteScheduler": FlowMatchEulerDiscreteScheduler,
+    "FlowMatchHeunDiscreteScheduler": FlowMatchHeunDiscreteScheduler,
+    "FlowMatchLCMScheduler": FlowMatchLCMScheduler,
+    "SASolverScheduler": SASolverScheduler,
+    "UniPCMultistepScheduler": UniPCMultistepScheduler,
+}
+
+SCHEDULER_NAME_CLASS_MAPPING = {
+    "DEIS": "DEISMultistepScheduler",
+    "DPM++ 2M": "DPMSolverMultistepScheduler",
+    "DPM++ 2S": "DPMSolverSinglestepScheduler",
+    "Euler": "FlowMatchEulerDiscreteScheduler",
+    "Heun": "FlowMatchHeunDiscreteScheduler",
+    "LCM": "FlowMatchLCMScheduler",
+    "SA": "SASolverScheduler",
+    "UniPC": "UniPCMultistepScheduler",
+}
+
+SCHEDULER_NAMES = list(SCHEDULER_NAME_CLASS_MAPPING.keys())

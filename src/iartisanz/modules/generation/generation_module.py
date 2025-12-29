@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem,
 
 from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
+from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
@@ -16,7 +17,7 @@ from iartisanz.modules.generation.widgets.image_viewer_simple_widget import Imag
 from iartisanz.modules.generation.widgets.prompts_widget import PromptsWidget
 from iartisanz.utils.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
 from iartisanz.utils.image_utils import fast_upscale_and_denoise
-from iartisanz.utils.json_utils import cast_number_range, extract_dict_from_json_graph
+from iartisanz.utils.json_utils import cast_number_range, cast_scheduler, extract_dict_from_json_graph
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ class GenerationModule(BaseModule):
         "num_inference_steps": (24, int),
         "guidance_scale": (4.0, float),
         "guidance_start_end": ([0.0, 1.0], list),
+        "scheduler": (SchedulerDataObject().to_dict(), dict),
     }
 
     _MIRRORED_GRAPH_ATTRS = {
@@ -38,6 +40,7 @@ class GenerationModule(BaseModule):
         "num_inference_steps": int,
         "guidance_scale": float,
         "guidance_start_end": cast_number_range,
+        "scheduler": cast_scheduler,
     }
 
     def __init__(self, *args, **kwargs):
@@ -132,7 +135,10 @@ class GenerationModule(BaseModule):
         self.settings.setValue("right_menu_expanded", self.module_options.get("right_menu_expanded"))
 
         for key in self._MIRRORED_GRAPH_ATTRS:
-            self.settings.setValue(key, getattr(self, key))
+            value = getattr(self, key)
+            if isinstance(value, SchedulerDataObject):
+                value = value.to_dict()
+            self.settings.setValue(key, value)
 
         self.settings.endGroup()
 
@@ -282,6 +288,7 @@ class GenerationModule(BaseModule):
                     "seed",
                     "guidance_scale",
                     "guidance_start_end",
+                    "scheduler",
                     "loras",
                 ]
                 subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
@@ -351,6 +358,7 @@ class GenerationModule(BaseModule):
                 "seed",
                 "guidance_scale",
                 "guidance_start_end",
+                "scheduler",
                 "loras",
             ]
             subset = extract_dict_from_json_graph(json_graph, wanted_nodes)

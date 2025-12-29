@@ -338,6 +338,10 @@ LoraPanel LoraAddedItem {
     min-width: 40px;
 }
 
+#shift_slider QLineEdit {
+    min-width: 40px;
+}
+
 /* Custom buttons */
 QPushButton#green_button {
     background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #23923b, stop: 1 #124e1f);
