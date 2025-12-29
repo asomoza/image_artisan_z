@@ -5,12 +5,12 @@ import threading
 
 
 local_db = threading.local()
+logger = logging.getLogger(__name__)
 
 
 class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
-        self.logger = logging.getLogger(__name__)
 
     def _get_connection(self):
         """Gets or creates a thread-local connection."""
@@ -39,7 +39,7 @@ class Database:
             conn.commit()
             return cursor
         except sqlite3.Error as e:
-            self.logger.error(f"An error occurred: {e}")
+            logger.error(f"An error occurred: {e}")
             conn.rollback()
             raise
 
@@ -53,7 +53,7 @@ class Database:
                 cursor.execute(query)
             return cursor.fetchone()
         except sqlite3.Error as e:
-            self.logger.error(f"An error occurred: {e}")
+            logger.error(f"An error occurred: {e}")
             raise
 
     def fetch_all(self, query, params=None):
@@ -66,7 +66,7 @@ class Database:
                 cursor.execute(query)
             return cursor.fetchall()
         except sqlite3.Error as e:
-            self.logger.error(f"An error occurred: {e}")
+            logger.error(f"An error occurred: {e}")
             raise
 
     def create_table(self, table_name, columns):
@@ -97,7 +97,7 @@ class Database:
             cursor.execute(query, params)
             conn.commit()
         except sqlite3.Error as e:
-            self.logger.error(f"An error occurred: {e}")
+            logger.error(f"An error occurred: {e}")
             conn.rollback()
             raise
 
@@ -124,7 +124,7 @@ class Database:
             result = cursor.fetchone()
             return result is not None
         except sqlite3.Error as e:
-            self.logger.error(f"An error occurred: {e}")
+            logger.error(f"An error occurred: {e}")
             raise
 
     def select(
@@ -184,8 +184,8 @@ class Database:
 
             return cursor.fetchall()
         except sqlite3.Error as e:
-            self.logger.error(f"Error selecting data: {e}")
-            self.logger.debug("Error Exception", exc_info=True)
+            logger.error(f"Error selecting data: {e}")
+            logger.debug("Error Exception", exc_info=True)
             return []
 
     def select_one(self, table, columns, where):
@@ -198,5 +198,5 @@ class Database:
             row = cursor.fetchone()
             return dict(zip(columns, row)) if row else None
         except Exception as e:
-            self.logger.error(f"Database error in select_one: {e}")
+            logger.error(f"Database error in select_one: {e}")
             return None

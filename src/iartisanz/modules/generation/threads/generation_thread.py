@@ -12,6 +12,9 @@ from iartisanz.modules.generation.graph.nodes import NODE_CLASSES
 from iartisanz.modules.generation.graph.nodes.lora_node import LoraNode
 
 
+logger = logging.getLogger(__name__)
+
+
 class NodeGraphThread(QThread):
     status_changed = pyqtSignal(str)
     progress_update = pyqtSignal(int, torch.Tensor)
@@ -27,8 +30,6 @@ class NodeGraphThread(QThread):
         device: torch.device,
     ):
         super().__init__()
-
-        self.logger = logging.getLogger(__name__)
 
         self.node_graph = node_graph
         self.dtype = dtype
@@ -80,7 +81,7 @@ class NodeGraphThread(QThread):
         try:
             self.node_graph()
         except IArtisanZNodeError as e:
-            self.logger.debug(f"Error in node: '{e.node_name}': {e}")
+            logger.debug(f"Error in node: '{e.node_name}': {e}")
             self.generation_error.emit(f"Error in node '{e.node_name}': {e}", False)
 
         if not self.node_graph.updated:
@@ -89,7 +90,7 @@ class NodeGraphThread(QThread):
     def update_node(self, node_name: str, value) -> bool:
         node = self.node_graph.get_node_by_name(node_name)
         if node is None:
-            self.logger.debug("update_node: unknown node '%s' (ignored)", node_name)
+            logger.debug("update_node: unknown node '%s' (ignored)", node_name)
             return False
 
         node.update_value(value)

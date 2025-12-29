@@ -36,6 +36,9 @@ from iartisanz.utils.database import Database
 from iartisanz.utils.model_utils import calculate_file_hash
 
 
+logger = logging.getLogger(__name__)
+
+
 class ModelItemsView(QWidget):
     model_item_clicked = pyqtSignal(ModelItemWidget)
     finished_loading = pyqtSignal()
@@ -71,7 +74,6 @@ class ModelItemsView(QWidget):
         self.all_batches_loaded = False
 
         self.tags = None
-        self.logger = logging.getLogger(__name__)
         self.hide_nsfw = True
 
         self.setAcceptDrops(True)
@@ -297,7 +299,7 @@ class ModelItemsView(QWidget):
                             img_bytes = image_file.read()
                         image_buffer = BytesIO(img_bytes)
             else:
-                self.logger.info(f"Model {filepath} already exists, skipping import and deleting file.")
+                logger.info(f"Model {filepath} already exists, skipping import and deleting file.")
                 self.error.emit("Model already exists, skipping import.")
                 os.remove(filepath)
                 return
@@ -317,7 +319,7 @@ class ModelItemsView(QWidget):
                 database.insert(self.database_table, model_item.to_dict())
                 model_item.id = database.last_insert_rowid()
             except Exception as e:
-                self.logger.error(f"Error inserting model item: {e}")
+                logger.error(f"Error inserting model item: {e}")
 
         database.disconnect()
         self.add_model_item(model_item, image_buffer)
@@ -434,7 +436,7 @@ class ModelItemsView(QWidget):
                 else:
                     os.remove(model_data.filepath)
             except Exception as e:
-                self.logger.error(f"Error deleting model item: {e}")
+                logger.error(f"Error deleting model item: {e}")
                 self.error.emit("Model files not found.")
 
             database = Database(os.path.join(self.directories.data_path, "app.db"))

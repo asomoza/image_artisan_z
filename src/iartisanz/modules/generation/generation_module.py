@@ -19,6 +19,9 @@ from iartisanz.utils.image_utils import fast_upscale_and_denoise
 from iartisanz.utils.json_utils import cast_number_range, extract_dict_from_json_graph
 
 
+logger = logging.getLogger(__name__)
+
+
 class GenerationModule(BaseModule):
     _SETTINGS_SCHEMA = {
         "right_menu_expanded": (True, bool),
@@ -40,7 +43,6 @@ class GenerationModule(BaseModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.logger = logging.getLogger(__name__)
         self.settings = QSettings("ZCode", "ImageArtisanZ")
 
         self.settings.beginGroup("generation")

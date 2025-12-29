@@ -4,6 +4,9 @@ from PyQt6.QtGui import QAction, QContextMenuEvent
 from PyQt6.QtWidgets import QMenu, QPushButton, QSizePolicy
 
 
+logger = logging.getLogger(__name__)
+
+
 class GenerateButton(QPushButton):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -12,8 +15,6 @@ class GenerateButton(QPushButton):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Preferred,
         )
-
-        self.logger = logging.getLogger(__name__)
 
         self.auto_save = False
         self.continuous_generation = False
@@ -36,13 +37,13 @@ class GenerateButton(QPushButton):
     def handle_auto_save_triggered(self, checked):
         self.auto_save = checked
         if checked:
-            self.logger.debug("Auto save enabled")
+            logger.debug("Auto save enabled")
         else:
-            self.logger.debug("Auto save disabled")
+            logger.debug("Auto save disabled")
 
     def handle_continuous_generation_triggered(self, checked):
         self.continuous_generation = checked
         if checked:
-            self.logger.debug("Continuous generation enabled")
+            logger.debug("Continuous generation enabled")
         else:
-            self.logger.debug("Continuous generation disabled")
+            logger.debug("Continuous generation disabled")

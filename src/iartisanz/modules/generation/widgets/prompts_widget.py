@@ -10,13 +10,14 @@ from iartisanz.modules.generation.buttons.generate_button import GenerateButton
 from iartisanz.modules.generation.widgets.prompt_input_widget import PromptInputWidget
 
 
+logger = logging.getLogger(__name__)
+
+
 class PromptsWidget(QFrame):
     generate_signal = pyqtSignal(object, str, str, bool, bool, bool)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        self.logger = logging.getLogger(__name__)
 
         self.event_bus = EventBus()
 

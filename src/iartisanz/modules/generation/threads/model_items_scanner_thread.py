@@ -9,6 +9,9 @@ from iartisanz.utils.database import Database
 from iartisanz.utils.model_utils import calculate_file_hash
 
 
+logger = logging.getLogger(__name__)
+
+
 class ModelItemsScannerThread(QThread):
     status_changed = pyqtSignal(str)
     item_scanned = pyqtSignal(ModelItemDataObject, object, bool)
@@ -24,7 +27,6 @@ class ModelItemsScannerThread(QThread):
         self.image_dir = image_dir
         self.database_path = os.path.join(data_path, "app.db")
         self.database_table = database_table
-        self.logger = logging.getLogger(__name__)
 
     def stop(self):
         self.stop_requested = True
@@ -45,7 +47,7 @@ class ModelItemsScannerThread(QThread):
 
         for directory in self.model_directories:
             if not os.path.exists(directory["path"]):
-                self.logger.error(f"Directory not found: {directory['path']}")
+                logger.error(f"Directory not found: {directory['path']}")
                 continue
 
             for filepath in os.listdir(directory["path"]):

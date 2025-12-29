@@ -9,11 +9,12 @@ from iartisanz.modules.generation.panels.base_panel import BasePanel
 from iartisanz.utils.database import Database
 
 
+logger = logging.getLogger(__name__)
+
+
 class LoraPanel(BasePanel):
     def __init__(self, *args):
         super().__init__(*args)
-
-        self.logger = logging.getLogger(__name__)
 
         self.init_ui()
 
@@ -86,7 +87,7 @@ class LoraPanel(BasePanel):
                         )
 
                         if lora_db_item is None:
-                            self.logger.debug(f"LoRA with id {lora_database_id} not found in database.")
+                            logger.debug(f"LoRA with id {lora_database_id} not found in database.")
                             continue
 
                         lora_data_object = LoraDataObject(
@@ -101,4 +102,4 @@ class LoraPanel(BasePanel):
                         lora_widget = LoraAddedItem(lora_data_object)
                         self.loras_layout.addWidget(lora_widget)
                     else:
-                        self.logger.debug("LoRA doesn't have a database id.")
+                        logger.debug("LoRA doesn't have a database id.")

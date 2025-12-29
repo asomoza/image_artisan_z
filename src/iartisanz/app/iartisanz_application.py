@@ -16,6 +16,9 @@ from iartisanz.app.preferences import PreferencesObject
 from iartisanz.configuration.initial_setup_dialog import InitialSetupDialog
 
 
+logger = logging.getLogger(__name__)
+
+
 class BaseTorchAppApplication(QApplication):
     SPLASH_IMG = str(files("iartisanz.theme.images").joinpath("splash.webp"))
 
@@ -26,8 +29,6 @@ class BaseTorchAppApplication(QApplication):
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
         super().__init__(*args, **kwargs)
-
-        self.logger = logging.getLogger(__name__)
 
         style_data = files("iartisanz.theme").joinpath("stylesheet.qss").read_bytes()
         stylesheet = style_data.decode("utf-8")
@@ -97,9 +98,9 @@ class BaseTorchAppApplication(QApplication):
         if self.temp_dir and os.path.exists(self.temp_dir):  # check if it exists
             try:
                 shutil.rmtree(self.temp_dir)
-                print(f"Temporary directory '{self.temp_dir}' cleaned up successfully.")
+                logger.info(f"Temporary directory '{self.temp_dir}' cleaned up successfully.")
             except OSError as e:
-                print(f"Error cleaning up temporary directory: {e}")
+                logger.error(f"Error cleaning up temporary directory: {e}")
 
     def close_splash(self):
         if self.splash:

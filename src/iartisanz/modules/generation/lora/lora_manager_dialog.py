@@ -17,6 +17,9 @@ from iartisanz.modules.generation.lora.lora_info_widget import LoraInfoWidget
 from iartisanz.modules.generation.widgets.model_item_widget import ModelItemWidget
 
 
+logger = logging.getLogger(__name__)
+
+
 class LoraManagerDialog(BaseDialog):
     LORA_IMG = str(files("iartisanz.theme.images").joinpath("lora.webp"))
 
@@ -26,10 +29,8 @@ class LoraManagerDialog(BaseDialog):
         self.setWindowTitle("LoRA Manager")
         self.setMinimumSize(1160, 950)
 
-        self.logger = logging.getLogger(__name__)
-
         if len(args) <= 3:
-            self.logger.warning("LoraManagerDialog requires the image viewer argument to be able to set images.")
+            logger.warning("LoraManagerDialog requires the image viewer argument to be able to set images.")
 
         self.image_viewer = args[3] if len(args) > 3 else None
 
@@ -51,9 +52,9 @@ class LoraManagerDialog(BaseDialog):
         if not os.path.exists(image_dir):
             try:
                 os.makedirs(image_dir)
-                self.logger.info(f"Directory '{image_dir}' created successfully.")
+                logger.info(f"Directory '{image_dir}' created successfully.")
             except OSError as e:
-                self.logger.error(f"Error creating directory '{image_dir}': {e}")
+                logger.error(f"Error creating directory '{image_dir}': {e}")
 
         self.image_dir = image_dir
         self.default_pixmap = QPixmap(self.LORA_IMG)

@@ -12,6 +12,9 @@ from iartisanz.app.snackbar import SnackBar
 from iartisanz.utils.database import Database
 
 
+logger = logging.getLogger(__name__)
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -24,8 +27,6 @@ class MainWindow(QMainWindow):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-
-        self.logger = logging.getLogger(__name__)
 
         splash_timer = QTimer()
         splash_timer.singleShot(splash_timer_duration, self.close_splash)
@@ -254,8 +255,8 @@ class MainWindow(QMainWindow):
             self.workspace_layout.addWidget(self.module)
             self.gui_options["current_module"] = label
         except TypeError as module_error:
-            self.logger.error("Error loading the module with this message: %s", str(module_error))
-            self.logger.debug("TypeError exception", exc_info=True)
+            logger.error("Error loading the module with this message: %s", str(module_error))
+            logger.debug("TypeError exception", exc_info=True)
             self.show_snackbar(f"{module_error}")
 
     def on_show_snackbar_event(self, data):

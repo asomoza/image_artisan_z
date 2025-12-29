@@ -12,14 +12,15 @@ from iartisanz.modules.generation.panels.generation_panel import GenerationPanel
 from iartisanz.modules.generation.panels.panel_container import PanelContainer
 
 
+logger = logging.getLogger(__name__)
+
+
 class GenerationRightMenu(QFrame):
     EXPANDED_WIDTH = 400
     NORMAL_WIDTH = 40
 
     def __init__(self, module_options: dict, preferences: PreferencesObject, directories: DirectoriesObject):
         super().__init__()
-
-        self.logger = logging.getLogger(__name__)
 
         self.module_options = module_options
         self.preferences = preferences
