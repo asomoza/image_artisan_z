@@ -69,6 +69,10 @@ class LoraManagerDialog(BaseDialog):
     def save_settings(self):
         self.settings.setValue("geometry", self.saveGeometry())
 
+    def closeEvent(self, event):
+        self.save_settings()
+        super().closeEvent(event)
+
     def init_ui(self):
         content_layout = QHBoxLayout()
 
