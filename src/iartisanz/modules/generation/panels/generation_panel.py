@@ -1,7 +1,9 @@
 from PyQt6.QtCore import QSignalBlocker, Qt
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout
+from PyQt6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout
 from superqt import QDoubleRangeSlider, QLabeledDoubleSlider, QLabeledSlider
 
+from iartisanz.modules.generation.constants import SCHEDULER_NAME_CLASS_MAPPING, SCHEDULER_NAMES
+from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 from iartisanz.modules.generation.panels.base_panel import BasePanel
 from iartisanz.modules.generation.widgets.image_dimensions_widget import ImageDimensionsWidget
 from iartisanz.utils.json_utils import cast_number_range
@@ -13,12 +15,15 @@ class GenerationPanel(BasePanel):
 
         self.init_ui()
 
+        self.scheduler_data_object = SchedulerDataObject()
+
         self.update_panel(
             self.module_options.get("image_width"),
             self.module_options.get("image_height"),
             self.module_options.get("num_inference_steps"),
             self.module_options.get("guidance_scale"),
             self.module_options.get("guidance_start_end"),
+            self.module_options.get("scheduler"),
         )
 
         self.event_bus.subscribe("json_graph", self.on_json_graph_event)
@@ -66,8 +71,33 @@ class GenerationPanel(BasePanel):
         guidance_start_end_layout.addWidget(self.guidance_end_value_label)
 
         step_guidance_layout.addLayout(guidance_start_end_layout, 2, 0, 1, 3)
-
         main_layout.addLayout(step_guidance_layout)
+
+        scheduler_label = QLabel("Scheduler")
+        scheduler_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(scheduler_label)
+
+        self.scheduler_combobox = QComboBox()
+        self.scheduler_combobox.addItems(SCHEDULER_NAMES)
+        self.scheduler_combobox.currentIndexChanged.connect(self.scheduler_selected)
+        main_layout.addWidget(self.scheduler_combobox)
+
+        scheduler_config_layout = QGridLayout()
+
+        shift_label = QLabel("Shift")
+        shift_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        scheduler_config_layout.addWidget(shift_label, 0, 0)
+
+        self.shift_slider = QLabeledDoubleSlider()
+        self.shift_slider.setObjectName("shift_slider")
+        self.shift_slider.setRange(1.0, 20.0)
+        self.shift_slider.setSingleStep(0.1)
+        self.shift_slider.setOrientation(Qt.Orientation.Horizontal)
+        self.shift_slider.valueChanged.connect(self.on_shift_value_changed)
+        scheduler_config_layout.addWidget(self.shift_slider, 0, 1)
+
+        main_layout.addLayout(scheduler_config_layout)
+
         main_layout.addStretch()
         self.setLayout(main_layout)
 
@@ -102,8 +132,36 @@ class GenerationPanel(BasePanel):
             {"attr": "guidance_start_end", "value": [guidance_start, guidance_end]},
         )
 
+    def _set_scheduler_ui(self, scheduler_value):
+        self.scheduler_data_object = SchedulerDataObject.from_dict(scheduler_value)
+
+        index = 0
+
+        if getattr(self.scheduler_data_object, "name", None) in SCHEDULER_NAMES:
+            index = SCHEDULER_NAMES.index(self.scheduler_data_object.name)
+
+        blocker = QSignalBlocker(self.scheduler_combobox)
+        try:
+            self.scheduler_combobox.setCurrentIndex(index)
+            self.shift_slider.setValue(self.scheduler_data_object.shift)
+        finally:
+            del blocker
+
+    def scheduler_selected(self, index: int):
+        selected_scheduler_name = SCHEDULER_NAMES[index]
+        selected_scheduler_class = SCHEDULER_NAME_CLASS_MAPPING[selected_scheduler_name]
+        self.scheduler_data_object = SchedulerDataObject(
+            name=selected_scheduler_name, scheduler_index=index, scheduler_class=selected_scheduler_class
+        )
+
+        self.event_bus.publish("generation_change", {"attr": "scheduler", "value": self.scheduler_data_object})
+
+    def on_shift_value_changed(self, value: float):
+        self.scheduler_data_object.shift = value
+        self.event_bus.publish("generation_change", {"attr": "scheduler", "value": self.scheduler_data_object})
+
     def update_panel(
-        self, width: int, height: int, num_inference_steps: int, guidance_scale: float, guidance_start_end
+        self, width: int, height: int, num_inference_steps: int, guidance_scale: float, guidance_start_end, scheduler
     ):
         # Block signals so we don't emit generation_change while initializing
         blockers = [
@@ -130,6 +188,7 @@ class GenerationPanel(BasePanel):
             start, end = (0.0, 1.0)
 
         self._set_guidance_start_end_ui(start, end)
+        self._set_scheduler_ui(scheduler)
 
     #########################################################
     ## SUBSCRIBED BUS EVENTS
@@ -144,5 +203,6 @@ class GenerationPanel(BasePanel):
             num_inference_steps = data.get("num_inference_steps")
             guidance_scale = data.get("guidance_scale")
             guidance_start_end = data.get("guidance_start_end")
+            scheduler = data.get("scheduler")
 
-            self.update_panel(width, height, num_inference_steps, guidance_scale, guidance_start_end)
+            self.update_panel(width, height, num_inference_steps, guidance_scale, guidance_start_end, scheduler)
