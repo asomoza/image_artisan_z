@@ -58,9 +58,6 @@ class NodeGraphThread(QThread):
         self.status_changed.emit("Generating image...")
 
         if self.force_new_run:
-            node = self.node_graph.get_node_by_name("guidance_scale")
-            node.update_value(1.0)
-
             node = self.node_graph.get_node_by_name("model")
             node.update_model(
                 path="/home/ozzy/Documents/Image Artisan Z/models/diffusers/Z-Image-Turbo/",
@@ -89,9 +86,17 @@ class NodeGraphThread(QThread):
         if not self.node_graph.updated:
             self.generation_error.emit("Nothing was changed", False)
 
-    def update_node(self, node_name: str, value):
+    def update_node(self, node_name: str, value) -> bool:
         node = self.node_graph.get_node_by_name(node_name)
+        if node is None:
+            self.logger.debug("update_node: unknown node '%s' (ignored)", node_name)
+            return False
+
         node.update_value(value)
+        return True
+
+    def update_nodes(self, values: dict) -> dict:
+        return {name: self.update_node(name, value) for name, value in values.items()}
 
     def add_lora(self, lora_data):
         lora_node = self.node_graph.get_node_by_name(f"{lora_data.name}_{lora_data.version}_lora")

@@ -113,3 +113,14 @@ def _coerce_to_dict(json_graph: Any) -> dict:
         except Exception:
             return {}
     return {}
+
+
+def cast_number_range(value) -> list[float]:
+    if not isinstance(value, list) or len(value) != 2:
+        raise ValueError("the number range must be a list of 2 numbers")
+
+    a, b = value[0], value[1]
+    if isinstance(a, bool) or isinstance(b, bool):
+        raise ValueError("the number range values must be int|float (not bool)")
+
+    return [float(a), float(b)]

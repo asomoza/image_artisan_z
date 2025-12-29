@@ -1,10 +1,14 @@
 import inspect
+import logging
 from typing import Optional, Union
 
 import torch
 
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.nodes.node import Node
+
+
+logger = logging.getLogger(__name__)
 
 
 class DenoiseNode(Node):
@@ -17,7 +21,7 @@ class DenoiseNode(Node):
         "negative_prompt_embeds",
         "guidance_scale",
     ]
-    OPTIONAL_INPUTS = ["cfg_truncation", "cfg_normalization", "sigmas", "lora"]
+    OPTIONAL_INPUTS = ["cfg_normalization", "sigmas", "lora", "guidance_start_end"]
     OUTPUTS = ["latents"]
     SERIALIZE_EXCLUDE = {"callback"}
 
@@ -29,8 +33,20 @@ class DenoiseNode(Node):
     @torch.inference_mode()
     def __call__(self):
         do_classifier_free_guidance = True if self.guidance_scale > 1 else False
-        cfg_truncation = self.cfg_truncation if self.cfg_truncation is not None else 1.0
+
+        guidance_start = float(self.guidance_start_end[0] if hasattr(self, "guidance_start_end") else 0.0)
+        guidance_end = float(self.guidance_start_end[1] if hasattr(self, "guidance_start_end") else 1.0)
+
+        if guidance_start > guidance_end:
+            logger.warning(
+                "guidance_start (%s) is higher than guidance_end (%s); ignoring guidance window and using full range [0.0, 1.0].",
+                guidance_start,
+                guidance_end,
+            )
+            guidance_start, guidance_end = 0.0, 1.0
+
         cfg_normalization = self.cfg_normalization if self.cfg_normalization is not None else False
+        scheduler = self.scheduler
 
         if self.lora:
             try:
@@ -48,38 +64,42 @@ class DenoiseNode(Node):
         latents = self.latents
 
         timesteps, num_inference_steps = self.retrieve_timesteps(
-            self.scheduler,
+            scheduler,
             self.num_inference_steps,
             self.device,
             sigmas=self.sigmas,
         )
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+
+        order = getattr(scheduler, "order", 1)
+        num_warmup_steps = max(len(timesteps) - num_inference_steps * order, 0)
+        step_norm_den = float(max(num_inference_steps - 1, 1))
 
         for i, t in enumerate(timesteps):
             # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
             timestep = t.expand(latents.shape[0])
             timestep = (1000 - timestep) / 1000
 
-            # Normalized time for time-aware config (0 at start, 1 at end)
-            t_norm = timestep[0].item()
+            # Per-inference-step index/progress (0 at start, 1 at end)
+            step_idx = i // order
+            step_norm = float(step_idx) / step_norm_den
 
-            # Handle cfg truncation
             current_guidance_scale = self.guidance_scale
-            if do_classifier_free_guidance and cfg_truncation is not None and float(cfg_truncation) <= 1:
-                if t_norm > cfg_truncation:
-                    current_guidance_scale = 0.0
+            if not (guidance_start <= step_norm <= guidance_end):
+                current_guidance_scale = 0.0
 
-            # Run CFG only if configured AND scale is non-zero
             apply_cfg = do_classifier_free_guidance and current_guidance_scale > 0
 
             if apply_cfg:
                 latents_typed = latents.to(self.transformer.dtype)
                 latent_model_input = latents_typed.repeat(2, 1, 1, 1)
-                prompt_embeds_model_input = prompt_embeds + negative_prompt_embeds
+                prompt_embeds_model_input = [
+                    prompt_embeds.to(dtype=self.transformer.dtype),
+                    negative_prompt_embeds.to(dtype=self.transformer.dtype),
+                ]
                 timestep_model_input = timestep.repeat(2)
             else:
                 latent_model_input = latents.to(self.transformer.dtype)
-                prompt_embeds_model_input = prompt_embeds
+                prompt_embeds_model_input = [prompt_embeds.to(dtype=self.transformer.dtype)]
                 timestep_model_input = timestep
 
             latent_model_input = latent_model_input.unsqueeze(2)
@@ -122,12 +142,12 @@ class DenoiseNode(Node):
             noise_pred = -noise_pred
 
             # compute the previous noisy sample x_t -> x_t-1
-            latents = self.scheduler.step(noise_pred.to(torch.float32), t, latents, return_dict=False)[0]
+            latents = scheduler.step(noise_pred.to(torch.float32), t, latents, return_dict=False)[0]
 
-            if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                if self.callback is not None:
-                    step_idx = i // getattr(self.scheduler, "order", 1)
-                    self.callback(step_idx, t, latents)
+            is_last = i == len(timesteps) - 1
+            is_step_boundary = (i + 1) > num_warmup_steps and (i + 1) % order == 0
+            if (is_last or is_step_boundary) and self.callback is not None:
+                self.callback(step_idx, t, latents)
 
         self.values["latents"] = latents.to("cpu").detach().clone()
 

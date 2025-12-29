@@ -16,23 +16,36 @@ from iartisanz.modules.generation.widgets.image_viewer_simple_widget import Imag
 from iartisanz.modules.generation.widgets.prompts_widget import PromptsWidget
 from iartisanz.utils.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
 from iartisanz.utils.image_utils import fast_upscale_and_denoise
-from iartisanz.utils.json_utils import extract_dict_from_json_graph
+from iartisanz.utils.json_utils import cast_number_range, extract_dict_from_json_graph
 
 
 class GenerationModule(BaseModule):
+    _SETTINGS_SCHEMA = {
+        "right_menu_expanded": (True, bool),
+        "image_width": (1024, int),
+        "image_height": (1024, int),
+        "num_inference_steps": (24, int),
+        "guidance_scale": (4.0, float),
+        "guidance_start_end": ([0.0, 1.0], list),
+    }
+
+    _MIRRORED_GRAPH_ATTRS = {
+        "image_width": int,
+        "image_height": int,
+        "num_inference_steps": int,
+        "guidance_scale": float,
+        "guidance_start_end": cast_number_range,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.logger = logging.getLogger(__name__)
-
         self.settings = QSettings("ZCode", "ImageArtisanZ")
 
         self.settings.beginGroup("generation")
         self.module_options = {
-            "right_menu_expanded": self.settings.value("right_menu_expanded", True, type=bool),
-            "image_width": self.settings.value("image_width", 1024, type=int),
-            "image_height": self.settings.value("image_height", 1024, type=int),
-            "num_inference_steps": self.settings.value("num_inference_steps", 24, type=int),
+            key: self.settings.value(key, default, type=typ) for key, (default, typ) in self._SETTINGS_SCHEMA.items()
         }
         self.settings.endGroup()
 
@@ -52,12 +65,14 @@ class GenerationModule(BaseModule):
         self.generation_thread.force_new_run = True
 
         # set initial values for generation
-        self.image_width = self.module_options.get("image_width")
-        self.image_height = self.module_options.get("image_height")
-        self.num_inference_steps = self.module_options.get("num_inference_steps")
-        self.generation_thread.update_node("image_width", self.image_width)
-        self.generation_thread.update_node("image_height", self.image_height)
-        self.generation_thread.update_node("num_inference_steps", self.num_inference_steps)
+        for key, cast in self._MIRRORED_GRAPH_ATTRS.items():
+            try:
+                setattr(self, key, cast(self.module_options[key]))
+            except (TypeError, ValueError):
+                default, _typ = self._SETTINGS_SCHEMA[key]
+                setattr(self, key, cast(default))
+
+        self.generation_thread.update_nodes({k: getattr(self, k) for k in self._MIRRORED_GRAPH_ATTRS})
 
         self.init_ui()
 
@@ -111,10 +126,12 @@ class GenerationModule(BaseModule):
 
     def closeEvent(self, event):
         self.settings.beginGroup("generation")
+
         self.settings.setValue("right_menu_expanded", self.module_options.get("right_menu_expanded"))
-        self.settings.setValue("image_width", self.image_width)
-        self.settings.setValue("image_height", self.image_height)
-        self.settings.setValue("num_inference_steps", self.num_inference_steps)
+
+        for key in self._MIRRORED_GRAPH_ATTRS:
+            self.settings.setValue(key, getattr(self, key))
+
         self.settings.endGroup()
 
         self.event_bus.unsubscribe("manage_dialog", self.on_manage_dialog_event)
@@ -262,6 +279,7 @@ class GenerationModule(BaseModule):
                     "image_height",
                     "seed",
                     "guidance_scale",
+                    "guidance_start_end",
                     "loras",
                 ]
                 subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
@@ -272,17 +290,22 @@ class GenerationModule(BaseModule):
     ## SUBSCRIBED BUS EVENTS
     #########################################################
     def on_generation_change_event(self, data):
-        attribute = data.get("attr")
+        attr = data.get("attr")
+        if not attr:
+            return
+
         value = data.get("value")
 
-        if attribute == "image_width":
-            self.image_width = value
-        elif attribute == "image_height":
-            self.image_height = value
-        elif attribute == "num_inference_steps":
-            self.num_inference_steps = value
+        cast = self._MIRRORED_GRAPH_ATTRS.get(attr)
+        if cast is not None:
+            try:
+                value = cast(value)
+            except (TypeError, ValueError):
+                return
+            setattr(self, attr, value)
 
-        self.generation_thread.update_node(attribute, value)
+        # Always forward to the graph (even if we don't mirror it locally)
+        self.generation_thread.update_node(attr, value)
 
     def on_manage_dialog_event(self, data):
         dialog_type = data.get("dialog_type")
@@ -325,6 +348,7 @@ class GenerationModule(BaseModule):
                 "image_height",
                 "seed",
                 "guidance_scale",
+                "guidance_start_end",
                 "loras",
             ]
             subset = extract_dict_from_json_graph(json_graph, wanted_nodes)

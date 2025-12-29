@@ -50,4 +50,6 @@ class PromptEncoderNode(Node):
             output_hidden_states=True,
         ).hidden_states[-2]
 
+        prompt_embeds = prompt_embeds[0, prompt_masks[0]]
+
         return prompt_embeds
