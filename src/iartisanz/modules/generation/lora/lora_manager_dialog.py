@@ -24,15 +24,16 @@ class LoraManagerDialog(BaseDialog):
     LORA_IMG = str(files("iartisanz.theme.images").joinpath("lora.webp"))
 
     def __init__(self, *args):
-        super().__init__(*args)
+        if len(args) <= 3:
+            logger.warning("LoraManagerDialog requires the image viewer argument to be able to set images.")
+            self.image_viewer = None
+            super().__init__(*args)
+        else:
+            self.image_viewer = args[3]
+            super().__init__(*args[:3], *args[4:])
 
         self.setWindowTitle("LoRA Manager")
         self.setMinimumSize(1160, 950)
-
-        if len(args) <= 3:
-            logger.warning("LoraManagerDialog requires the image viewer argument to be able to set images.")
-
-        self.image_viewer = args[3] if len(args) > 3 else None
 
         self.loading_loras = False
         self.selected_lora = None

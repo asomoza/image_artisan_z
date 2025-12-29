@@ -1,5 +1,7 @@
-import json
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QBuffer, QIODevice, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
@@ -8,9 +10,12 @@ from PyQt6.QtWidgets import QComboBox, QGridLayout, QLabel, QLineEdit, QPushButt
 from iartisanz.app.directories import DirectoriesObject
 from iartisanz.modules.generation.constants import MODEL_TYPES
 from iartisanz.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
-from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.widgets.simple_custom_text_edit import SimpleCustomTextEdit
 from iartisanz.utils.database import Database
+
+
+if TYPE_CHECKING:
+    from iartisanz.modules.generation.lora.image_viewer_simple_widget import ImageViewerSimpleWidget
 
 
 class LoraEditWidget(QWidget):
