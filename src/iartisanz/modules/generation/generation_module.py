@@ -7,52 +7,30 @@ from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem,
 
 from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
-from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
+from iartisanz.modules.generation.generation_settings import GenerationSettings  # <-- remove Proxy import
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
+from iartisanz.modules.generation.lora.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
+from iartisanz.modules.generation.source_image.source_image_dialog import SourceImageDialog
 from iartisanz.modules.generation.threads.generation_thread import NodeGraphThread
 from iartisanz.modules.generation.widgets.drop_lightbox_widget import DropLightBox
-from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.widgets.prompts_widget import PromptsWidget
 from iartisanz.utils.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
 from iartisanz.utils.image_utils import fast_upscale_and_denoise
-from iartisanz.utils.json_utils import cast_number_range, cast_scheduler, extract_dict_from_json_graph
+from iartisanz.utils.json_utils import extract_dict_from_json_graph
 
 
 logger = logging.getLogger(__name__)
 
 
 class GenerationModule(BaseModule):
-    _SETTINGS_SCHEMA = {
-        "right_menu_expanded": (True, bool),
-        "image_width": (1024, int),
-        "image_height": (1024, int),
-        "num_inference_steps": (24, int),
-        "guidance_scale": (4.0, float),
-        "guidance_start_end": ([0.0, 1.0], list),
-        "scheduler": (SchedulerDataObject().to_dict(), dict),
-    }
-
-    _MIRRORED_GRAPH_ATTRS = {
-        "image_width": int,
-        "image_height": int,
-        "num_inference_steps": int,
-        "guidance_scale": float,
-        "guidance_start_end": cast_number_range,
-        "scheduler": cast_scheduler,
-    }
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.settings = QSettings("ZCode", "ImageArtisanZ")
 
-        self.settings.beginGroup("generation")
-        self.module_options = {
-            key: self.settings.value(key, default, type=typ) for key, (default, typ) in self._SETTINGS_SCHEMA.items()
-        }
-        self.settings.endGroup()
+        self.gen_settings = GenerationSettings.load(self.settings)
 
         self.setAcceptDrops(True)
 
@@ -69,15 +47,8 @@ class GenerationModule(BaseModule):
         self.generation_thread.generation_aborted.connect(self.generation_aborted)
         self.generation_thread.force_new_run = True
 
-        # set initial values for generation
-        for key, cast in self._MIRRORED_GRAPH_ATTRS.items():
-            try:
-                setattr(self, key, cast(self.module_options[key]))
-            except (TypeError, ValueError):
-                default, _typ = self._SETTINGS_SCHEMA[key]
-                setattr(self, key, cast(default))
-
-        self.generation_thread.update_nodes({k: getattr(self, k) for k in self._MIRRORED_GRAPH_ATTRS})
+        # Initialize graph nodes from settings
+        self.generation_thread.update_nodes(self.gen_settings.to_graph_nodes())
 
         self.init_ui()
 
@@ -87,6 +58,7 @@ class GenerationModule(BaseModule):
         self.event_bus.subscribe("manage_dialog", self.on_manage_dialog_event)
         self.event_bus.subscribe("lora", self.on_lora_event)
         self.event_bus.subscribe("generate", self.on_generate_event)
+        self.event_bus.subscribe("source_image", self.on_source_image_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -100,7 +72,7 @@ class GenerationModule(BaseModule):
         self.image_viewer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         top_layout.addWidget(self.image_viewer)
 
-        self.right_menu = GenerationRightMenu(self.module_options, self.preferences, self.directories)
+        self.right_menu = GenerationRightMenu(self.gen_settings, self.preferences, self.directories)
         top_layout.addWidget(self.right_menu)
         top_layout.setStretch(0, 1)
 
@@ -130,17 +102,7 @@ class GenerationModule(BaseModule):
         self.drop_lightbox.setText("Drop image here")
 
     def closeEvent(self, event):
-        self.settings.beginGroup("generation")
-
-        self.settings.setValue("right_menu_expanded", self.module_options.get("right_menu_expanded"))
-
-        for key in self._MIRRORED_GRAPH_ATTRS:
-            value = getattr(self, key)
-            if isinstance(value, SchedulerDataObject):
-                value = value.to_dict()
-            self.settings.setValue(key, value)
-
-        self.settings.endGroup()
+        self.gen_settings.save(self.settings)
 
         self.event_bus.unsubscribe("manage_dialog", self.on_manage_dialog_event)
         self.close_all_dialogs()
@@ -161,7 +123,7 @@ class GenerationModule(BaseModule):
         self.generating = True
         self.prompts_widget.set_button_abort()
 
-        self.progress_bar.setMaximum(self.num_inference_steps)
+        self.progress_bar.setMaximum(self.gen_settings.num_inference_steps)
         self.progress_bar.setValue(0)
 
         if positive_prompt_changed:
@@ -269,7 +231,6 @@ class GenerationModule(BaseModule):
                     )
 
                 key = "iartisanz_json_graph"
-                json_graph = None
 
                 if key not in reader.textKeys():
                     self.event_bus.publish(
@@ -305,16 +266,18 @@ class GenerationModule(BaseModule):
 
         value = data.get("value")
 
-        cast = self._MIRRORED_GRAPH_ATTRS.get(attr)
-        if cast is not None:
-            try:
-                value = cast(value)
-            except (TypeError, ValueError):
-                return
-            setattr(self, attr, value)
+        # Update the settings object if this is a known settings key
+        handled, graph_value = self.gen_settings.apply_change(attr, value)
 
-        # Always forward to the graph (even if we don't mirror it locally)
-        self.generation_thread.update_node(attr, value)
+        # Forward to the graph:
+        # - if it's a settings-backed graph key -> use casted graph_value
+        # - else -> forward raw value (existing behavior)
+        if handled and attr in self.gen_settings.GRAPH_KEYS:
+            if graph_value is None:
+                return
+            self.generation_thread.update_node(attr, graph_value)
+        else:
+            self.generation_thread.update_node(attr, value)
 
     def on_manage_dialog_event(self, data):
         dialog_type = data.get("dialog_type")
@@ -325,6 +288,25 @@ class GenerationModule(BaseModule):
                 if "lora_manager" not in self.dialogs:
                     self.dialogs[dialog_type] = LoraManagerDialog(
                         dialog_type, self.directories, self.preferences, self.image_viewer
+                    )
+                    self.dialogs[dialog_type].setParent(None)
+                    self.dialogs[dialog_type].show()
+                else:
+                    self.dialogs[dialog_type].raise_()
+                    self.dialogs[dialog_type].activateWindow()
+            elif action == "close":
+                self.dialogs[dialog_type].close()
+                del self.dialogs[dialog_type]
+        elif dialog_type == "source_image":
+            if action == "open":
+                if "source_image" not in self.dialogs:
+                    self.dialogs[dialog_type] = SourceImageDialog(
+                        dialog_type,
+                        self.directories,
+                        self.preferences,
+                        self.image_viewer,
+                        self.gen_settings.image_width,
+                        self.gen_settings.image_height,
                     )
                     self.dialogs[dialog_type].setParent(None)
                     self.dialogs[dialog_type].show()
@@ -374,3 +356,14 @@ class GenerationModule(BaseModule):
                 True,
                 True,
             )
+
+    def on_source_image_event(self, data: dict):
+        action = data.get("action")
+        if action == "add":
+            self.generation_thread.add_source_image(data.get("source_image_path"), self.gen_settings.strength)
+        elif action == "update":
+            self.generation_thread.update_source_image(data.get("source_image_path"))
+        elif action == "strength":
+            handled, _graph_value = self.gen_settings.apply_change("strength", data.get("value"))
+            if handled:
+                self.generation_thread.update_strength(self.gen_settings.strength)

@@ -1,4 +1,5 @@
 import logging
+from typing import Type
 
 from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QTimer
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout
@@ -7,9 +8,11 @@ from iartisanz.app.directories import DirectoriesObject
 from iartisanz.app.preferences import PreferencesObject
 from iartisanz.buttons.expand_contract_button import ExpandContractButton
 from iartisanz.buttons.vertical_button import VerticalButton
+from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.lora.lora_panel import LoraPanel
 from iartisanz.modules.generation.panels.generation_panel import GenerationPanel
 from iartisanz.modules.generation.panels.panel_container import PanelContainer
+from iartisanz.modules.generation.source_image.source_image_panel import SourceImagePanel
 
 
 logger = logging.getLogger(__name__)
@@ -19,14 +22,16 @@ class GenerationRightMenu(QFrame):
     EXPANDED_WIDTH = 400
     NORMAL_WIDTH = 40
 
-    def __init__(self, module_options: dict, preferences: PreferencesObject, directories: DirectoriesObject):
+    def __init__(
+        self, gen_settings: GenerationSettings, preferences: PreferencesObject, directories: DirectoriesObject
+    ):
         super().__init__()
 
-        self.module_options = module_options
+        self.gen_settings = gen_settings
         self.preferences = preferences
         self.directories = directories
 
-        self.expanded = self.module_options.get("right_menu_expanded")
+        self.expanded = bool(self.gen_settings.right_menu_expanded)
         self.animating = False
         self.animation = QPropertyAnimation(self, b"minimumWidth")
         self.animation.finished.connect(self.animation_finished)
@@ -35,10 +40,7 @@ class GenerationRightMenu(QFrame):
 
         self.setContentsMargins(0, 0, 0, 0)
         self.setMinimumSize(self.EXPANDED_WIDTH, 50)
-        self.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Minimum,
-        )
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.panels = {}
         self.current_panel = None
@@ -50,6 +52,7 @@ class GenerationRightMenu(QFrame):
 
         self.add_panel("Generation", GenerationPanel)
         self.add_panel("LoRA", LoraPanel)
+        self.add_panel("Source Image", SourceImagePanel)
 
         self.loras = []
 
@@ -71,14 +74,14 @@ class GenerationRightMenu(QFrame):
 
         self.setLayout(self.main_layout)
 
-    def add_panel(self, text, panel_class, *args):
+    def add_panel(self, text: str, panel_class: Type[QFrame], *args):
         button = VerticalButton(text)
         index = self.button_layout.count() - 1
         self.button_layout.insertWidget(index, button)
 
         self.panels[text] = {
             "class": panel_class,
-            "args": (self.module_options, self.preferences, self.directories),
+            "args": (self.gen_settings, self.preferences, self.directories),
         }
 
         button.clicked.connect(lambda: self.on_button_clicked(text))
@@ -104,8 +107,7 @@ class GenerationRightMenu(QFrame):
 
     def animation_finished(self):
         self.expanded = not self.expanded
-
-        self.module_options["right_menu_expanded"] = self.expanded
+        self.gen_settings.right_menu_expanded = self.expanded
         self.animating = False
 
     def on_expand_clicked(self):

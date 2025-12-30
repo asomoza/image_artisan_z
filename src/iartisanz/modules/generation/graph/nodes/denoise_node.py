@@ -21,7 +21,7 @@ class DenoiseNode(Node):
         "negative_prompt_embeds",
         "guidance_scale",
     ]
-    OPTIONAL_INPUTS = ["cfg_normalization", "sigmas", "lora", "guidance_start_end"]
+    OPTIONAL_INPUTS = ["cfg_normalization", "sigmas", "lora", "guidance_start_end", "noise", "strength"]
     OUTPUTS = ["latents"]
     SERIALIZE_EXCLUDE = {"callback"}
 
@@ -37,6 +37,11 @@ class DenoiseNode(Node):
         guidance_start = float(self.guidance_start_end[0] if hasattr(self, "guidance_start_end") else 0.0)
         guidance_end = float(self.guidance_start_end[1] if hasattr(self, "guidance_start_end") else 1.0)
 
+        if hasattr(self, "strength") and self.strength is not None:
+            num_inference_steps = int(self.num_inference_steps / self.strength)
+        else:
+            num_inference_steps = self.num_inference_steps
+
         if guidance_start > guidance_end:
             logger.warning(
                 "guidance_start (%s) is higher than guidance_end (%s); ignoring guidance window and using full range [0.0, 1.0].",
@@ -46,7 +51,6 @@ class DenoiseNode(Node):
             guidance_start, guidance_end = 0.0, 1.0
 
         cfg_normalization = self.cfg_normalization if self.cfg_normalization is not None else False
-        scheduler = self.scheduler
 
         if self.lora:
             try:
@@ -61,16 +65,23 @@ class DenoiseNode(Node):
 
         prompt_embeds = self.prompt_embeds.to(self.device)
         negative_prompt_embeds = self.negative_prompt_embeds.to(self.device)
-        latents = self.latents
 
         timesteps, num_inference_steps = self.retrieve_timesteps(
-            scheduler,
-            self.num_inference_steps,
+            self.scheduler,
+            num_inference_steps,
             self.device,
             sigmas=self.sigmas,
         )
 
-        order = getattr(scheduler, "order", 1)
+        if hasattr(self, "strength") and self.strength is not None:
+            timesteps, num_inference_steps = self.get_timesteps(num_inference_steps, self.strength)
+
+        latents = self.latents
+
+        if hasattr(self, "noise") and self.noise is not None:
+            latents = self.scheduler.scale_noise(latents, timesteps[:1], self.noise.to(self.device))
+
+        order = getattr(self.scheduler, "order", 1)
         num_warmup_steps = max(len(timesteps) - num_inference_steps * order, 0)
         step_norm_den = float(max(num_inference_steps - 1, 1))
 
@@ -142,7 +153,7 @@ class DenoiseNode(Node):
             noise_pred = -noise_pred
 
             # compute the previous noisy sample x_t -> x_t-1
-            latents = scheduler.step(noise_pred.to(torch.float32), t, latents, return_dict=False)[0]
+            latents = self.scheduler.step(noise_pred.to(torch.float32), t, latents, return_dict=False)[0]
 
             is_last = i == len(timesteps) - 1
             is_step_boundary = (i + 1) > num_warmup_steps and (i + 1) % order == 0
@@ -190,3 +201,14 @@ class DenoiseNode(Node):
             scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
             timesteps = scheduler.timesteps
         return timesteps, num_inference_steps
+
+    def get_timesteps(self, num_inference_steps, strength):
+        # get the original timestep using init_timestep
+        init_timestep = min(num_inference_steps * strength, num_inference_steps)
+
+        t_start = int(max(num_inference_steps - init_timestep, 0))
+        timesteps = self.scheduler.timesteps[t_start * self.scheduler.order :]
+        if hasattr(self.scheduler, "set_begin_index"):
+            self.scheduler.set_begin_index(t_start * self.scheduler.order)
+
+        return timesteps, num_inference_steps - t_start

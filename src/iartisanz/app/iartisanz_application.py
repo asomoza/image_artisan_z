@@ -34,7 +34,7 @@ class BaseTorchAppApplication(QApplication):
         stylesheet = style_data.decode("utf-8")
         self.setStyleSheet(stylesheet)
 
-        self.temp_dir = tempfile.mkdtemp(prefix="iartisanz_")
+        self.temp_path = tempfile.mkdtemp(prefix="iartisanz_")
 
         self.window = None
         self.splash = None
@@ -79,6 +79,7 @@ class BaseTorchAppApplication(QApplication):
             models_diffusers=models_diffusers,
             models_loras=models_loras,
             outputs_images=outputs_images,
+            temp_path=self.temp_path,
         )
 
         if any(
@@ -92,13 +93,13 @@ class BaseTorchAppApplication(QApplication):
         return True
 
     def cleanup_on_exit(self):
-        self.cleanup_temp_directory()
+        self.cleanup_temp_path()
 
-    def cleanup_temp_directory(self):
-        if self.temp_dir and os.path.exists(self.temp_dir):  # check if it exists
+    def cleanup_temp_path(self):
+        if self.temp_path and os.path.exists(self.temp_path):  # check if it exists
             try:
-                shutil.rmtree(self.temp_dir)
-                logger.info(f"Temporary directory '{self.temp_dir}' cleaned up successfully.")
+                shutil.rmtree(self.temp_path)
+                logger.info(f"Temporary directory '{self.temp_path}' cleaned up successfully.")
             except OSError as e:
                 logger.error(f"Error cleaning up temporary directory: {e}")
 

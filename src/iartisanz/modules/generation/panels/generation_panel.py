@@ -6,7 +6,7 @@ from iartisanz.modules.generation.constants import SCHEDULER_NAME_CLASS_MAPPING,
 from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 from iartisanz.modules.generation.panels.base_panel import BasePanel
 from iartisanz.modules.generation.widgets.image_dimensions_widget import ImageDimensionsWidget
-from iartisanz.utils.json_utils import cast_number_range
+from iartisanz.utils.json_utils import cast_number_range, cast_scheduler
 
 
 class GenerationPanel(BasePanel):
@@ -18,12 +18,12 @@ class GenerationPanel(BasePanel):
         self.scheduler_data_object = SchedulerDataObject()
 
         self.update_panel(
-            self.module_options.get("image_width"),
-            self.module_options.get("image_height"),
-            self.module_options.get("num_inference_steps"),
-            self.module_options.get("guidance_scale"),
-            self.module_options.get("guidance_start_end"),
-            self.module_options.get("scheduler"),
+            self.gen_settings.image_width,
+            self.gen_settings.image_height,
+            self.gen_settings.num_inference_steps,
+            self.gen_settings.guidance_scale,
+            self.gen_settings.guidance_start_end,
+            self.gen_settings.scheduler,
         )
 
         self.event_bus.subscribe("json_graph", self.on_json_graph_event)
@@ -133,17 +133,16 @@ class GenerationPanel(BasePanel):
         )
 
     def _set_scheduler_ui(self, scheduler_value):
-        self.scheduler_data_object = SchedulerDataObject.from_dict(scheduler_value)
+        self.scheduler_data_object = cast_scheduler(scheduler_value)
 
         index = 0
-
         if getattr(self.scheduler_data_object, "name", None) in SCHEDULER_NAMES:
             index = SCHEDULER_NAMES.index(self.scheduler_data_object.name)
 
         blocker = QSignalBlocker(self.scheduler_combobox)
         try:
             self.scheduler_combobox.setCurrentIndex(index)
-            self.shift_slider.setValue(self.scheduler_data_object.shift)
+            self.shift_slider.setValue(float(getattr(self.scheduler_data_object, "shift", 0.0)))
         finally:
             del blocker
 
@@ -171,12 +170,12 @@ class GenerationPanel(BasePanel):
             QSignalBlocker(self.guidance_slider),
         ]
         try:
-            self.image_dimensions.width_slider.setValue(width)
-            self.image_dimensions.height_slider.setValue(height)
-            self.image_dimensions.image_width_value_label.setText(str(width))
-            self.image_dimensions.image_height_value_label.setText(str(height))
-            self.steps_slider.setValue(num_inference_steps)
-            self.guidance_slider.setValue(guidance_scale)
+            self.image_dimensions.width_slider.setValue(int(width))
+            self.image_dimensions.height_slider.setValue(int(height))
+            self.image_dimensions.image_width_value_label.setText(str(int(width)))
+            self.image_dimensions.image_height_value_label.setText(str(int(height)))
+            self.steps_slider.setValue(int(num_inference_steps))
+            self.guidance_slider.setValue(float(guidance_scale))
         finally:
             for b in blockers:
                 del b
@@ -198,11 +197,11 @@ class GenerationPanel(BasePanel):
         if action == "loaded":
             data = data.get("data", {})
 
-            width = data.get("image_width")
-            height = data.get("image_height")
-            num_inference_steps = data.get("num_inference_steps")
-            guidance_scale = data.get("guidance_scale")
-            guidance_start_end = data.get("guidance_start_end")
-            scheduler = data.get("scheduler")
+            width = data.get("image_width", self.gen_settings.image_width)
+            height = data.get("image_height", self.gen_settings.image_height)
+            num_inference_steps = data.get("num_inference_steps", self.gen_settings.num_inference_steps)
+            guidance_scale = data.get("guidance_scale", self.gen_settings.guidance_scale)
+            guidance_start_end = data.get("guidance_start_end", self.gen_settings.guidance_start_end)
+            scheduler = data.get("scheduler", self.gen_settings.scheduler)
 
             self.update_panel(width, height, num_inference_steps, guidance_scale, guidance_start_end, scheduler)

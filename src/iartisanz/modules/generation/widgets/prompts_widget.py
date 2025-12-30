@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
 from transformers import Qwen2Tokenizer
 
 from iartisanz.app.event_bus import EventBus
-from iartisanz.modules.generation.buttons.generate_button import GenerateButton
+from iartisanz.buttons.generate_button import GenerateButton
 from iartisanz.modules.generation.widgets.prompt_input_widget import PromptInputWidget
 
 

@@ -1,15 +1,22 @@
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from iartisanz.app.directories import DirectoriesObject
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
-from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
 from iartisanz.modules.generation.graph.nodes import NODE_CLASSES
+from iartisanz.modules.generation.graph.nodes.image_load_node import ImageLoadNode
 from iartisanz.modules.generation.graph.nodes.lora_node import LoraNode
+from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
 
+
+if TYPE_CHECKING:
+    from iartisanz.app.directories import DirectoriesObject
+    from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +133,34 @@ class NodeGraphThread(QThread):
 
         if lora_node is not None:
             self.node_graph.delete_node(lora_node)
+
+    def add_source_image(self, source_image_path: str, strength: float):
+        source_image_node = ImageLoadNode(path=source_image_path)
+        self.node_graph.add_node(source_image_node, "source_image")
+
+        strength = NumberNode(number=strength)
+        self.node_graph.add_node(strength, "strength")
+
+        latents_node = self.node_graph.get_node_by_name("latents")
+        models_node = self.node_graph.get_node_by_name("model")
+        denoise_node = self.node_graph.get_node_by_name("denoise")
+
+        latents_node.connect("image", source_image_node, "image")
+        latents_node.connect("vae", models_node, "vae")
+
+        denoise_node.connect("noise", latents_node, "noise")
+        denoise_node.connect("strength", strength, "value")
+
+    def update_source_image(self, source_image_path: str):
+        source_image_node = self.node_graph.get_node_by_name("source_image")
+        source_image_node.update_value(source_image_path)
+
+    def update_strength(self, strength: float):
+        strength_node = self.node_graph.get_node_by_name("strength")
+        if strength_node is not None:
+            strength_node.update_value(strength)
+
+    def remove_source_image(self): ...
 
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)
