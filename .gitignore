@@ -19,3 +19,14 @@ installer/
 wheels/
 wheel/
 tmp/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+.DS_Store
+.env
+.env.*
+.pytest_cache/
+.ipynb_checkpoints/
