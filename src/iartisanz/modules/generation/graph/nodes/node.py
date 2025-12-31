@@ -91,14 +91,22 @@ class Node:
             dependent_node.set_updated()
 
     def disconnect_from_node(self, node):
+        changed = False
+
+        if node in self.dependencies:
+            changed = True
         self.dependencies = [dep for dep in self.dependencies if dep != node]
         for input_name, conns in list(self.connections.items()):
-            self.connections[input_name] = [(n, output_name) for n, output_name in conns if n != node]
-            if not self.connections[input_name]:
+            new_conns = [(n, output_name) for n, output_name in conns if n != node]
+            if len(new_conns) != len(conns):
+                changed = True
+            self.connections[input_name] = new_conns
+            if not new_conns:
                 del self.connections[input_name]
-                self.set_updated()
         if self in node.dependents:
             node.dependents.remove(self)
+
+        if changed:
             self.set_updated()
 
     def clear_all_connections(self):
@@ -108,6 +116,9 @@ class Node:
                 dep.dependents.remove(self)
         self.dependencies.clear()
         self.connections = defaultdict(list)
+
+        # Changing wiring should invalidate this node (and its dependents)
+        self.set_updated()
 
     def connections_changed(self, new_connections):
         """
