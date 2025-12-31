@@ -73,12 +73,14 @@ class BaseTorchAppApplication(QApplication):
         models_diffusers = settings.value("models_diffusers", None, type=str)
         models_loras = settings.value("models_loras", None, type=str)
         outputs_images = settings.value("outputs_images", None, type=str)
+        outputs_source_images = settings.value("outputs_source_images", None, type=str)
 
         self.directories = DirectoriesObject(
             data_path=data_path,
             models_diffusers=models_diffusers,
             models_loras=models_loras,
             outputs_images=outputs_images,
+            outputs_source_images=outputs_source_images,
             temp_path=self.temp_path,
         )
 
@@ -86,7 +88,10 @@ class BaseTorchAppApplication(QApplication):
             not v
             for v in [
                 data_path,
+                models_diffusers,
+                models_loras,
                 outputs_images,
+                outputs_source_images,
             ]
         ):
             return False

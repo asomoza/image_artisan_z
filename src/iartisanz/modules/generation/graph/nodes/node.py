@@ -80,10 +80,15 @@ class Node:
             ]
             if not self.connections[input_name]:
                 del self.connections[input_name]
+
         if node in self.dependencies:
             self.dependencies.remove(node)
         if self in node.dependents:
             node.dependents.remove(self)
+
+        self.updated = True
+        for dependent_node in self.dependents:
+            dependent_node.set_updated()
 
     def disconnect_from_node(self, node):
         self.dependencies = [dep for dep in self.dependencies if dep != node]

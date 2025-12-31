@@ -67,7 +67,7 @@ class NodeGraphThread(QThread):
         if self.force_new_run:
             node = self.node_graph.get_node_by_name("model")
             node.update_model(
-                path="/home/ozzy/Documents/Image Artisan Z/models/diffusers/Z-Image-Turbo/",
+                path="/home/ozzy/ImageArtisanZ/models/diffusers/Z-Image-Turbo/",
                 model_name="Z-Image-Turbo",
                 version="1.0",
                 model_type="Turbo",
@@ -147,7 +147,6 @@ class NodeGraphThread(QThread):
 
         latents_node.connect("image", source_image_node, "image")
         latents_node.connect("vae", models_node, "vae")
-
         denoise_node.connect("noise", latents_node, "noise")
         denoise_node.connect("strength", strength, "value")
 
@@ -160,7 +159,38 @@ class NodeGraphThread(QThread):
         if strength_node is not None:
             strength_node.update_value(strength)
 
-    def remove_source_image(self): ...
+    def enable_source_image(self, enabled: bool):
+        source_image_node = self.node_graph.get_node_by_name("source_image")
+        strength_node = self.node_graph.get_node_by_name("strength")
+        latents_node = self.node_graph.get_node_by_name("latents")
+        models_node = self.node_graph.get_node_by_name("model")
+        denoise_node = self.node_graph.get_node_by_name("denoise")
+
+        if enabled:
+            source_image_node.enabled = True
+            strength_node.enabled = True
+            latents_node.connect("image", source_image_node, "image")
+            latents_node.connect("vae", models_node, "vae")
+            denoise_node.connect("noise", latents_node, "noise")
+            denoise_node.connect("strength", strength_node, "value")
+        else:
+            source_image_node.enabled = False
+            strength_node.enabled = False
+            latents_node.disconnect("image", source_image_node, "image")
+            latents_node.disconnect("vae", models_node, "vae")
+            denoise_node.disconnect("noise", latents_node, "noise")
+            denoise_node.disconnect("strength", strength_node, "value")
+
+    def remove_source_image(self):
+        latents_node = self.node_graph.get_node_by_name("latents")
+        models_node = self.node_graph.get_node_by_name("model")
+        denoise_node = self.node_graph.get_node_by_name("denoise")
+
+        latents_node.disconnect("vae", models_node, "vae")
+        denoise_node.disconnect("noise", latents_node, "noise")
+
+        self.node_graph.delete_node_by_name("source_image")
+        self.node_graph.delete_node_by_name("strength")
 
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)

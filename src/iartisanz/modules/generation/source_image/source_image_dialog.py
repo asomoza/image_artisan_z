@@ -208,39 +208,45 @@ class SourceImageDialog(BaseDialog):
             self.active_section_widget = None
 
     def on_source_image_added(self, pixmap: QPixmap):
-        if not self.dialog_busy:
-            self.dialog_busy = True
-            self.active_section_widget.disable_buttons(self.dialog_busy)
+        if self.dialog_busy:
+            return
 
-            if self.source_image_path is not None:
-                os.remove(self.source_image_path)
+        self.dialog_busy = True
 
-            if self.source_thumb_path is not None:
-                os.remove(self.source_thumb_path)
+        if self.source_image_path is not None:
+            os.remove(self.source_image_path)
 
-            self.pixmap_save_thread = PixmapSaveThread(
-                pixmap, prefix="source_image", temp_path=self.directories.temp_path, thumb_width=150, thumb_height=150
-            )
-            self.event_bus.publish("generation", {"action": "disable"})
+        if self.source_thumb_path is not None:
+            os.remove(self.source_thumb_path)
 
-            self.pixmap_save_thread.save_finished.connect(self.on_pixmap_saved)
-            self.pixmap_save_thread.finished.connect(self.on_save_pixmap_thread_finished)
-            self.pixmap_save_thread.error.connect(self.on_error)
-            self.pixmap_save_thread.start()
+        self.pixmap_save_thread = PixmapSaveThread(
+            pixmap, prefix="source_image", temp_path=self.directories.temp_path, thumb_width=150, thumb_height=150
+        )
+
+        self.pixmap_save_thread.save_finished.connect(self.on_pixmap_saved)
+        self.pixmap_save_thread.finished.connect(self.on_save_pixmap_thread_finished)
+        self.pixmap_save_thread.error.connect(self.on_error)
+        self.pixmap_save_thread.start()
 
     def on_pixmap_saved(self, image_path: str, thumbnail_path: str):
-        if self.source_image_path is None:
-            self.source_image_path = image_path
-            self.source_thumb_path = thumbnail_path
-            # TODO: send thumbnail and manage it on the panel
-            self.event_bus.publish("source_image", {"action": "add", "source_image_path": self.source_image_path})
-            self.save_layers()
-        elif self.source_image_path != image_path:
-            self.source_image_path = image_path
-            self.source_thumb_path = thumbnail_path
-            # TODO: send thumbnail and manage it on the panel
-            self.event_bus.publish("source_image", {"action": "update", "source_image_path": self.source_image_path})
-            self.save_layers()
+        previous_path = self.source_image_path
+
+        if previous_path == image_path:
+            return
+
+        self.source_image_path = image_path
+        self.source_thumb_path = thumbnail_path
+
+        self.event_bus.publish(
+            "source_image",
+            {
+                "action": "add" if previous_path is None else "update",
+                "source_image_path": image_path,
+                "source_thumb_path": thumbnail_path,
+            },
+        )
+
+        self.save_layers()
 
     def save_layers(self):
         self.source_image_layers = self.image_section_widget.image_widget.image_editor.get_all_layers()
@@ -258,8 +264,6 @@ class SourceImageDialog(BaseDialog):
         self.pixmap_save_thread = None
 
         self.dialog_busy = False
-        self.active_section_widget.disable_buttons(self.dialog_busy)
-        self.event_bus.publish("generation", {"action": "enable"})
 
     def on_save_layers_thread_finished(self):
         self.save_layers_thread.finished.disconnect(self.on_save_layers_thread_finished)

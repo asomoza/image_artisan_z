@@ -1,8 +1,17 @@
 import os
 
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtGui import QColor, QPainter, QPen
-from PyQt6.QtWidgets import QDialog, QFileDialog, QLabel, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import (
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from iartisanz.app.directories import DirectoriesObject
 from iartisanz.app.preferences import PreferencesObject
@@ -10,6 +19,15 @@ from iartisanz.app.preferences import PreferencesObject
 
 class InitialSetupDialog(QDialog):
     border_color = QColor("#ff6b6b6b")
+
+    # Keys the user must set before finishing
+    REQUIRED_PATHS = (
+        ("data_path", "Select data directory"),
+        ("models_diffusers", "Select diffusers models directory"),
+        ("models_loras", "Select LoRAs directory"),
+        ("outputs_images", "Select image outputs directory"),
+        ("outputs_source_images", "Select source images outputs directory"),
+    )
 
     def __init__(
         self,
@@ -20,30 +38,192 @@ class InitialSetupDialog(QDialog):
     ):
         super().__init__(*args, **kwargs)
 
-        self.dialog_width = 650
-        self.dialog_height = 720
+        self.dialog_width = 800
+        self.dialog_height = 800
+        self.setFixedSize(self.dialog_width, self.dialog_height)
+
+        self.setWindowTitle("Initial Setup")
+
+        # Prevent closing until setup is completed via Finish
+        self._allow_close = False
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
 
         self.directories = directories
         self.preferences = preferences
 
+        self._settings = QSettings("ZCode", "ImageArtisanZ")
+        self._path_labels: dict[str, QLabel] = {}
+        self._path_select_buttons: list[QPushButton] = []
+        self._finish_button: QPushButton | None = None
+        self._defaults_button: QPushButton | None = None
+
         self.init_ui()
+        self._sync_from_current_values()
+        self._update_finish_enabled()
+
+    def reject(self) -> None:
+        """Block Esc / reject() while setup is required."""
+        if self._allow_close:
+            return super().reject()
+
+        QMessageBox.information(
+            self,
+            "Setup required",
+            "Please complete the initial setup before continuing.",
+        )
+
+    def closeEvent(self, event):
+        """Block window manager close (X / Alt+F4) while setup is required."""
+        if self._allow_close:
+            event.accept()
+            return
+
+        event.ignore()
+        QMessageBox.information(
+            self,
+            "Setup required",
+            "Please complete the initial setup before continuing.",
+        )
 
     def init_ui(self):
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(10)
 
-        select_directory_button = QPushButton("Select the image outputs directory")
-        select_directory_button.clicked.connect(self.select_directory)
-        main_layout.addWidget(select_directory_button)
+        title = QLabel("Choose required directories")
+        title.setStyleSheet("font-size: 18px; font-weight: 600;")
+        main_layout.addWidget(title)
 
-        defaults_button = QPushButton("Use defaults")
-        defaults_button.clicked.connect(self.on_defaults)
-        main_layout.addWidget(defaults_button)
+        hint = QLabel("All paths must be selected to continue.")
+        hint.setStyleSheet("color: #9aa0a6;")
+        main_layout.addWidget(hint)
+
+        main_layout.addSpacing(10)
+
+        for key, button_text in self.REQUIRED_PATHS:
+            row = self._make_path_row(key=key, button_text=button_text)
+            main_layout.addWidget(row)
+
+        self._apply_uniform_path_button_width()
+
+        main_layout.addStretch()
+
+        # Buttons
+        buttons_row = QHBoxLayout()
+        buttons_row.setContentsMargins(0, 0, 0, 0)
+        buttons_row.setSpacing(10)
+
+        self._defaults_button = QPushButton("Set defaults")
+        self._defaults_button.clicked.connect(self.set_defaults)
+
+        self._finish_button = QPushButton("Finish setup")
+        self._finish_button.setEnabled(False)
+        self._finish_button.clicked.connect(self.finish_setup)
+
+        buttons_row.addWidget(self._defaults_button)
+        buttons_row.addStretch(1)
+        buttons_row.addWidget(self._finish_button)
+
+        main_layout.addLayout(buttons_row)
 
         self.setLayout(main_layout)
 
+    def _apply_uniform_path_button_width(self) -> None:
+        """Make all 'Select ...' buttons the same width for a uniform layout."""
+        if not self._path_select_buttons:
+            return
+
+        max_width = max(btn.sizeHint().width() for btn in self._path_select_buttons)
+        for btn in self._path_select_buttons:
+            btn.setFixedWidth(max_width)
+
+    def _make_path_row(self, key: str, button_text: str) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        label_title = QLabel(f"{key}:")
+        label_title.setMinimumWidth(170)
+
+        label_value = QLabel("(not set)")
+        label_value.setStyleSheet("color: #9aa0a6;")
+        label_value.setWordWrap(True)
+
+        button = QPushButton(button_text)
+        button.clicked.connect(lambda _=False, k=key: self.select_directory(k))
+        self._path_select_buttons.append(button)
+
+        self._path_labels[key] = label_value
+
+        layout.addWidget(label_title)
+        layout.addWidget(label_value, 1)
+        layout.addWidget(button)
+
+        container.setLayout(layout)
+        return container
+
+    def _sync_from_current_values(self) -> None:
+        """If directories already contain values, reflect them in the UI."""
+        for key, _ in self.REQUIRED_PATHS:
+            current_value = getattr(self.directories, key, "") or ""
+            if current_value:
+                self._set_path_label(key, current_value)
+
+    def _set_path_label(self, key: str, path: str) -> None:
+        label = self._path_labels.get(key)
+        if not label:
+            return
+        label.setText(path)
+        label.setStyleSheet("")  # reset "not set" style
+
+    def _is_complete(self) -> bool:
+        for key, _ in self.REQUIRED_PATHS:
+            value = getattr(self.directories, key, "") or ""
+            if not value:
+                return False
+        return True
+
+    def _update_finish_enabled(self) -> None:
+        if self._finish_button is not None:
+            self._finish_button.setEnabled(self._is_complete())
+
+    def _default_paths(self) -> dict[str, str]:
+        # Default base under the user's home directory.
+        base = os.path.join(os.path.expanduser("~"), "ImageArtisanZ")
+        return {
+            "data_path": os.path.join(base, "data"),
+            "models_diffusers": os.path.join(base, "models", "diffusers"),
+            "models_loras": os.path.join(base, "models", "loras"),
+            "outputs_images": os.path.join(base, "outputs", "images"),
+            "outputs_source_images": os.path.join(base, "outputs", "source_images"),
+        }
+
+    def set_defaults(self) -> None:
+        defaults = self._default_paths()
+
+        # Ensure the directories exist and persist them immediately (same behavior as manual selection).
+        for key, _ in self.REQUIRED_PATHS:
+            path = defaults.get(key, "")
+            if not path:
+                continue
+
+            os.makedirs(path, exist_ok=True)
+
+            setattr(self.directories, key, path)
+            self._settings.setValue(key, path)
+            self._set_path_label(key, path)
+
+        self._update_finish_enabled()
+
     def finish_setup(self):
+        # Persist all values once everything is set (and again for safety).
+        for key, _ in self.REQUIRED_PATHS:
+            value = getattr(self.directories, key, "") or ""
+            self._settings.setValue(key, value)
+
+        # Allow the dialog to close only via successful Finish
+        self._allow_close = True
         self.close()
 
     def paintEvent(self, event):
@@ -60,10 +240,10 @@ class InitialSetupDialog(QDialog):
         painter.drawLine(self.width(), 0, self.width(), self.height())
         painter.drawLine(0, self.height(), self.width(), self.height())
 
-    def select_directory(self):
+    def select_directory(self, key: str):
         home_dir = os.path.expanduser("~")
 
-        dialog = QFileDialog()
+        dialog = QFileDialog(self)
         options = (
             QFileDialog.Option.ShowDirsOnly
             | QFileDialog.Option.DontUseNativeDialog
@@ -72,43 +252,11 @@ class InitialSetupDialog(QDialog):
         )
         dialog.setOptions(options)
 
-        settings = QSettings("ZCode", "ImageArtisanZ")
+        selected_path = dialog.getExistingDirectory(self, "Select a directory", home_dir)
+        if not selected_path:
+            return  # user canceled
 
-        selected_path = dialog.getExistingDirectory(None, "Select a directory", home_dir)
-
-        self.directories.outputs_images = selected_path
-        settings.setValue("outputs_images", selected_path)
-
-        sender_button = self.sender()
-        sender_button.parent_widget.directory_label.setText(selected_path)
-        self.close()
-
-    def on_defaults(self):
-        base_dirs = ["Documents", "Image Artisan Z"]
-
-        sub_dirs = {
-            "data_path": "data",
-            "models_diffusers": os.path.join("models", "diffusers"),
-            "models_loras": os.path.join("models", "loras"),
-            "outputs_images": os.path.join("outputs", "images"),
-        }
-
-        home_dir = os.path.expanduser("~")
-
-        for directory in base_dirs:
-            home_dir = os.path.join(home_dir, directory)
-            if not os.path.exists(home_dir):
-                os.makedirs(home_dir)
-
-        for key, directory in sub_dirs.items():
-            sub_dir = os.path.join(home_dir, directory)
-            if not os.path.exists(sub_dir):
-                os.makedirs(sub_dir)
-            setattr(self.directories, key, sub_dir)
-
-        settings = QSettings("ZCode", "ImageArtisanZ")
-        settings.setValue("data_path", self.directories.data_path)
-        settings.setValue("models_diffusers", self.directories.models_diffusers)
-        settings.setValue("models_loras", self.directories.models_loras)
-        settings.setValue("outputs_images", self.directories.outputs_images)
-        self.close()
+        setattr(self.directories, key, selected_path)
+        self._settings.setValue(key, selected_path)
+        self._set_path_label(key, selected_path)
+        self._update_finish_enabled()

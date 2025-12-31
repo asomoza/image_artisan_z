@@ -57,57 +57,63 @@ class ZImageModelNode(Node):
         self.model_type = node_dict["model_type"]
 
     def __call__(self):
-        self.values["tokenizer"] = Qwen2Tokenizer.from_pretrained(os.path.join(self.path, "tokenizer"))
-        if "tokenizer" not in self.values or self.values["tokenizer"] is None:
-            raise IArtisanZNodeError(
-                "Error trying to load the tokenizer, probably the file doesn't exists.", self.name
-            )
+        try:
+            self.values["tokenizer"] = Qwen2Tokenizer.from_pretrained(os.path.join(self.path, "tokenizer"))
+            if "tokenizer" not in self.values or self.values["tokenizer"] is None:
+                raise IArtisanZNodeError(
+                    "Error trying to load the tokenizer, probably the file doesn't exists.", self.name
+                )
+        except OSError as e:
+            raise IArtisanZNodeError(f"Error trying to load the tokenizer: {e}", self.name) from e
 
-        self.values["text_encoder"] = Qwen3Model.from_pretrained(
-            os.path.join(self.path, "text_encoder"),
-            use_safetensors=True,
-            dtype=self.dtype,
-            local_files_only=True,
-            low_cpu_mem_usage=True,
-            device_map=self.device,
-        )
+        try:
+            self.values["text_encoder"] = Qwen3Model.from_pretrained(
+                os.path.join(self.path, "text_encoder"),
+                use_safetensors=True,
+                dtype=self.dtype,
+                local_files_only=True,
+                low_cpu_mem_usage=True,
+                device_map=self.device,
+            )
+        except OSError as e:
+            raise IArtisanZNodeError(f"Error trying to load the text encoder: {e}", self.name) from e
+
         if self.abort:
             return
-        if "text_encoder" not in self.values or self.values["text_encoder"] is None:
-            raise IArtisanZNodeError(
-                "Error trying to load the text encoder, probably the file doesn't exists.", self.name
-            )
 
-        self.values["transformer"] = ZImageTransformer2DModel.from_pretrained(
-            os.path.join(self.path, "transformer"),
-            use_safetensors=True,
-            torch_dtype=self.dtype,
-            local_files_only=True,
-            low_cpu_mem_usage=True,
-            device_map=self.device,
-        )
+        try:
+            self.values["transformer"] = ZImageTransformer2DModel.from_pretrained(
+                os.path.join(self.path, "transformer"),
+                use_safetensors=True,
+                torch_dtype=self.dtype,
+                local_files_only=True,
+                low_cpu_mem_usage=True,
+                device_map=self.device,
+            )
+        except OSError as e:
+            raise IArtisanZNodeError(f"Error trying to load the transformer: {e}", self.name) from e
+
         if self.abort:
             return
-        if "transformer" not in self.values or self.values["transformer"] is None:
-            raise IArtisanZNodeError(
-                "Error trying to load the transformer, probably the file doesn't exists.", self.name
-            )
 
-        self.values["vae"] = AutoencoderKL.from_pretrained(
-            os.path.join(self.path, "vae"),
-            use_safetensors=True,
-            torch_dtype=self.dtype,
-            local_files_only=True,
-            low_cpu_mem_usage=True,
-            device_map=self.device,
-        )
+        try:
+            self.values["vae"] = AutoencoderKL.from_pretrained(
+                os.path.join(self.path, "vae"),
+                use_safetensors=True,
+                torch_dtype=self.dtype,
+                local_files_only=True,
+                low_cpu_mem_usage=True,
+                device_map=self.device,
+            )
+        except OSError as e:
+            raise IArtisanZNodeError(f"Error trying to load the VAE: {e}", self.name) from e
+
         if self.abort:
             return
-        if "vae" not in self.values or self.values["vae"] is None:
-            raise IArtisanZNodeError("Error trying to load the VAE, probably the file doesn't exists.", self.name)
 
         self.values["num_channels_latents"] = self.values["transformer"].in_channels
         self.values["vae_scale_factor"] = 2 ** (len(self.values["vae"].config.block_out_channels) - 1)
+
         return self.values
 
     def delete(self):

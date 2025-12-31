@@ -23,7 +23,7 @@ from iartisanz.modules.generation.image.layer_manager_widget import LayerManager
 
 if TYPE_CHECKING:
     from iartisanz.modules.generation.image.image_editor_layer import ImageEditorLayer
-    from iartisanz.modules.generation.lora.image_viewer_simple_widget import ImageViewerSimpleWidget
+    from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 
 
 class ImageWidget(QWidget):

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import shutil
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from PyQt6.QtCore import QPointF, Qt
@@ -21,16 +24,17 @@ from iartisanz.modules.generation.dialogs.full_screen_preview import FullScreenP
 
 
 if TYPE_CHECKING:
+    from iartisanz.app.directories import DirectoriesObject
     from iartisanz.app.preferences import PreferencesObject
 
 
 class ImageViewerSimpleWidget(QGraphicsView):
-    def __init__(self, output_path, preferences: PreferencesObject):
+    def __init__(self, directories: DirectoriesObject, preferences: PreferencesObject):
         super().__init__()
 
         self.setAcceptDrops(True)
 
-        self.output_path = output_path
+        self.directories = directories
         self.preferences = preferences
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -182,6 +186,67 @@ class ImageViewerSimpleWidget(QGraphicsView):
     def set_json_graph(self, json_graph: str):
         self.json_graph = json_graph
 
+    def _copy_source_image_and_rewrite_graph(self, json_graph: str, timestamp: str) -> str:
+        try:
+            data = json.loads(json_graph)
+        except Exception:
+            return json_graph
+
+        nodes = data.get("nodes")
+        if not isinstance(nodes, list):
+            return json_graph
+
+        updated = False
+        dest_dir = Path(self.directories.outputs_source_images)
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if node.get("class") != "ImageLoadNode" or node.get("name") != "source_image":
+                continue
+
+            state = node.get("state")
+            if not isinstance(state, dict):
+                continue
+
+            src_path = state.get("path")
+            if not isinstance(src_path, str) or not src_path.strip():
+                continue
+
+            src = Path(src_path)
+            if not src.exists() or not src.is_file():
+                continue
+
+            ext = src.suffix if src.suffix else ".png"
+            base_name = f"{timestamp}_source_image{ext}"
+            dest = dest_dir / base_name
+
+            # Avoid overwriting if the same timestamp is reused.
+            if dest.exists():
+                for i in range(1, 10_000):
+                    candidate = dest_dir / f"{timestamp}_source_image_{i}{ext}"
+                    if not candidate.exists():
+                        dest = candidate
+                        break
+
+            try:
+                shutil.copy2(src, dest)
+            except Exception:
+                # Copy failed; keep original path/JSON.
+                continue
+
+            state["path"] = str(dest)
+            node["state"] = state
+            updated = True
+
+        if not updated:
+            return json_graph
+
+        try:
+            return json.dumps(data, ensure_ascii=False)
+        except Exception:
+            return json_graph
+
     def save_image(self):
         if self.pixmap_item is None:
             self.event_bus.publish("show_snackbar", {"action": "show", "message": "No image to save"})
@@ -192,7 +257,7 @@ class ImageViewerSimpleWidget(QGraphicsView):
         output_path, _ = QFileDialog.getSaveFileName(
             self,
             "Save image",
-            f"{self.output_path}/{timestamp}.png",
+            f"{self.directories.outputs_images}/{timestamp}.png",
             "PNG Images (*.png)",
         )
         if not output_path:
@@ -204,8 +269,10 @@ class ImageViewerSimpleWidget(QGraphicsView):
         image = self.pixmap_item.pixmap().toImage()
 
         writer = QImageWriter(output_path, b"png")
+
         if self.preferences.save_image_metadata and self.json_graph:
-            writer.setText("iartisanz_json_graph", self.json_graph)
+            json_graph_to_save = self._copy_source_image_and_rewrite_graph(self.json_graph, timestamp)
+            writer.setText("iartisanz_json_graph", json_graph_to_save)
 
         if not writer.write(image):
             self.event_bus.publish(

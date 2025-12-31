@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 from abc import ABCMeta, abstractmethod
+from typing import TYPE_CHECKING
 
 from PyQt6.QtWidgets import QWidget
 
-from iartisanz.app.directories import DirectoriesObject
 from iartisanz.app.event_bus import EventBus
-from iartisanz.app.preferences import PreferencesObject
+
+
+if TYPE_CHECKING:
+    from iartisanz.app.directories import DirectoriesObject
+    from iartisanz.app.preferences import PreferencesObject
 
 
 class ABCQWidgetMeta(ABCMeta, type(QWidget)):
@@ -12,11 +18,7 @@ class ABCQWidgetMeta(ABCMeta, type(QWidget)):
 
 
 class BaseModule(QWidget, metaclass=ABCQWidgetMeta):
-    def __init__(
-        self,
-        directories: DirectoriesObject,
-        preferences: PreferencesObject,
-    ):
+    def __init__(self, directories: DirectoriesObject, preferences: PreferencesObject):
         super().__init__()
 
         self.directories = directories

@@ -10,7 +10,7 @@ from iartisanz.modules.generation.image.mask_widget import MaskWidget
 
 
 if TYPE_CHECKING:
-    from iartisanz.modules.generation.lora.image_viewer_simple_widget import ImageViewerSimpleWidget
+    from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 
 
 class MaskSectionWidget(QWidget):

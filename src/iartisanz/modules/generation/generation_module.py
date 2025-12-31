@@ -1,4 +1,5 @@
 import logging
+import os
 
 import torch
 from PyQt6.QtCore import QSettings, Qt
@@ -9,12 +10,12 @@ from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
 from iartisanz.modules.generation.generation_settings import GenerationSettings  # <-- remove Proxy import
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
-from iartisanz.modules.generation.lora.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
 from iartisanz.modules.generation.source_image.source_image_dialog import SourceImageDialog
 from iartisanz.modules.generation.threads.generation_thread import NodeGraphThread
 from iartisanz.modules.generation.widgets.drop_lightbox_widget import DropLightBox
+from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.widgets.prompts_widget import PromptsWidget
 from iartisanz.utils.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
 from iartisanz.utils.image_utils import fast_upscale_and_denoise
@@ -54,6 +55,10 @@ class GenerationModule(BaseModule):
 
         self.dialogs = {}
 
+        # runtime variables
+        self.source_image_path = None
+        self.source_thumb_path = None
+
         self.event_bus.subscribe("generation_change", self.on_generation_change_event)
         self.event_bus.subscribe("manage_dialog", self.on_manage_dialog_event)
         self.event_bus.subscribe("lora", self.on_lora_event)
@@ -68,7 +73,7 @@ class GenerationModule(BaseModule):
         top_layout = QHBoxLayout()
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(0)
-        self.image_viewer = ImageViewerSimpleWidget(self.directories.outputs_images, self.preferences)
+        self.image_viewer = ImageViewerSimpleWidget(self.directories, self.preferences)
         self.image_viewer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         top_layout.addWidget(self.image_viewer)
 
@@ -251,6 +256,8 @@ class GenerationModule(BaseModule):
                     "guidance_start_end",
                     "scheduler",
                     "loras",
+                    "source_image",
+                    "strength",
                 ]
                 subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
 
@@ -360,10 +367,16 @@ class GenerationModule(BaseModule):
     def on_source_image_event(self, data: dict):
         action = data.get("action")
         if action == "add":
-            self.generation_thread.add_source_image(data.get("source_image_path"), self.gen_settings.strength)
+            self.source_image_path = data.get("source_image_path")
+            self.source_thumb_path = data.get("source_thumb_path")
+            self.generation_thread.add_source_image(self.source_image_path, self.gen_settings.strength)
         elif action == "update":
             self.generation_thread.update_source_image(data.get("source_image_path"))
-        elif action == "strength":
-            handled, _graph_value = self.gen_settings.apply_change("strength", data.get("value"))
-            if handled:
-                self.generation_thread.update_strength(self.gen_settings.strength)
+        elif action == "enable":
+            self.generation_thread.enable_source_image(data.get("value"))
+        elif action == "remove":
+            self.generation_thread.remove_source_image()
+            os.remove(self.source_image_path)
+            os.remove(self.source_thumb_path)
+            self.source_image_path = None
+            self.source_thumb_path = None

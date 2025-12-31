@@ -51,6 +51,8 @@ def extract_dict_from_json_graph(json_graph: Any, wanted: Iterable[Any], *, incl
             return node_state.get("scheduler_data_object")
         if "value" in node_state:
             return node_state.get("value")
+        if "path" in node_state:
+            return node_state.get("path")
         return None
 
     out: dict[str, Any] = {}

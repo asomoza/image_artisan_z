@@ -92,6 +92,10 @@ QCheckBox {
     background-color: #252629;
 }
 
+QCheckBox::disabled {
+    color: #4d4d4d;
+}
+
 QProgressBar:horizontal,
 QProgressBar:vertical {
     background-color: #353636;

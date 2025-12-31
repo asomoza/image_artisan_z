@@ -67,7 +67,7 @@ class ImageArtisanZNodeGraph:
         if node is not None:
             self.delete_node(node)
 
-    def delete_node(self, node):
+    def delete_node(self, node: Node):
         node.before_delete()
 
         # Make copies to avoid mutation during iteration
@@ -113,7 +113,7 @@ class ImageArtisanZNodeGraph:
                 dfs(node)
 
         for node in sorted_nodes:
-            if node.updated:
+            if node.updated and node.enabled:
                 node.device = self.device
                 node.dtype = self.dtype
                 start_time = time.time()
