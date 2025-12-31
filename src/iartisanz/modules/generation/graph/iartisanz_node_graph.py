@@ -252,6 +252,8 @@ class ImageArtisanZNodeGraph:
         for node in self.nodes:
             desired = new_connections[node.id]
             if node.connections_changed(desired):
+                # Rewiring should invalidate this node (and its dependents) for the next execution.
+                node.set_updated(updated_nodes)
                 # Fully clear old wiring (including reverse links)
                 node.clear_all_connections()
 

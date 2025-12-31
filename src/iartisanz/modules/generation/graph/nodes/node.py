@@ -81,10 +81,12 @@ class Node:
             if not self.connections[input_name]:
                 del self.connections[input_name]
 
-        if node in self.dependencies:
-            self.dependencies.remove(node)
-        if self in node.dependents:
-            node.dependents.remove(self)
+        still_connected = any(n == node for conns in self.connections.values() for n, _output_name in conns)
+        if not still_connected:
+            if node in self.dependencies:
+                self.dependencies.remove(node)
+            if self in node.dependents:
+                node.dependents.remove(self)
 
         self.updated = True
         for dependent_node in self.dependents:
