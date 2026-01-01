@@ -212,7 +212,7 @@ class ImageWidget(QWidget):
         layer = self.image_editor.add_layer(image_path)
         self.layer_manager_widget.add_layer(layer)
 
-    def restore_layers(self, layers: list):
+    def restore_layers(self, layers: list[ImageEditorLayer]):
         self.image_editor.restore_layers(layers)
         self.layer_manager_widget.restore_layers(layers)
 

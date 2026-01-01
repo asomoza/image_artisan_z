@@ -5,11 +5,12 @@ from iartisanz.modules.generation.image.layer_pixmap_item import LayerPixmapItem
 
 
 class LayerManager:
-    def __init__(self, target_width: int, target_height: int):
+    def __init__(self, target_width: int, target_height: int, temp_path: str):
         self.layers = []
         self.next_layer_id = 0
         self.target_width = target_width
         self.target_height = target_height
+        self.temp_path = temp_path
 
     def shift_order(self, order: int):
         for layer in self.layers:
@@ -38,7 +39,7 @@ class LayerManager:
             order=order,
             base_path=base_path,
         )
-        layer.set_pixmap_item(image_path)
+        layer.set_pixmap_item(image_path, self.temp_path)
         self.layers.append(layer)
         self.next_layer_id += 1
 

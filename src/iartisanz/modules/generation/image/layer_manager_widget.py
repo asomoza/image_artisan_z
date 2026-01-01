@@ -182,12 +182,12 @@ class LayerManagerWidget(QWidget):
     def restore_layers(self, layers: list[ImageEditorLayer]):
         self.list_widget.clear()
 
-        for layer in layers:
+        for layer in sorted(layers, key=lambda layer: layer.order, reverse=True):
             item = QListWidgetItem()
             widget = LayerWidget(layer)
             item.setSizeHint(widget.sizeHint())
 
-            self.list_widget.insertItem(0, item)
+            self.list_widget.addItem(item)
             self.list_widget.setItemWidget(item, widget)
 
         if self.list_widget.count() > 0:

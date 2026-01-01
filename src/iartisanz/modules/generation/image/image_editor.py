@@ -4,20 +4,17 @@ import logging
 import os
 from datetime import datetime
 from importlib.resources import files
-from typing import TYPE_CHECKING, Union
+from typing import Union
 
 from PyQt6.QtCore import QPoint, QPointF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QBrush, QColor, QCursor, QGuiApplication, QPainter, QPen, QPixmap, QRadialGradient
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QApplication, QFileDialog, QGraphicsEllipseItem, QGraphicsScene, QGraphicsView, QMenu
 
+from iartisanz.modules.generation.image.image_editor_layer import ImageEditorLayer
 from iartisanz.modules.generation.image.layer_manager import LayerManager
 from iartisanz.modules.generation.image.layer_pixmap_item import LayerPixmapItem
 from iartisanz.modules.generation.widgets.drop_lightbox_widget import DropLightBox
-
-
-if TYPE_CHECKING:
-    from iartisanz.modules.generation.image.image_editor_layer import ImageEditorLayer
 
 
 class ImageEditor(QGraphicsView):
@@ -64,7 +61,7 @@ class ImageEditor(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        self.layer_manager = LayerManager(self.target_width, self.target_height)
+        self.layer_manager = LayerManager(self.target_width, self.target_height, self.temp_path)
         self.selected_layer = None
 
         self.drawing = False
@@ -159,7 +156,7 @@ class ImageEditor(QGraphicsView):
         self.image_changed.emit()
 
     def change_layer_image(self, image: Union[str, QPixmap]):
-        self.selected_layer.set_pixmap_item(image)
+        self.selected_layer.set_pixmap_item(image, self.temp_path)
         self.image_changed.emit()
 
     def reload_image_layer(self, image_path: str, original_path: str, order: int):
@@ -337,11 +334,19 @@ class ImageEditor(QGraphicsView):
         self.image_changed.emit()
 
     def delete_layer(self):
-        if self.selected_layer.image_path is not None and os.path.isfile(self.selected_layer.image_path):
+        if (
+            self.selected_layer.image_path is not None
+            and os.path.isfile(self.selected_layer.image_path)
+            and self.temp_path in self.selected_layer.image_path
+        ):
             os.remove(self.selected_layer.image_path)
-        if self.selected_layer.original_path is not None and os.path.isfile(self.selected_layer.original_path):
-            # TODO: Only delete the original image if the image is not dropped from elsewhere
-            ...
+
+        if (
+            self.selected_layer.original_path is not None
+            and os.path.isfile(self.selected_layer.original_path)
+            and self.temp_path in self.selected_layer.original_path
+        ):
+            os.remove(self.selected_layer.original_path)
 
         self.scene.removeItem(self.selected_layer.pixmap_item)
         self.layer_manager.delete_layer(self.selected_layer.layer_id)

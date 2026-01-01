@@ -47,19 +47,6 @@ class NodeGraphThread(QThread):
         self.loaded_node_graph = None
 
     def run(self):
-        callbacks = {
-            "preview_image": self.preview_image,
-        }
-
-        if self.loaded_node_graph is not None:
-            self.node_graph.from_json(self.loaded_node_graph, node_classes=NODE_CLASSES, callbacks=callbacks)
-
-            node = self.node_graph.get_node_by_name("denoise")
-            node.callback = self.step_progress_update
-
-            self.force_new_run = False
-            self.loaded_node_graph = None
-
         self.node_graph.dtype = self.dtype
         self.node_graph.device = self.device
         self.status_changed.emit("Generating image...")
@@ -101,6 +88,21 @@ class NodeGraphThread(QThread):
 
     def update_nodes(self, values: dict) -> dict:
         return {name: self.update_node(name, value) for name, value in values.items()}
+
+    def load_json_graph(self, json_graph: str, callbacks: dict | None = None):
+        if callbacks is None:
+            callbacks = {"preview_image": self.preview_image}
+
+        self.node_graph.from_json(json_graph, node_classes=NODE_CLASSES, callbacks=callbacks)
+
+        # Wire denoise step callback
+        node = self.node_graph.get_node_by_name("denoise")
+        if node is not None:
+            node.callback = self.step_progress_update
+
+        # Wire image_send node to preview images
+        image_send = self.node_graph.get_node_by_name("image_send")
+        image_send.image_callback = self.preview_image
 
     def add_lora(self, lora_data):
         lora_node = self.node_graph.get_node_by_name(f"{lora_data.name}_{lora_data.version}_lora")

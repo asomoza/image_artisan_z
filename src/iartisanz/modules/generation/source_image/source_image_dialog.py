@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 
@@ -20,17 +21,16 @@ logger = logging.getLogger(__name__)
 
 
 class SourceImageDialog(BaseDialog):
-    def __init__(self, *args):
-        if len(args) <= 3:
-            logger.warning("SourceImageDialog requires the image viewer argument to be able to set images.")
+    def __init__(self, *args, source_image_path=None, source_image_layers=None):
+        if len(args) <= 5:
+            logger.warning("Source Image Dialog requires the image viewer, the width and the height.")
 
         self.image_viewer = args[3] if len(args) > 3 else None
         self.image_width = args[4] if len(args) > 4 else 1024
         self.image_height = args[5] if len(args) > 5 else 1024
 
-        self.source_image_path = None
-        self.source_thumb_path = None
-        self.source_image_layers = None
+        self.source_image_path = source_image_path
+        self.source_image_layers = source_image_layers
 
         super().__init__(*args[:3], *args[6:])
 
@@ -53,6 +53,9 @@ class SourceImageDialog(BaseDialog):
         self.init_ui()
 
         self._connect_editor(self.image_section_widget, self.image_section_widget.image_widget.image_editor)
+
+        if self.source_image_layers is None and self.source_image_path is not None:
+            self.image_section_widget.image_widget.image_editor.change_layer_image(self.source_image_path)
 
     def init_ui(self):
         content_layout = QVBoxLayout()
@@ -102,6 +105,7 @@ class SourceImageDialog(BaseDialog):
             self.image_height,
             self.directories.outputs_images,
             self.directories.temp_path,
+            layers=self.source_image_layers,
         )
         self.image_section_widget.source_image_added.connect(self.on_source_image_added)
         self.image_section_widget.add_mask_clicked.connect(self.on_add_mask_clicked)
@@ -213,11 +217,8 @@ class SourceImageDialog(BaseDialog):
 
         self.dialog_busy = True
 
-        if self.source_image_path is not None:
+        if self.source_image_path is not None and self.directories.temp_path in self.source_image_path:
             os.remove(self.source_image_path)
-
-        if self.source_thumb_path is not None:
-            os.remove(self.source_thumb_path)
 
         self.pixmap_save_thread = PixmapSaveThread(
             pixmap, prefix="source_image", temp_path=self.directories.temp_path, thumb_width=150, thumb_height=150
@@ -269,6 +270,20 @@ class SourceImageDialog(BaseDialog):
         self.save_layers_thread.finished.disconnect(self.on_save_layers_thread_finished)
         self.save_layers_thread.error.disconnect(self.on_error)
         self.save_layers_thread = None
+
+        layers = self.image_section_widget.image_widget.image_editor.get_all_layers()
+
+        copied_layers = [copy.copy(layer) for layer in layers]
+        for layer in copied_layers:
+            layer.pixmap_item = None
+
+        self.event_bus.publish(
+            "source_image",
+            {
+                "action": "update_layers",
+                "layers": copied_layers,
+            },
+        )
 
     def on_error(self, message: str):
         self.event_bus.publish("show_snackbar", {"action": "show", "message": message})

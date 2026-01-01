@@ -1,5 +1,4 @@
 import logging
-import os
 
 import torch
 from PyQt6.QtCore import QSettings, Qt
@@ -8,7 +7,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem,
 
 from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
-from iartisanz.modules.generation.generation_settings import GenerationSettings  # <-- remove Proxy import
+from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
@@ -57,7 +56,8 @@ class GenerationModule(BaseModule):
 
         # runtime variables
         self.source_image_path = None
-        self.source_thumb_path = None
+        self.source_image_thumb_path = None
+        self.source_image_layers = None
 
         self.event_bus.subscribe("generation_change", self.on_generation_change_event)
         self.event_bus.subscribe("manage_dialog", self.on_manage_dialog_event)
@@ -243,7 +243,7 @@ class GenerationModule(BaseModule):
                     )
 
                 json_graph = reader.text(key)
-                self.generation_thread.loaded_node_graph = json_graph
+                self.generation_thread.load_json_graph(json_graph)
 
                 wanted_nodes = [
                     "positive_prompt",
@@ -261,6 +261,10 @@ class GenerationModule(BaseModule):
                 ]
                 subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
 
+                # set local values that are not settings-backed
+                if "source_image" in subset:
+                    self.source_image_path = subset.get("source_image", None)
+
                 self.event_bus.publish("json_graph", {"action": "loaded", "data": subset})
 
     #########################################################
@@ -277,8 +281,6 @@ class GenerationModule(BaseModule):
         handled, graph_value = self.gen_settings.apply_change(attr, value)
 
         # Forward to the graph:
-        # - if it's a settings-backed graph key -> use casted graph_value
-        # - else -> forward raw value (existing behavior)
         if handled and attr in self.gen_settings.GRAPH_KEYS:
             if graph_value is None:
                 return
@@ -314,6 +316,8 @@ class GenerationModule(BaseModule):
                         self.image_viewer,
                         self.gen_settings.image_width,
                         self.gen_settings.image_height,
+                        source_image_path=self.source_image_path,
+                        source_image_layers=self.source_image_layers,
                     )
                     self.dialogs[dialog_type].setParent(None)
                     self.dialogs[dialog_type].show()
@@ -351,7 +355,7 @@ class GenerationModule(BaseModule):
                 "loras",
             ]
             subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
-            self.generation_thread.loaded_node_graph = json_graph
+            self.generation_thread.load_json_graph(json_graph)
 
             self.event_bus.publish("json_graph", {"action": "loaded", "data": subset})
 
@@ -372,11 +376,12 @@ class GenerationModule(BaseModule):
             self.generation_thread.add_source_image(self.source_image_path, self.gen_settings.strength)
         elif action == "update":
             self.generation_thread.update_source_image(data.get("source_image_path"))
+        elif action == "update_layers":
+            self.source_image_layers = data.get("layers", None)
         elif action == "enable":
             self.generation_thread.enable_source_image(data.get("value"))
         elif action == "remove":
             self.generation_thread.remove_source_image()
-            os.remove(self.source_image_path)
-            os.remove(self.source_thumb_path)
             self.source_image_path = None
-            self.source_thumb_path = None
+            self.source_image_thumb_path = None
+            self.source_image_layers = None

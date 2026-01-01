@@ -32,9 +32,8 @@ class ImageEditorLayer:
     y: float = attr.ib(default=0.0)
     rotation: float = attr.ib(default=0.0)
 
-    def set_pixmap_item(self, image: Union[str, QPixmap] = None):
-        # delete old image if exists
-        if self.image_path is not None and os.path.isfile(self.image_path):
+    def set_pixmap_item(self, image: Union[str, QPixmap], temp_path: str):
+        if self.image_path is not None and os.path.isfile(self.image_path) and temp_path in self.image_path:
             os.remove(self.image_path)
             self.image_path = None
 

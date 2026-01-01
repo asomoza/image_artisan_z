@@ -11,6 +11,7 @@ from iartisanz.modules.generation.image.image_widget import ImageWidget
 
 
 if TYPE_CHECKING:
+    from iartisanz.modules.generation.image.image_editor_layer import ImageEditorLayer
     from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 
 
@@ -26,8 +27,9 @@ class ImageSectionWidget(QWidget):
         target_height: int,
         outputh_path: str,
         temp_path: str,
-        layers: list = None,
+        layers: list[ImageEditorLayer] = None,
         mask_image_path: str = None,
+        delete_original_on_load: bool = False,
     ):
         super().__init__()
 
@@ -36,6 +38,7 @@ class ImageSectionWidget(QWidget):
         self.target_height = target_height
         self.outputh_path = outputh_path
         self.temp_path = temp_path
+        self.delete_original_on_load = delete_original_on_load
 
         if mask_image_path is not None:
             self.mask_button_text = "Edit Mask"
@@ -93,7 +96,7 @@ class ImageSectionWidget(QWidget):
 
     def on_image_loaded(self, image_path: str):
         if self.original_image is not None and os.path.isfile(self.original_image):
-            if self.original_image.startswith(self.temp_path):
+            if self.original_image.startswith(self.temp_path) and self.delete_original_on_load:
                 os.remove(self.original_image)
         self.original_image = image_path
 

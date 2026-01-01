@@ -1,3 +1,5 @@
+import os
+
 from PyQt6.QtCore import QSignalBlocker, Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
@@ -9,6 +11,8 @@ from iartisanz.modules.generation.panels.base_panel import BasePanel
 class SourceImagePanel(BasePanel):
     def __init__(self, *args):
         super().__init__(*args)
+
+        self.source_image_thumb_path = None
 
         self.init_ui()
 
@@ -90,11 +94,16 @@ class SourceImagePanel(BasePanel):
     #########################################################
     def on_source_image_event(self, data: dict):
         action = data.get("action")
-        source_thumb_pixmap = QPixmap(data.get("source_thumb_path"))
+        new_source_image_thumb_path = data.get("source_thumb_path")
+
+        if self.source_image_thumb_path is not None and self.directories.temp_path in self.source_image_thumb_path:
+            os.remove(self.source_image_thumb_path)
+
+        self.source_image_thumb_path = new_source_image_thumb_path
 
         if action == "add":
             self.image_text_label.setVisible(True)
-            self.source_thumb_label.setPixmap(source_thumb_pixmap)
+            self.source_thumb_label.setPixmap(QPixmap(self.source_image_thumb_path))
             self.enabled_checkbox.setEnabled(True)
             self.strength_slider.setEnabled(True)
             self.remove_image_button.setEnabled(True)
@@ -105,7 +114,7 @@ class SourceImagePanel(BasePanel):
             finally:
                 del blocker
         elif action == "update":
-            self.source_thumb_label.setPixmap(source_thumb_pixmap)
+            self.source_thumb_label.setPixmap(QPixmap(self.source_image_thumb_path))
 
     def on_json_graph_event(self, data):
         action = data.get("action")
@@ -119,6 +128,7 @@ class SourceImagePanel(BasePanel):
                 self.source_thumb_label.setPixmap(source_thumb_pixmap)
                 self.image_text_label.setVisible(True)
                 self.enabled_checkbox.setEnabled(True)
+                self.remove_image_button.setEnabled(True)
 
                 strength_blocker = QSignalBlocker(self.strength_slider)
                 enabled_blocker = QSignalBlocker(self.enabled_checkbox)
