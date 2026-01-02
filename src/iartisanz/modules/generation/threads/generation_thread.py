@@ -125,6 +125,16 @@ class NodeGraphThread(QThread):
         denoise = self.node_graph.get_node_by_name("denoise")
         denoise.connect("lora", lora_node, "lora")
 
+    def update_lora_weight(self, lora_data, weight: float):
+        lora_node = self.node_graph.get_node_by_name(f"{lora_data.name}_{lora_data.version}_lora")
+        if lora_node is not None:
+            lora_node.update_lora_weight(weight)
+
+    def update_lora_enabled(self, lora_node_name: str, enabled: bool):
+        lora_node = self.node_graph.get_node_by_name(lora_node_name)
+        if lora_node is not None:
+            lora_node.update_lora_enabled(enabled)
+
     def remove_lora(self, lora_data):
         lora_node = None
         for node in self.node_graph.nodes:

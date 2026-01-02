@@ -336,6 +336,8 @@ class GenerationModule(BaseModule):
         elif action == "remove":
             lora_data = data.get("lora")
             self.generation_thread.remove_lora(lora_data)
+        elif action == "enable":
+            self.generation_thread.update_lora_enabled(data.get("lora_node_name"), data.get("enabled"))
 
     def on_generate_event(self, data: dict):
         action = data.get("action")

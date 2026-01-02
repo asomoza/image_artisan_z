@@ -56,10 +56,10 @@ class DenoiseNode(Node):
             try:
                 if isinstance(self.lora, list):
                     keys = [item[0] for item in self.lora]
-                    transformer_values = [item[1] for item in self.lora]
+                    transformer_values = [item[1]["transformer"] for item in self.lora]
                     self.transformer.set_adapters(keys, transformer_values)
                 else:
-                    self.transformer.set_adapters([self.lora[0]], self.lora[1])
+                    self.transformer.set_adapters([self.lora[0]], self.lora[1]["transformer"])
             except RuntimeError as e:
                 raise IArtisanZNodeError(e, self.__class__.__name__)
 

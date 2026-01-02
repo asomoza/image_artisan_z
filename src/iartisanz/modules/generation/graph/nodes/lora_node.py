@@ -30,55 +30,66 @@ class LoraNode(Node):
         self.transformer_weight = transformer_weight
         self.is_slider = is_slider
         self.database_id = database_id
+        self.lora_enabled = True
 
-    def update_lora(self, enabled: bool, transformer_weight: float, is_slider: bool):
-        self.enabled = enabled
+    def update_lora(self, lora_enabled: bool, transformer_weight: float, is_slider: bool):
+        self.lora_enabled = lora_enabled
         self.transformer_weight = transformer_weight
         self.is_slider = is_slider
         self.set_updated()
 
+    def update_lora_weight(self, transformer_weight: float):
+        self.transformer_weight = transformer_weight
+        self.set_updated()
+
+    def update_lora_enabled(self, lora_enabled: bool):
+        self.lora_enabled = lora_enabled
+        self.set_updated()
+
     def __call__(self):
-        if not self.path:
-            raise IArtisanZNodeError("LoRA path is empty.", self.name)
+        if self.adapter_name not in getattr(self.transformer, "peft_config", {}):
+            if not self.path:
+                raise IArtisanZNodeError("LoRA path is empty.", self.name)
 
-        if not os.path.isfile(self.path):
-            raise IArtisanZNodeError(f"LoRA file not found: {self.path}", self.name)
+            if not os.path.isfile(self.path):
+                raise IArtisanZNodeError(f"LoRA file not found: {self.path}", self.name)
 
-        if not self.adapter_name:
-            raise IArtisanZNodeError("adapter_name is empty.", self.name)
+            if not self.adapter_name:
+                raise IArtisanZNodeError("adapter_name is empty.", self.name)
 
-        state_dict = load_state_dict(self.path)
+            state_dict = load_state_dict(self.path)
 
-        is_dora_scale_present = any("dora_scale" in k for k in state_dict)
-        if is_dora_scale_present:
-            state_dict = {k: v for k, v in state_dict.items() if "dora_scale" not in k}
+            is_dora_scale_present = any("dora_scale" in k for k in state_dict)
+            if is_dora_scale_present:
+                state_dict = {k: v for k, v in state_dict.items() if "dora_scale" not in k}
 
-        has_alphas_in_sd = any(k.endswith(".alpha") for k in state_dict)
-        has_diffusion_model = any(k.startswith("diffusion_model.") for k in state_dict)
-        has_default = any("default." in k for k in state_dict)
+            has_alphas_in_sd = any(k.endswith(".alpha") for k in state_dict)
+            has_diffusion_model = any(k.startswith("diffusion_model.") for k in state_dict)
+            has_default = any("default." in k for k in state_dict)
 
-        if has_alphas_in_sd or has_diffusion_model or has_default:
-            state_dict = _convert_non_diffusers_z_image_lora_to_diffusers(state_dict)
+            if has_alphas_in_sd or has_diffusion_model or has_default:
+                state_dict = _convert_non_diffusers_z_image_lora_to_diffusers(state_dict)
 
-        is_correct_format = all("lora" in key for key in state_dict.keys())
-        if not is_correct_format:
-            raise IArtisanZNodeError("Invalid LoRA checkpoint.", self.name)
+            is_correct_format = all("lora" in key for key in state_dict.keys())
+            if not is_correct_format:
+                raise IArtisanZNodeError("Invalid LoRA checkpoint.", self.name)
 
-        self.transformer.load_lora_adapter(
-            state_dict,
-            network_alphas=None,
-            adapter_name=self.adapter_name,
-            metadata=None,
-            _pipeline=None,
-            low_cpu_mem_usage=False,
-            hotswap=False,
-        )
+            self.transformer.load_lora_adapter(
+                state_dict,
+                network_alphas=None,
+                adapter_name=self.adapter_name,
+                metadata=None,
+                _pipeline=None,
+                low_cpu_mem_usage=False,
+                hotswap=False,
+            )
 
-        weight = float(self.transformer_weight) if self.transformer_weight is not None else 1.0
-        if not self.enabled:
-            weight = 0.0
+        scale = {"transformer": float(self.transformer_weight) if self.transformer_weight is not None else 1.0}
 
-        self.values["lora"] = (self.adapter_name, weight)
+        if not self.lora_enabled:
+            scale = {"transformer": 0.0}
+
+        self.values["lora"] = (self.adapter_name, scale)
         return self.values
 
     def before_delete(self):

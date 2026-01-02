@@ -9,7 +9,6 @@ from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataO
 class LoraAddedItem(QFrame):
     remove_clicked = pyqtSignal(object)
     weight_changed = pyqtSignal()
-    enabled = pyqtSignal(int, bool)
     advanced_clicked = pyqtSignal(object)
 
     def __init__(self, lora: LoraDataObject):
@@ -32,7 +31,7 @@ class LoraAddedItem(QFrame):
 
         self.enabled_checkbox = QCheckBox(lora_name)
         self.enabled_checkbox.setChecked(self.lora.enabled)
-        self.enabled_checkbox.stateChanged.connect(self.on_check_enabled)
+        self.enabled_checkbox.toggled.connect(self.on_check_enabled)
         upper_layout.addWidget(self.enabled_checkbox)
 
         remove_button = RemoveButton()
@@ -53,8 +52,11 @@ class LoraAddedItem(QFrame):
 
         self.setLayout(main_layout)
 
-    def on_check_enabled(self):
-        self.enabled.emit(self.lora.lora_id, self.enabled_checkbox.isChecked())
+    def on_check_enabled(self, checked: bool):
+        self.event_bus.publish(
+            "lora",
+            {"action": "enable", "lora_node_name": f"{self.lora.name}_{self.lora.version}_lora", "enabled": checked},
+        )
 
     def on_removed(self):
         self.event_bus.publish("lora", {"action": "remove", "lora": self.lora})
