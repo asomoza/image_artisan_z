@@ -115,6 +115,13 @@ class SourceImagePanel(BasePanel):
                 del blocker
         elif action == "update":
             self.source_thumb_label.setPixmap(QPixmap(self.source_image_thumb_path))
+        elif action == "add_mask":
+            source_image_mask_thumb_path = data.get("source_image_mask_thumb_path")
+            self.mask_text_label.setVisible(True)
+            self.source_thumb_mask_label.setPixmap(QPixmap(source_image_mask_thumb_path))
+        elif action == "update_mask":
+            source_image_mask_thumb_path = data.get("source_image_mask_thumb_path")
+            self.source_thumb_mask_label.setPixmap(QPixmap(source_image_mask_thumb_path))
 
     def on_json_graph_event(self, data):
         action = data.get("action")

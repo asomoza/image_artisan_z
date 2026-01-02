@@ -2,10 +2,12 @@ import inspect
 import logging
 from typing import Optional, Union
 
+import numpy as np
 import torch
 
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.nodes.node import Node
+from iartisanz.utils.image_converters import numpy_to_pt
 
 
 logger = logging.getLogger(__name__)
@@ -21,7 +23,15 @@ class DenoiseNode(Node):
         "negative_prompt_embeds",
         "guidance_scale",
     ]
-    OPTIONAL_INPUTS = ["cfg_normalization", "sigmas", "lora", "guidance_start_end", "noise", "strength"]
+    OPTIONAL_INPUTS = [
+        "cfg_normalization",
+        "sigmas",
+        "lora",
+        "guidance_start_end",
+        "noise",
+        "strength",
+        "image_mask",
+    ]
     OUTPUTS = ["latents"]
     SERIALIZE_EXCLUDE = {"callback"}
 
@@ -72,14 +82,31 @@ class DenoiseNode(Node):
             self.device,
             sigmas=self.sigmas,
         )
+        total_time_steps = num_inference_steps
 
         if hasattr(self, "strength") and self.strength is not None:
             timesteps, num_inference_steps = self.get_timesteps(num_inference_steps, self.strength)
 
+        original_image_latents = self.latents
         latents = self.latents
+        masks = None
 
         if hasattr(self, "noise") and self.noise is not None:
             latents = self.scheduler.scale_noise(latents, timesteps[:1], self.noise.to(self.device))
+
+            # begin differential diffusion
+            if hasattr(self, "image_mask") and self.image_mask is not None:
+                original_mask = np.expand_dims(self.image_mask, axis=0)
+                original_mask = np.concatenate(original_mask, axis=0)
+                original_mask = numpy_to_pt(original_mask[None, ...]).to(device=self.device, dtype=self.dtype)
+                original_mask = torch.nn.functional.interpolate(
+                    original_mask, size=(latents.shape[2], latents.shape[3])
+                )
+
+                mask_thresholds = torch.arange(total_time_steps, dtype=original_mask.dtype) / total_time_steps
+                mask_thresholds = mask_thresholds.reshape(-1, 1, 1, 1).to(self.device)
+                masks = original_mask > mask_thresholds
+            # end differential diffusion
 
         order = getattr(self.scheduler, "order", 1)
         num_warmup_steps = max(len(timesteps) - num_inference_steps * order, 0)
@@ -154,6 +181,18 @@ class DenoiseNode(Node):
 
             # compute the previous noisy sample x_t -> x_t-1
             latents = self.scheduler.step(noise_pred.to(torch.float32), t, latents, return_dict=False)[0]
+
+            # begin differential diffusion
+            if masks is not None:
+                image_latent = original_image_latents
+
+                if i < len(timesteps) - 1:
+                    noise_timestep = timesteps[i + 1]
+                    image_latent = self.scheduler.scale_noise(self.latents, torch.tensor([noise_timestep]), self.noise)
+
+                    mask = masks[i].to(latents.dtype)
+                    latents = image_latent * mask + latents * (1 - mask)
+            # end differential diffusion
 
             is_last = i == len(timesteps) - 1
             is_step_boundary = (i + 1) > num_warmup_steps and (i + 1) % order == 0

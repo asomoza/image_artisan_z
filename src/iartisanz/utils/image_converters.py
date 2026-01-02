@@ -1,4 +1,7 @@
+from typing import Union
+
 import numpy as np
+import PIL
 import torch
 from PyQt6.QtGui import QImage, QPixmap
 
@@ -17,3 +20,24 @@ def convert_numpy_to_pixmap(numpy_image: np.array) -> QPixmap:
     pixmap = QPixmap.fromImage(qimage)
 
     return pixmap
+
+
+def pil_to_numpy(images: Union[list[PIL.Image.Image], PIL.Image.Image]) -> np.ndarray:
+    if not isinstance(images, list):
+        images = [images]
+    images = [np.array(image).astype(np.float32) / 255.0 for image in images]
+    images = np.stack(images, axis=0)
+
+    return images
+
+
+def numpy_to_pt(images: np.ndarray) -> torch.Tensor:
+    if images.ndim == 3:
+        images = images[..., None]
+
+    images = torch.from_numpy(images.transpose(0, 3, 1, 2))
+    return images
+
+
+def normalize(images: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+    return 2.0 * images - 1.0

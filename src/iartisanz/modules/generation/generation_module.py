@@ -58,6 +58,8 @@ class GenerationModule(BaseModule):
         self.source_image_path = None
         self.source_image_thumb_path = None
         self.source_image_layers = None
+        self.source_image_mask_path = None
+        self.source_image_mask_thumb_path = None
 
         self.event_bus.subscribe("generation_change", self.on_generation_change_event)
         self.event_bus.subscribe("manage_dialog", self.on_manage_dialog_event)
@@ -318,6 +320,7 @@ class GenerationModule(BaseModule):
                         self.gen_settings.image_height,
                         source_image_path=self.source_image_path,
                         source_image_layers=self.source_image_layers,
+                        source_image_mask_path=self.source_image_mask_path,
                     )
                     self.dialogs[dialog_type].setParent(None)
                     self.dialogs[dialog_type].show()
@@ -389,3 +392,14 @@ class GenerationModule(BaseModule):
             self.source_image_path = None
             self.source_image_thumb_path = None
             self.source_image_layers = None
+        elif action == "add_mask":
+            self.source_image_mask_path = data.get("source_image_mask_path")
+            self.source_image_mask_thumb_path = data.get("source_image_mask_thumb_path")
+            self.generation_thread.add_source_image_mask(data.get("source_image_mask_final_path"))
+        elif action == "update_mask":
+            self.source_image_mask_path = data.get("source_image_mask_path")
+            self.source_image_mask_thumb_path = data.get("source_image_mask_thumb_path")
+            self.generation_thread.update_source_image_mask(data.get("source_image_mask_final_path"))
+        elif action == "remove_mask":
+            self.generation_thread.remove_source_image_mask()
+            self.source_image_mask_path = None

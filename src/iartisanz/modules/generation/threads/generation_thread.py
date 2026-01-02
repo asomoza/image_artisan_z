@@ -204,6 +204,20 @@ class NodeGraphThread(QThread):
         self.node_graph.delete_node_by_name("source_image")
         self.node_graph.delete_node_by_name("strength")
 
+    def add_source_image_mask(self, mask_image_path: str):
+        mask_image_node = ImageLoadNode(path=mask_image_path, grayscale=True)
+        self.node_graph.add_node(mask_image_node, "source_image_mask")
+
+        denoise_node = self.node_graph.get_node_by_name("denoise")
+        denoise_node.connect("image_mask", mask_image_node, "image")
+
+    def update_source_image_mask(self, mask_image_path: str):
+        mask_image_node = self.node_graph.get_node_by_name("source_image_mask")
+        mask_image_node.update_value(mask_image_path)
+
+    def remove_source_image_mask(self):
+        self.node_graph.delete_node_by_name("source_image_mask")
+
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)
 

@@ -13,6 +13,7 @@ from iartisanz.buttons.color_button import ColorButton
 from iartisanz.buttons.eyedropper_button import EyeDropperButton
 from iartisanz.modules.generation.source_image.image_section_widget import ImageSectionWidget
 from iartisanz.modules.generation.source_image.mask_section_widget import MaskSectionWidget
+from iartisanz.modules.generation.threads.mask_pixmap_save_thread import MaskPixmapSaveThread
 from iartisanz.modules.generation.threads.pixmap_save_thread import PixmapSaveThread
 from iartisanz.modules.generation.threads.save_layers_thread import SaveLayersThread
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class SourceImageDialog(BaseDialog):
-    def __init__(self, *args, source_image_path=None, source_image_layers=None):
+    def __init__(self, *args, source_image_path=None, source_image_layers=None, source_image_mask_path=None):
         if len(args) <= 5:
             logger.warning("Source Image Dialog requires the image viewer, the width and the height.")
 
@@ -31,6 +32,7 @@ class SourceImageDialog(BaseDialog):
 
         self.source_image_path = source_image_path
         self.source_image_layers = source_image_layers
+        self.source_image_mask_path = source_image_mask_path
 
         super().__init__(*args[:3], *args[6:])
 
@@ -289,10 +291,66 @@ class SourceImageDialog(BaseDialog):
     def on_error(self, message: str):
         self.event_bus.publish("show_snackbar", {"action": "show", "message": message})
 
-    def on_add_mask_clicked(self): ...
+    def on_add_mask_clicked(self, pixmap: QPixmap):
+        self.mask_section_widget.image_widget.image_editor.selected_layer = (
+            self.mask_section_widget.image_widget.image_layer
+        )
+        self.mask_section_widget.image_widget.image_editor.change_layer_image(pixmap)
+        self.mask_section_widget.image_widget.image_editor.selected_layer = (
+            self.mask_section_widget.image_widget.mask_layer
+        )
 
-    def on_mask_saved(self): ...
+        self._connect_editor(self.mask_section_widget, self.mask_section_widget.image_widget.image_editor)
+        self.image_section_widget.hide()
+        self.mask_section_widget.show()
 
-    def on_cancel_mask(self): ...
+    def on_cancel_mask(self):
+        self._connect_editor(self.image_section_widget, self.image_section_widget.image_widget.image_editor)
+        self.mask_section_widget.hide()
+        self.image_section_widget.show()
+
+    def on_mask_saved(self, mask_pixmap: QPixmap, opacity: float):
+        self._connect_editor(self.image_section_widget, self.image_section_widget.image_widget.image_editor)
+        self.mask_section_widget.hide()
+        self.image_section_widget.show()
+        self.image_section_widget.add_mask_button.setText("Edit mask")
+
+        self.pixmap_save_thread = MaskPixmapSaveThread(
+            mask_pixmap,
+            opacity,
+            prefix="source_mask_image",
+            temp_path=self.directories.temp_path,
+            thumb_width=150,
+            thumb_height=150,
+        )
+
+        self.pixmap_save_thread.save_finished.connect(self.on_mask_pixmap_saved)
+        self.pixmap_save_thread.finished.connect(self.on_save_mask_pixmap_thread_finished)
+        self.pixmap_save_thread.error.connect(self.on_error)
+        self.pixmap_save_thread.start()
+
+    def on_mask_pixmap_saved(self, mask_image_path: str, mask_image_final_path: str, mask_thumbnail_path: str):
+        previous_path = self.source_image_mask_path
+
+        if previous_path == mask_image_path:
+            return
+
+        self.source_image_mask_path = mask_image_path
+
+        self.event_bus.publish(
+            "source_image",
+            {
+                "action": "add_mask" if previous_path is None else "update_mask",
+                "source_image_mask_path": mask_image_path,
+                "source_image_mask_final_path": mask_image_final_path,
+                "source_image_mask_thumb_path": mask_thumbnail_path,
+            },
+        )
+
+    def on_save_mask_pixmap_thread_finished(self):
+        self.pixmap_save_thread.save_finished.disconnect(self.on_mask_pixmap_saved)
+        self.pixmap_save_thread.finished.disconnect(self.on_save_mask_pixmap_thread_finished)
+        self.pixmap_save_thread.error.disconnect(self.on_error)
+        self.pixmap_save_thread = None
 
     def on_delete_mask(self): ...
