@@ -218,7 +218,8 @@ class SourceImageDialog(BaseDialog):
         self.dialog_busy = True
 
         if self.source_image_path is not None and self.directories.temp_path in self.source_image_path:
-            os.remove(self.source_image_path)
+            if os.path.isfile(self.source_image_path):
+                os.remove(self.source_image_path)
 
         self.pixmap_save_thread = PixmapSaveThread(
             pixmap, prefix="source_image", temp_path=self.directories.temp_path, thumb_width=150, thumb_height=150

@@ -51,8 +51,10 @@ class ImageSectionWidget(QWidget):
 
         if layers is not None and len(layers) > 0:
             self.image_widget.restore_layers(layers)
+            self.set_add_button_update()
         else:
             self.image_widget.add_layer()
+            self.set_add_button_add()
 
         self.image_widget.set_enabled(True)
 
@@ -86,7 +88,7 @@ class ImageSectionWidget(QWidget):
         self.delete_mask_button.setObjectName("red_button")
         self.delete_mask_button.setVisible(False)
         bottom_layout.addWidget(self.delete_mask_button)
-        self.add_button = QPushButton("Set Source Image")
+        self.add_button = QPushButton()
         self.add_button.setObjectName("green_button")
         self.add_button.clicked.connect(self.on_source_image_added)
         bottom_layout.addWidget(self.add_button)
@@ -99,6 +101,12 @@ class ImageSectionWidget(QWidget):
             if self.original_image.startswith(self.temp_path) and self.delete_original_on_load:
                 os.remove(self.original_image)
         self.original_image = image_path
+
+    def set_add_button_add(self):
+        self.add_button.setText("Add source image")
+
+    def set_add_button_update(self):
+        self.add_button.setText("Update source image")
 
     def on_add_mask(self):
         pixmap = self.image_widget.image_editor.get_scene_as_pixmap()

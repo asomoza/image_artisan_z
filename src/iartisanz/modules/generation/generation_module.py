@@ -375,7 +375,9 @@ class GenerationModule(BaseModule):
             self.source_thumb_path = data.get("source_thumb_path")
             self.generation_thread.add_source_image(self.source_image_path, self.gen_settings.strength)
         elif action == "update":
-            self.generation_thread.update_source_image(data.get("source_image_path"))
+            self.source_image_path = data.get("source_image_path")
+            self.source_thumb_path = data.get("source_thumb_path")
+            self.generation_thread.update_source_image(self.source_image_path)
         elif action == "update_layers":
             self.source_image_layers = data.get("layers", None)
         elif action == "enable":
