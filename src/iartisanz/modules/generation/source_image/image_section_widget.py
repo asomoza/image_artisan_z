@@ -115,6 +115,7 @@ class ImageSectionWidget(QWidget):
     def on_source_image_added(self):
         pixmap = self.image_widget.image_editor.get_scene_as_pixmap()
         self.source_image_added.emit(pixmap)
+        self.set_add_button_update()
 
     def disable_buttons(self, state: bool = True):
         self.add_button.setDisabled(state)
