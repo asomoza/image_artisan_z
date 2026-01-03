@@ -353,4 +353,15 @@ class SourceImageDialog(BaseDialog):
         self.pixmap_save_thread.error.disconnect(self.on_error)
         self.pixmap_save_thread = None
 
-    def on_delete_mask(self): ...
+    def on_delete_mask(self):
+        self._connect_editor(self.image_section_widget, self.image_section_widget.image_widget.image_editor)
+        self.mask_section_widget.hide()
+        self.image_section_widget.show()
+        self.image_section_widget.add_mask_button.setText("Add mask")
+
+        if self.source_image_mask_path is not None and self.directories.temp_path in self.source_image_mask_path:
+            if os.path.isfile(self.source_image_mask_path):
+                os.remove(self.source_image_mask_path)
+
+        self.source_image_mask_path = None
+        self.event_bus.publish("source_image", {"action": "remove_mask"})

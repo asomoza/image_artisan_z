@@ -403,3 +403,4 @@ class GenerationModule(BaseModule):
         elif action == "remove_mask":
             self.generation_thread.remove_source_image_mask()
             self.source_image_mask_path = None
+            self.source_image_mask_thumb_path = None

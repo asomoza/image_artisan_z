@@ -122,6 +122,10 @@ class SourceImagePanel(BasePanel):
         elif action == "update_mask":
             source_image_mask_thumb_path = data.get("source_image_mask_thumb_path")
             self.source_thumb_mask_label.setPixmap(QPixmap(source_image_mask_thumb_path))
+        elif action == "remove_mask":
+            self.mask_text_label.setVisible(False)
+            self.source_image_mask_thumb_path = None
+            self.source_thumb_mask_label.clear()
 
     def on_json_graph_event(self, data):
         action = data.get("action")
