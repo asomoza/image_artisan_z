@@ -1,4 +1,8 @@
+from __future__ import annotations
+
+import gc
 import logging
+import os
 
 import torch
 from PyQt6.QtCore import QSettings, Qt
@@ -7,10 +11,12 @@ from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem,
 
 from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
+from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
+from iartisanz.modules.generation.model.model_manager_dialog import ModelManagerDialog
 from iartisanz.modules.generation.source_image.source_image_dialog import SourceImageDialog
 from iartisanz.modules.generation.threads.generation_thread import NodeGraphThread
 from iartisanz.modules.generation.widgets.drop_lightbox_widget import DropLightBox
@@ -39,28 +45,22 @@ class GenerationModule(BaseModule):
         self.node_graph = create_default_graph()
         self.generating = False
 
-        self.generation_thread = NodeGraphThread(self.directories, self.node_graph, self.dtype, self.device)
-        self.generation_thread.progress_update.connect(self.step_progress_update)
-        self.generation_thread.status_changed.connect(self.on_status_changed)
-        self.generation_thread.generation_finished.connect(self.generation_finished)
-        self.generation_thread.generation_error.connect(self.on_generation_error)
-        self.generation_thread.generation_aborted.connect(self.generation_aborted)
-        self.generation_thread.force_new_run = True
-
-        # Initialize graph nodes from settings
-        self.generation_thread.update_nodes(self.gen_settings.to_graph_nodes())
-
         self.init_ui()
-
         self.dialogs = {}
 
         # runtime variables
+        self.selected_model = self.gen_settings.model
         self.source_image_path = None
         self.source_image_thumb_path = None
         self.source_image_layers = None
         self.source_image_mask_path = None
         self.source_image_mask_thumb_path = None
+        self.loaded_loras: list[LoraDataObject] = []
 
+        self.create_generation_thread()
+
+        self.event_bus.subscribe("model", self.on_model_event)
+        self.event_bus.subscribe("module", self.on_module_event)
         self.event_bus.subscribe("generation_change", self.on_generation_change_event)
         self.event_bus.subscribe("manage_dialog", self.on_manage_dialog_event)
         self.event_bus.subscribe("lora", self.on_lora_event)
@@ -114,6 +114,21 @@ class GenerationModule(BaseModule):
         self.event_bus.unsubscribe("manage_dialog", self.on_manage_dialog_event)
         self.close_all_dialogs()
 
+    def create_generation_thread(self):
+        self.generation_thread = NodeGraphThread(self.directories, self.node_graph, self.dtype, self.device)
+        self.generation_thread.progress_update.connect(self.step_progress_update)
+        self.generation_thread.status_changed.connect(self.on_status_changed)
+        self.generation_thread.generation_finished.connect(self.generation_finished)
+        self.generation_thread.generation_error.connect(self.on_generation_error)
+        self.generation_thread.generation_aborted.connect(self.generation_aborted)
+        self.generation_thread.force_new_graph = True
+
+        # Initialize graph nodes from settings
+        self.generation_thread.update_nodes(self.gen_settings.to_graph_nodes())
+
+        # model is a special case
+        self.generation_thread.update_model(self.selected_model)
+
     def on_generate(
         self,
         seed: int,
@@ -125,6 +140,12 @@ class GenerationModule(BaseModule):
     ):
         if self.generating:
             self.on_abort()
+            return
+
+        if self.selected_model.id == 0:
+            self.event_bus.publish(
+                "show_snackbar", {"action": "show", "message": "No model selected. Please select a model first."}
+            )
             return
 
         self.generating = True
@@ -267,11 +288,59 @@ class GenerationModule(BaseModule):
                 if "source_image" in subset:
                     self.source_image_path = subset.get("source_image", None)
 
+                self.process_lora_data(subset.get("loras", []))
+
                 self.event_bus.publish("json_graph", {"action": "loaded", "data": subset})
+
+    def process_lora_data(self, loras_data: list[dict]):
+        self.loaded_loras = []
+
+        for lora_dict in loras_data:
+            lora_data = LoraDataObject(
+                id=lora_dict.get("database_id", 0),
+                name=lora_dict.get("adapter_name", ""),
+                filename=os.path.basename(lora_dict.get("path", "")),
+                version=lora_dict.get("version", ""),
+                path=lora_dict.get("path", ""),
+                transformer_weight=lora_dict.get("transformer_weight", 1.0),
+                enabled=lora_dict.get("enabled", True),
+            )
+            self.loaded_loras.append(lora_data)
 
     #########################################################
     ## SUBSCRIBED BUS EVENTS
     #########################################################
+    def on_module_event(self, data: dict):
+        action = data.get("action")
+        if action == "clear_vram":
+            if self.generating and self.generation_thread is not None:
+                self.on_abort()
+                self.generation_thread.wait()
+
+            self.node_graph = create_default_graph()
+            self.generation_thread.clean_up()
+            self.generation_thread = None
+            self.node_graph = None
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.ipc_collect()
+                torch.cuda.empty_cache()
+
+            self.node_graph = create_default_graph()
+            self.create_generation_thread()
+
+            # load loras if any
+            if len(self.loaded_loras) > 0:
+                for lora_data in self.loaded_loras:
+                    self.generation_thread.add_lora(lora_data)
+
+            # reset of prompts widget previous values
+            self.prompts_widget.previous_positive_prompt = None
+            self.prompts_widget.previous_negative_prompt = None
+            self.prompts_widget.previous_seed = None
+
     def on_generation_change_event(self, data):
         attr = data.get("attr")
         if not attr:
@@ -294,7 +363,21 @@ class GenerationModule(BaseModule):
         dialog_type = data.get("dialog_type")
         action = data.get("action")
 
-        if dialog_type == "lora_manager":
+        if dialog_type == "model_manager":
+            if action == "open":
+                if "model_manager" not in self.dialogs:
+                    self.dialogs[dialog_type] = ModelManagerDialog(
+                        dialog_type, self.directories, self.preferences, self.image_viewer
+                    )
+                    self.dialogs[dialog_type].setParent(None)
+                    self.dialogs[dialog_type].show()
+                else:
+                    self.dialogs[dialog_type].raise_()
+                    self.dialogs[dialog_type].activateWindow()
+            elif action == "close":
+                self.dialogs[dialog_type].close()
+                del self.dialogs[dialog_type]
+        elif dialog_type == "lora_manager":
             if action == "open":
                 if "lora_manager" not in self.dialogs:
                     self.dialogs[dialog_type] = LoraManagerDialog(
@@ -331,11 +414,22 @@ class GenerationModule(BaseModule):
                 self.dialogs[dialog_type].close()
                 del self.dialogs[dialog_type]
 
+    def on_model_event(self, data: dict):
+        action = data.get("action")
+        if action == "update":
+            model_data = data.get("model_data_object")
+
+            if self.selected_model != model_data:
+                self.selected_model = model_data
+                self.generation_thread.update_model(model_data)
+                self.gen_settings.apply_change("model", model_data)
+
     def on_lora_event(self, data: dict):
         action = data.get("action")
         if action == "add":
             lora_data = data.get("lora")
             self.generation_thread.add_lora(lora_data)
+            self.loaded_loras.append(lora_data)
         elif action == "remove":
             lora_data = data.get("lora")
             self.generation_thread.remove_lora(lora_data)
@@ -362,15 +456,12 @@ class GenerationModule(BaseModule):
             subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
             self.generation_thread.load_json_graph(json_graph)
 
+            self.process_lora_data(subset.get("loras", []))
+
             self.event_bus.publish("json_graph", {"action": "loaded", "data": subset})
 
             self.on_generate(
-                subset.get("seed", 0),
-                subset.get("positive_prompt", ""),
-                subset.get("negative_prompt", ""),
-                True,
-                True,
-                True,
+                subset.get("seed"), subset.get("positive_prompt"), subset.get("negative_prompt"), True, True, True
             )
 
     def on_source_image_event(self, data: dict):

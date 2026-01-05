@@ -1,5 +1,4 @@
-import json
-import os
+from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
@@ -14,7 +13,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from iartisanz.app.directories import DirectoriesObject
 from iartisanz.app.event_bus import EventBus
 from iartisanz.layouts.simple_flow_layout import SimpleFlowLayout
 from iartisanz.modules.generation.constants import MODEL_TYPES
@@ -30,14 +28,13 @@ class LoraInfoWidget(QWidget):
     trigger_clicked = pyqtSignal(str)
     example_prompt_clicked = pyqtSignal(str)
 
-    def __init__(self, model_item: ModelItemWidget, directories: DirectoriesObject):
+    def __init__(self, model_item: ModelItemWidget):
         super().__init__()
 
         self.model_item = model_item
         self.json_graph = None
         self.pixmap = model_item.pixmap
 
-        self.directories = directories
         self.event_bus = EventBus()
 
         self.init_ui()

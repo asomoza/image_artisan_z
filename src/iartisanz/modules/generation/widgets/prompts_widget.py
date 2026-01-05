@@ -213,9 +213,14 @@ class PromptsWidget(QFrame):
             negative_prompt = data.get("negative_prompt", "")
             seed = data.get("seed", "")
 
+            self.previous_positive_prompt = positive_prompt
+            self.previous_negative_prompt = negative_prompt
+            self.previous_seed = seed
+
             self.positive_prompt.setPlainText(positive_prompt)
             self.negative_prompt.setPlainText(negative_prompt)
             self.seed_text.setText(str(seed))
+
             self.random_checkbox.setChecked(False)
             self.seed_text.setDisabled(False)
             self.use_random_seed = False

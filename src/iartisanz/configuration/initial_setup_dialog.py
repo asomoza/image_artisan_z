@@ -24,6 +24,7 @@ class InitialSetupDialog(QDialog):
     REQUIRED_PATHS = (
         ("data_path", "Select data directory"),
         ("models_diffusers", "Select diffusers models directory"),
+        ("models_singlefile", "Select single file models directory"),
         ("models_loras", "Select LoRAs directory"),
         ("outputs_images", "Select image outputs directory"),
         ("outputs_source_images", "Select source images outputs directory"),
@@ -194,6 +195,7 @@ class InitialSetupDialog(QDialog):
         return {
             "data_path": os.path.join(base, "data"),
             "models_diffusers": os.path.join(base, "models", "diffusers"),
+            "models_singlefile": os.path.join(base, "models", "singlefile"),
             "models_loras": os.path.join(base, "models", "loras"),
             "outputs_images": os.path.join(base, "outputs", "images"),
             "outputs_source_images": os.path.join(base, "outputs", "source_images"),

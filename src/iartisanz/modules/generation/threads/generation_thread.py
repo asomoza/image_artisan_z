@@ -16,6 +16,7 @@ from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
 
 if TYPE_CHECKING:
     from iartisanz.app.directories import DirectoriesObject
+    from iartisanz.modules.generation.data_objects.model_data_object import ModelDataObject
     from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ class NodeGraphThread(QThread):
         self.device = device
         self.directories = directories
 
-        self.force_new_run = False
+        self.force_new_graph = False
         self.node_graph.set_abort_function(self.on_aborted)
         self.loaded_node_graph = None
 
@@ -51,22 +52,14 @@ class NodeGraphThread(QThread):
         self.node_graph.device = self.device
         self.status_changed.emit("Generating image...")
 
-        if self.force_new_run:
-            node = self.node_graph.get_node_by_name("model")
-            node.update_model(
-                path="/home/ozzy/ImageArtisanZ/models/diffusers/Z-Image-Turbo/",
-                model_name="Z-Image-Turbo",
-                version="1.0",
-                model_type="Turbo",
-            )
-
+        if self.force_new_graph:
             node = self.node_graph.get_node_by_name("denoise")
             node.callback = self.step_progress_update
 
             node = self.node_graph.get_node_by_name("image_send")
             node.image_callback = self.preview_image
 
-            self.force_new_run = False
+            self.force_new_graph = False
 
         try:
             self.node_graph()
@@ -76,6 +69,15 @@ class NodeGraphThread(QThread):
 
         if not self.node_graph.updated:
             self.generation_error.emit("Nothing was changed", False)
+
+    def clean_up(self):
+        model_node = self.node_graph.get_node_by_name("model")
+        if model_node is not None:
+            model_node.clear_models()
+
+        self.node_graph = None
+        self.dtype = None
+        self.device = None
 
     def update_node(self, node_name: str, value) -> bool:
         node = self.node_graph.get_node_by_name(node_name)
@@ -90,6 +92,10 @@ class NodeGraphThread(QThread):
         return {name: self.update_node(name, value) for name, value in values.items()}
 
     def load_json_graph(self, json_graph: str, callbacks: dict | None = None):
+        # TODO: maybe check if the models are different than the loaded ones
+        models_node = self.node_graph.get_node_by_name("model")
+        models_node.clear_models()
+
         if callbacks is None:
             callbacks = {"preview_image": self.preview_image}
 
@@ -103,6 +109,16 @@ class NodeGraphThread(QThread):
         # Wire image_send node to preview images
         image_send = self.node_graph.get_node_by_name("image_send")
         image_send.image_callback = self.preview_image
+
+    def update_model(self, model_data_object: ModelDataObject):
+        node = self.node_graph.get_node_by_name("model")
+
+        node.update_model(
+            path=model_data_object.filepath,
+            model_name=model_data_object.name,
+            version=model_data_object.version,
+            model_type=model_data_object.model_type,
+        )
 
     def add_lora(self, lora_data):
         lora_node = self.node_graph.get_node_by_name(f"{lora_data.name}_{lora_data.version}_lora")

@@ -122,7 +122,10 @@ class ZImageModelNode(Node):
 
     def clear_models(self):
         self.values["transformer"] = None
-        self.values["text_encoder"] = None
         self.values["tokenizer"] = None
+        self.values["text_encoder"] = None
+        self.values["vae"] = None
+
         if torch.cuda.is_available():
+            torch.cuda.ipc_collect()
             torch.cuda.empty_cache()

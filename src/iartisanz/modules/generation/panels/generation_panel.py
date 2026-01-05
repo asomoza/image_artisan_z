@@ -1,5 +1,9 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from PyQt6.QtCore import QSignalBlocker, Qt
-from PyQt6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout
+from PyQt6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from superqt import QDoubleRangeSlider, QLabeledDoubleSlider, QLabeledSlider
 
 from iartisanz.modules.generation.constants import SCHEDULER_NAME_CLASS_MAPPING, SCHEDULER_NAMES
@@ -7,6 +11,10 @@ from iartisanz.modules.generation.data_objects.scheduler_data_object import Sche
 from iartisanz.modules.generation.panels.base_panel import BasePanel
 from iartisanz.modules.generation.widgets.image_dimensions_widget import ImageDimensionsWidget
 from iartisanz.utils.json_utils import cast_number_range, cast_scheduler
+
+
+if TYPE_CHECKING:
+    from iartisanz.modules.generation.data_objects.model_data_object import ModelDataObject
 
 
 class GenerationPanel(BasePanel):
@@ -24,8 +32,10 @@ class GenerationPanel(BasePanel):
             self.gen_settings.guidance_scale,
             self.gen_settings.guidance_start_end,
             self.gen_settings.scheduler,
+            self.gen_settings.model,
         )
 
+        self.event_bus.subscribe("model", self.on_model_event)
         self.event_bus.subscribe("json_graph", self.on_json_graph_event)
 
     def init_ui(self):
@@ -98,7 +108,26 @@ class GenerationPanel(BasePanel):
 
         main_layout.addLayout(scheduler_config_layout)
 
+        main_layout.addSpacing(10)
+
+        select_base_model_button = QPushButton("Load model")
+        select_base_model_button.clicked.connect(self.open_model_manager_dialog)
+        main_layout.addWidget(select_base_model_button)
+
+        base_model_layout = QHBoxLayout()
+        base_model_label = QLabel("Model: ")
+        base_model_layout.addWidget(base_model_label, 0)
+        self.selected_base_model_label = QLabel("no model selected")
+        base_model_layout.addWidget(self.selected_base_model_label, 1, alignment=Qt.AlignmentFlag.AlignRight)
+        main_layout.addLayout(base_model_layout)
+
         main_layout.addStretch()
+
+        clear_vram_button = QPushButton("Clear VRAM")
+        clear_vram_button.setObjectName("red_button")
+        clear_vram_button.clicked.connect(self.on_clear_vram_clicked)
+        main_layout.addWidget(clear_vram_button)
+
         self.setLayout(main_layout)
 
     def _set_guidance_start_end_ui(self, start: float, end: float):
@@ -160,7 +189,14 @@ class GenerationPanel(BasePanel):
         self.event_bus.publish("generation_change", {"attr": "scheduler", "value": self.scheduler_data_object})
 
     def update_panel(
-        self, width: int, height: int, num_inference_steps: int, guidance_scale: float, guidance_start_end, scheduler
+        self,
+        width: int,
+        height: int,
+        num_inference_steps: int,
+        guidance_scale: float,
+        guidance_start_end,
+        scheduler: SchedulerDataObject,
+        model: ModelDataObject,
     ):
         # Block signals so we don't emit generation_change while initializing
         blockers = [
@@ -176,6 +212,7 @@ class GenerationPanel(BasePanel):
             self.image_dimensions.image_height_value_label.setText(str(int(height)))
             self.steps_slider.setValue(int(num_inference_steps))
             self.guidance_slider.setValue(float(guidance_scale))
+            self.selected_base_model_label.setText(model.name)
         finally:
             for b in blockers:
                 del b
@@ -189,9 +226,24 @@ class GenerationPanel(BasePanel):
         self._set_guidance_start_end_ui(start, end)
         self._set_scheduler_ui(scheduler)
 
+    def open_model_manager_dialog(self):
+        self.event_bus.publish("manage_dialog", {"dialog_type": "model_manager", "action": "open"})
+
+    def on_clear_vram_clicked(self):
+        self.event_bus.publish("module", {"action": "clear_vram"})
+
     #########################################################
     ## SUBSCRIBED BUS EVENTS
     #########################################################
+    def on_model_event(self, data):
+        action = data.get("action")
+        if action == "update":
+            model_data_object = data.get("model_data_object")
+            if model_data_object is not None:
+                self.selected_base_model_label.setText(model_data_object.name)
+            else:
+                self.selected_base_model_label.setText("no model selected")
+
     def on_json_graph_event(self, data):
         action = data.get("action")
         if action == "loaded":
@@ -203,5 +255,6 @@ class GenerationPanel(BasePanel):
             guidance_scale = data.get("guidance_scale", self.gen_settings.guidance_scale)
             guidance_start_end = data.get("guidance_start_end", self.gen_settings.guidance_start_end)
             scheduler = data.get("scheduler", self.gen_settings.scheduler)
+            model = data.get("model", self.gen_settings.model)
 
-            self.update_panel(width, height, num_inference_steps, guidance_scale, guidance_start_end, scheduler)
+            self.update_panel(width, height, num_inference_steps, guidance_scale, guidance_start_end, scheduler, model)

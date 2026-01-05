@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import os
 import shutil
@@ -144,7 +146,7 @@ class LoraManagerDialog(BaseDialog):
             path=model_item_widget.model_data.filepath,
         )
 
-        lora_info_widget = LoraInfoWidget(model_item_widget, self.directories)
+        lora_info_widget = LoraInfoWidget(model_item_widget)
         lora_info_widget.lora_edit.connect(self.on_lora_edit_clicked)
         lora_info_widget.lora_deleted.connect(self.on_lora_deleted)
         lora_info_widget.trigger_clicked.connect(self.on_trigger_clicked)

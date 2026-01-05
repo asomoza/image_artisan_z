@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
+from iartisanz.modules.generation.data_objects.model_data_object import ModelDataObject
 from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 
 
@@ -152,5 +153,29 @@ def cast_scheduler(value) -> SchedulerDataObject:
             pass
         return SchedulerDataObject()
 
-    # Unknown type -> fallback
     return SchedulerDataObject()
+
+
+def cast_model(value: Any) -> ModelDataObject | None:
+    if isinstance(value, ModelDataObject):
+        return value
+
+    if value is None:
+        return ModelDataObject()
+
+    if isinstance(value, dict):
+        try:
+            return ModelDataObject.from_dict(value)
+        except Exception:
+            return ModelDataObject()
+
+    if isinstance(value, str):
+        try:
+            data = json.loads(value)
+            if isinstance(data, dict):
+                return ModelDataObject.from_dict(data)
+        except Exception:
+            pass
+        return ModelDataObject()
+
+    return ModelDataObject()

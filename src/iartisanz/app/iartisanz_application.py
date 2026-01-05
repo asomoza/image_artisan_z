@@ -71,6 +71,7 @@ class BaseTorchAppApplication(QApplication):
 
         data_path = settings.value("data_path", None, type=str)
         models_diffusers = settings.value("models_diffusers", None, type=str)
+        models_singlefile = settings.value("models_singlefile", None, type=str)
         models_loras = settings.value("models_loras", None, type=str)
         outputs_images = settings.value("outputs_images", None, type=str)
         outputs_source_images = settings.value("outputs_source_images", None, type=str)
@@ -78,6 +79,7 @@ class BaseTorchAppApplication(QApplication):
         self.directories = DirectoriesObject(
             data_path=data_path,
             models_diffusers=models_diffusers,
+            models_singlefile=models_singlefile,
             models_loras=models_loras,
             outputs_images=outputs_images,
             outputs_source_images=outputs_source_images,
@@ -89,6 +91,7 @@ class BaseTorchAppApplication(QApplication):
             for v in [
                 data_path,
                 models_diffusers,
+                models_singlefile,
                 models_loras,
                 outputs_images,
                 outputs_source_images,

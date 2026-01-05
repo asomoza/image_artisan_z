@@ -6,8 +6,9 @@ from typing import Any
 
 from PyQt6.QtCore import QSettings
 
+from iartisanz.modules.generation.data_objects.model_data_object import ModelDataObject
 from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
-from iartisanz.utils.json_utils import cast_number_range, cast_scheduler
+from iartisanz.utils.json_utils import cast_model, cast_number_range, cast_scheduler
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -72,6 +73,7 @@ class GenerationSettings:
     guidance_start_end: list[float] = field(default_factory=lambda: [0.0, 1.0])
     scheduler: SchedulerDataObject = field(default_factory=SchedulerDataObject)
     strength: float = 0.5
+    model: ModelDataObject = field(default_factory=ModelDataObject)
 
     GROUP: str = "generation"
 
@@ -123,6 +125,9 @@ class GenerationSettings:
 
             settings.strength = _coerce_float(qsettings.value("strength", settings.strength), settings.strength)
 
+            raw_model = _coerce_json(qsettings.value("model", ModelDataObject().to_dict()))
+            settings.model = cast_model(raw_model)
+
             return settings
         finally:
             qsettings.endGroup()
@@ -138,6 +143,7 @@ class GenerationSettings:
             qsettings.setValue("guidance_start_end", list(self.guidance_start_end))
             qsettings.setValue("scheduler", self.scheduler.to_dict())
             qsettings.setValue("strength", float(self.strength))
+            qsettings.setValue("model", self.model.to_dict())
         finally:
             qsettings.endGroup()
 
@@ -198,6 +204,10 @@ class GenerationSettings:
         if attr == "strength":
             self.strength = _coerce_float(value, self.strength)
             return (True, self.strength)
+
+        if attr == "model":
+            self.model = cast_model(value)
+            return (True, None)
 
         # Fallback: handled but not forwarded
         setattr(self, attr, value)
