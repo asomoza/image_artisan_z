@@ -144,6 +144,7 @@ class LoraManagerDialog(BaseDialog):
             enabled=True,
             filename=model_item_widget.model_data.root_filename,
             path=model_item_widget.model_data.filepath,
+            lora_node_name=f"{model_item_widget.model_data.name}_{model_item_widget.model_data.version}_lora",
         )
 
         lora_info_widget = LoraInfoWidget(model_item_widget)

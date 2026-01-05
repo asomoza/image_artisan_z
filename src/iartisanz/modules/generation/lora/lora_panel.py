@@ -1,12 +1,9 @@
 import logging
-import os
 
 from PyQt6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
-from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.lora.lora_added_item import LoraAddedItem
 from iartisanz.modules.generation.panels.base_panel import BasePanel
-from iartisanz.utils.database import Database
 
 
 logger = logging.getLogger(__name__)
@@ -19,7 +16,7 @@ class LoraPanel(BasePanel):
         self.init_ui()
 
         self.event_bus.subscribe("lora", self.on_lora_event)
-        self.event_bus.subscribe("json_graph", self.on_json_graph_event)
+        self.event_bus.subscribe("lora_panel", self.on_lora_panel_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -66,40 +63,14 @@ class LoraPanel(BasePanel):
     #########################################################
     ## SUBSCRIBED BUS EVENTS
     #########################################################
-    def on_json_graph_event(self, data):
+    def on_lora_panel_event(self, data):
         action = data.get("action")
-        if action == "loaded":
-            data = data.get("data", {})
-            loras = data.get("loras", [])
+        if action == "loras_updated":
+            loaded_loras = data.get("loaded_loras")
 
-            if loras:
+            if loaded_loras:
                 self.clear_loras_layout()
 
-                for lora_data in loras:
-                    lora_database_id = lora_data.get("database_id", 0)
-
-                    if lora_database_id != 0:
-                        database = Database(os.path.join(self.directories.data_path, "app.db"))
-                        lora_db_item = database.select_one(
-                            "lora_model",
-                            ["name", "version", "model_type", "root_filename", "filepath"],
-                            {"id": lora_database_id},
-                        )
-
-                        if lora_db_item is None:
-                            logger.debug(f"LoRA with id {lora_database_id} not found in database.")
-                            continue
-
-                        lora_data_object = LoraDataObject(
-                            id=lora_data.get("id", 0),
-                            name=lora_db_item["name"],
-                            version=lora_db_item["version"],
-                            type=lora_db_item["model_type"],
-                            enabled=lora_data.get("enabled", True),
-                            filename=lora_db_item["root_filename"],
-                            path=lora_db_item["filepath"],
-                        )
-                        lora_widget = LoraAddedItem(lora_data_object)
-                        self.loras_layout.addWidget(lora_widget)
-                    else:
-                        logger.debug("LoRA doesn't have a database id.")
+                for lora_data_object in loaded_loras:
+                    lora_widget = LoraAddedItem(lora_data_object)
+                    self.loras_layout.addWidget(lora_widget)

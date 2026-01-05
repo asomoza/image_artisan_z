@@ -136,6 +136,7 @@ class LoraInfoWidget(QWidget):
             enabled=True,
             filename=self.model_item.model_data.root_filename,
             path=self.model_item.model_data.filepath,
+            lora_node_name=f"{self.model_item.model_data.name}_{self.model_item.model_data.version}_lora",
         )
 
         self.event_bus.publish("lora", {"action": "add", "lora": lora})

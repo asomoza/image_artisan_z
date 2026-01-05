@@ -16,6 +16,7 @@ from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
 
 if TYPE_CHECKING:
     from iartisanz.app.directories import DirectoriesObject
+    from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
     from iartisanz.modules.generation.data_objects.model_data_object import ModelDataObject
     from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
 
@@ -120,8 +121,8 @@ class NodeGraphThread(QThread):
             model_type=model_data_object.model_type,
         )
 
-    def add_lora(self, lora_data):
-        lora_node = self.node_graph.get_node_by_name(f"{lora_data.name}_{lora_data.version}_lora")
+    def add_lora(self, lora_data: LoraDataObject):
+        lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
 
         if lora_node is not None:
             return
@@ -136,22 +137,22 @@ class NodeGraphThread(QThread):
             database_id=lora_data.id,
         )
         lora_node.connect("transformer", self.node_graph.get_node_by_name("model"), "transformer")
-        self.node_graph.add_node(lora_node, f"{lora_data.name}_{lora_data.version}_lora")
+        self.node_graph.add_node(lora_node, lora_data.lora_node_name)
 
         denoise = self.node_graph.get_node_by_name("denoise")
         denoise.connect("lora", lora_node, "lora")
 
-    def update_lora_weight(self, lora_data, weight: float):
-        lora_node = self.node_graph.get_node_by_name(f"{lora_data.name}_{lora_data.version}_lora")
+    def update_lora_weight(self, lora_data: LoraDataObject):
+        lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
         if lora_node is not None:
-            lora_node.update_lora_weight(weight)
+            lora_node.update_lora_weight(lora_data.transformer_weight)
 
-    def update_lora_enabled(self, lora_node_name: str, enabled: bool):
-        lora_node = self.node_graph.get_node_by_name(lora_node_name)
+    def update_lora_enabled(self, lora_data: LoraDataObject):
+        lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
         if lora_node is not None:
-            lora_node.update_lora_enabled(enabled)
+            lora_node.update_lora_enabled(lora_data.enabled)
 
-    def remove_lora(self, lora_data):
+    def remove_lora(self, lora_data: LoraDataObject):
         lora_node = None
         for node in self.node_graph.nodes:
             if isinstance(node, LoraNode):

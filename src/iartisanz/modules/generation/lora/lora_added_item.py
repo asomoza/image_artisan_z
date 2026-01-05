@@ -9,7 +9,6 @@ from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataO
 class LoraAddedItem(QFrame):
     remove_clicked = pyqtSignal(object)
     weight_changed = pyqtSignal()
-    advanced_clicked = pyqtSignal(object)
 
     def __init__(self, lora: LoraDataObject):
         super().__init__()
@@ -53,13 +52,11 @@ class LoraAddedItem(QFrame):
         self.setLayout(main_layout)
 
     def on_check_enabled(self, checked: bool):
-        self.event_bus.publish(
-            "lora",
-            {"action": "enable", "lora_node_name": f"{self.lora.name}_{self.lora.version}_lora", "enabled": checked},
-        )
+        self.lora.enabled = checked
+        self.event_bus.publish("lora", {"action": "enable", "lora": self.lora})
 
     def on_removed(self):
         self.event_bus.publish("lora", {"action": "remove", "lora": self.lora})
 
     def open_advanced(self):
-        self.advanced_clicked.emit(self.lora)
+        self.event_bus.publish("manage_dialog", {"dialog_type": "lora_advanced", "action": "open", "lora": self.lora})

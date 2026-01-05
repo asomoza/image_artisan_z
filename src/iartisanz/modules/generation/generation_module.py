@@ -14,6 +14,7 @@ from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
 from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
+from iartisanz.modules.generation.lora.lora_advanced_dialog import LoraAdvancedDialog
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
 from iartisanz.modules.generation.model.model_manager_dialog import ModelManagerDialog
@@ -22,6 +23,7 @@ from iartisanz.modules.generation.threads.generation_thread import NodeGraphThre
 from iartisanz.modules.generation.widgets.drop_lightbox_widget import DropLightBox
 from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 from iartisanz.modules.generation.widgets.prompts_widget import PromptsWidget
+from iartisanz.utils.database import Database
 from iartisanz.utils.image_converters import convert_latents_to_rgb, convert_numpy_to_pixmap
 from iartisanz.utils.image_utils import fast_upscale_and_denoise
 from iartisanz.utils.json_utils import extract_dict_from_json_graph
@@ -291,21 +293,54 @@ class GenerationModule(BaseModule):
                 self.process_lora_data(subset.get("loras", []))
 
                 self.event_bus.publish("json_graph", {"action": "loaded", "data": subset})
+                self.event_bus.publish("lora_panel", {"action": "loras_updated", "loaded_loras": self.loaded_loras})
 
     def process_lora_data(self, loras_data: list[dict]):
         self.loaded_loras = []
+        database = Database(os.path.join(self.directories.data_path, "app.db"))
 
-        for lora_dict in loras_data:
-            lora_data = LoraDataObject(
-                id=lora_dict.get("database_id", 0),
-                name=lora_dict.get("adapter_name", ""),
-                filename=os.path.basename(lora_dict.get("path", "")),
-                version=lora_dict.get("version", ""),
-                path=lora_dict.get("path", ""),
-                transformer_weight=lora_dict.get("transformer_weight", 1.0),
-                enabled=lora_dict.get("enabled", True),
+        for lora_data in loras_data:
+            lora_data_object = LoraDataObject(
+                id=lora_data.get("database_id", 0),
+                name=lora_data.get("adapter_name", ""),
+                filename=os.path.basename(lora_data.get("path", "")),
+                version=lora_data.get("version", ""),
+                path=lora_data.get("path", ""),
+                transformer_weight=lora_data.get("transformer_weight", 1.0),
+                enabled=lora_data.get("enabled", True),
+                lora_node_name=f"{lora_data.get('adapter_name', '')}_{lora_data.get('version', '')}_lora",
             )
-            self.loaded_loras.append(lora_data)
+
+            if lora_data_object.id != 0:
+                lora_db_item = database.select_one(
+                    "lora_model",
+                    ["name", "version", "model_type", "root_filename", "filepath"],
+                    {"id": lora_data_object.id},
+                )
+
+                if lora_db_item is None:
+                    # if lora not found in database remove it from the graph
+                    logger.debug(f"LoRA {lora_data_object.name} with id {lora_data_object.id} not found in database.")
+                    self.generation_thread.remove_lora(lora_data_object)
+                    continue
+
+                lora_data_object = LoraDataObject(
+                    id=lora_data.get("id", 0),
+                    name=lora_db_item["name"],
+                    version=lora_db_item["version"],
+                    type=lora_db_item["model_type"],
+                    enabled=lora_data.get("enabled", True),
+                    filename=lora_db_item["root_filename"],
+                    path=lora_db_item["filepath"],
+                    transformer_weight=lora_data.get("transformer_weight", 1.0),
+                    lora_node_name=f"{lora_db_item['name']}_{lora_db_item['version']}_lora",
+                )
+                self.loaded_loras.append(lora_data_object)
+            else:
+                # if no database id remove it from the graph
+                self.generation_thread.remove_lora(lora_data_object)
+
+        database.disconnect()
 
     #########################################################
     ## SUBSCRIBED BUS EVENTS
@@ -413,6 +448,21 @@ class GenerationModule(BaseModule):
             elif action == "close":
                 self.dialogs[dialog_type].close()
                 del self.dialogs[dialog_type]
+        elif dialog_type == "lora_advanced":
+            lora_data = data.get("lora")
+            if action == "open":
+                key = f"lora_advanced_{lora_data.name}_{lora_data.version}"
+                if key not in self.dialogs:
+                    self.dialogs[key] = LoraAdvancedDialog(lora_data)
+                    self.dialogs[key].setParent(None)
+                    self.dialogs[key].show()
+                else:
+                    self.dialogs[key].raise_()
+                    self.dialogs[key].activateWindow()
+            elif action == "close":
+                key = f"lora_advanced_{lora_data.name}_{lora_data.version}"
+                self.dialogs[key].close()
+                del self.dialogs[key]
 
     def on_model_event(self, data: dict):
         action = data.get("action")
@@ -431,10 +481,11 @@ class GenerationModule(BaseModule):
             self.generation_thread.add_lora(lora_data)
             self.loaded_loras.append(lora_data)
         elif action == "remove":
-            lora_data = data.get("lora")
-            self.generation_thread.remove_lora(lora_data)
+            self.generation_thread.remove_lora(data.get("lora"))
         elif action == "enable":
-            self.generation_thread.update_lora_enabled(data.get("lora_node_name"), data.get("enabled"))
+            self.generation_thread.update_lora_enabled(data.get("lora"))
+        elif action == "update_weight":
+            self.generation_thread.update_lora_weight(data.get("lora"))
 
     def on_generate_event(self, data: dict):
         action = data.get("action")
@@ -459,6 +510,7 @@ class GenerationModule(BaseModule):
             self.process_lora_data(subset.get("loras", []))
 
             self.event_bus.publish("json_graph", {"action": "loaded", "data": subset})
+            self.event_bus.publish("lora_panel", {"action": "loras_updated", "loaded_loras": self.loaded_loras})
 
             self.on_generate(
                 subset.get("seed"), subset.get("positive_prompt"), subset.get("negative_prompt"), True, True, True

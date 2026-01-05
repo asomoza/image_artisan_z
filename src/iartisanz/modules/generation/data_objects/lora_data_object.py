@@ -7,6 +7,7 @@ class LoraDataObject:
     filename: str = attr.ib()
     version: str = attr.ib()
     path: str = attr.ib()
+    lora_node_name: str = attr.ib()
     enabled: bool = attr.ib(default=True)
     transformer_weight: float = attr.ib(default=1.00)
     node_id: int = attr.ib(default=None)
