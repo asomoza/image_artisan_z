@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
+from iartisanz.modules.generation.graph.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 from iartisanz.utils.image_converters import numpy_to_pt
 
@@ -42,6 +43,9 @@ class DenoiseNode(Node):
 
     @torch.inference_mode()
     def __call__(self):
+        mm = get_model_manager()
+        transformer = mm.resolve(self.transformer, device=self.device)
+
         do_classifier_free_guidance = True if self.guidance_scale > 1 else False
 
         guidance_start = float(self.guidance_start_end[0] if hasattr(self, "guidance_start_end") else 0.0)
@@ -67,9 +71,9 @@ class DenoiseNode(Node):
                 if isinstance(self.lora, list):
                     keys = [item[0] for item in self.lora]
                     transformer_values = [item[1]["transformer"] for item in self.lora]
-                    self.transformer.set_adapters(keys, transformer_values)
+                    transformer.set_adapters(keys, transformer_values)
                 else:
-                    self.transformer.set_adapters([self.lora[0]], self.lora[1]["transformer"])
+                    transformer.set_adapters([self.lora[0]], self.lora[1]["transformer"])
             except RuntimeError as e:
                 raise IArtisanZNodeError(e, self.__class__.__name__)
 
@@ -128,22 +132,22 @@ class DenoiseNode(Node):
             apply_cfg = do_classifier_free_guidance and current_guidance_scale > 0
 
             if apply_cfg:
-                latents_typed = latents.to(self.transformer.dtype)
+                latents_typed = latents.to(transformer.dtype)
                 latent_model_input = latents_typed.repeat(2, 1, 1, 1)
                 prompt_embeds_model_input = [
-                    prompt_embeds.to(dtype=self.transformer.dtype),
-                    negative_prompt_embeds.to(dtype=self.transformer.dtype),
+                    prompt_embeds.to(dtype=transformer.dtype),
+                    negative_prompt_embeds.to(dtype=transformer.dtype),
                 ]
                 timestep_model_input = timestep.repeat(2)
             else:
-                latent_model_input = latents.to(self.transformer.dtype)
-                prompt_embeds_model_input = [prompt_embeds.to(dtype=self.transformer.dtype)]
+                latent_model_input = latents.to(transformer.dtype)
+                prompt_embeds_model_input = [prompt_embeds.to(dtype=transformer.dtype)]
                 timestep_model_input = timestep
 
             latent_model_input = latent_model_input.unsqueeze(2)
             latent_model_input_list = list(latent_model_input.unbind(dim=0))
 
-            model_out_list = self.transformer(
+            model_out_list = transformer(
                 latent_model_input_list, timestep_model_input, prompt_embeds_model_input, return_dict=False
             )[0]
 

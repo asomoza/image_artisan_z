@@ -5,6 +5,7 @@ from diffusers import AutoencoderKL, ZImageTransformer2DModel
 from transformers import Qwen2Tokenizer, Qwen3Model
 
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
+from iartisanz.modules.generation.graph.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
@@ -57,9 +58,14 @@ class ZImageModelNode(Node):
         self.model_type = node_dict["model_type"]
 
     def __call__(self):
+        mm = get_model_manager()
+
         try:
-            self.values["tokenizer"] = Qwen2Tokenizer.from_pretrained(os.path.join(self.path, "tokenizer"))
-            if "tokenizer" not in self.values or self.values["tokenizer"] is None:
+            tokenizer = Qwen2Tokenizer.from_pretrained(
+                os.path.join(self.path, "tokenizer"),
+                local_files_only=True,
+            )
+            if tokenizer is None:
                 raise IArtisanZNodeError(
                     "Error trying to load the tokenizer, probably the file doesn't exists.", self.name
                 )
@@ -67,7 +73,7 @@ class ZImageModelNode(Node):
             raise IArtisanZNodeError(f"Error trying to load the tokenizer: {e}", self.name) from e
 
         try:
-            self.values["text_encoder"] = Qwen3Model.from_pretrained(
+            text_encoder = Qwen3Model.from_pretrained(
                 os.path.join(self.path, "text_encoder"),
                 use_safetensors=True,
                 dtype=self.dtype,
@@ -82,7 +88,7 @@ class ZImageModelNode(Node):
             return
 
         try:
-            self.values["transformer"] = ZImageTransformer2DModel.from_pretrained(
+            transformer = ZImageTransformer2DModel.from_pretrained(
                 os.path.join(self.path, "transformer"),
                 use_safetensors=True,
                 torch_dtype=self.dtype,
@@ -97,7 +103,7 @@ class ZImageModelNode(Node):
             return
 
         try:
-            self.values["vae"] = AutoencoderKL.from_pretrained(
+            vae = AutoencoderKL.from_pretrained(
                 os.path.join(self.path, "vae"),
                 use_safetensors=True,
                 torch_dtype=self.dtype,
@@ -111,8 +117,22 @@ class ZImageModelNode(Node):
         if self.abort:
             return
 
-        self.values["num_channels_latents"] = self.values["transformer"].in_channels
-        self.values["vae_scale_factor"] = 2 ** (len(self.values["vae"].config.block_out_channels) - 1)
+        mm.register_active_model(
+            model_id=self.model_name or self.path,
+            tokenizer=tokenizer,
+            text_encoder=text_encoder,
+            transformer=transformer,
+            vae=vae,
+        )
+
+        # Pass lightweight handles through the graph; heavy objects live in ModelManager.
+        self.values["tokenizer"] = ModelHandle("tokenizer")
+        self.values["text_encoder"] = ModelHandle("text_encoder")
+        self.values["transformer"] = ModelHandle("transformer")
+        self.values["vae"] = ModelHandle("vae")
+
+        self.values["num_channels_latents"] = transformer.in_channels
+        self.values["vae_scale_factor"] = 2 ** (len(vae.config.block_out_channels) - 1)
 
         return self.values
 
@@ -121,6 +141,7 @@ class ZImageModelNode(Node):
         super().delete()
 
     def clear_models(self):
+        get_model_manager().clear()
         self.values["transformer"] = None
         self.values["tokenizer"] = None
         self.values["text_encoder"] = None

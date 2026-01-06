@@ -4,6 +4,7 @@ from diffusers.loaders.lora_conversion_utils import _convert_non_diffusers_z_ima
 from diffusers.models.model_loading_utils import load_state_dict
 
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
+from iartisanz.modules.generation.graph.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
@@ -69,7 +70,10 @@ class LoraNode(Node):
         self.set_updated()
 
     def __call__(self):
-        if self.adapter_name not in getattr(self.transformer, "peft_config", {}):
+        mm = get_model_manager()
+        transformer = mm.resolve(self.transformer, device=self.device)
+
+        if self.adapter_name not in getattr(transformer, "peft_config", {}):
             if not self.path:
                 raise IArtisanZNodeError("LoRA path is empty.", self.name)
 
@@ -96,7 +100,7 @@ class LoraNode(Node):
             if not is_correct_format:
                 raise IArtisanZNodeError("Invalid LoRA checkpoint.", self.name)
 
-            self.transformer.load_lora_adapter(
+            transformer.load_lora_adapter(
                 state_dict,
                 network_alphas=None,
                 adapter_name=self.adapter_name,
@@ -119,8 +123,9 @@ class LoraNode(Node):
         return self.values
 
     def before_delete(self):
+        mm = get_model_manager()
         try:
-            transformer = self.transformer
+            transformer = mm.resolve(self.transformer, device=self.device)
         except Exception:
             return
 

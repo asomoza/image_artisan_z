@@ -1,5 +1,6 @@
 import torch
 
+from iartisanz.modules.generation.graph.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
@@ -13,27 +14,36 @@ class PromptEncoderNode(Node):
 
     @torch.inference_mode()
     def __call__(self):
+        mm = get_model_manager()
+
+        tokenizer = mm.resolve(self.tokenizer)
+        text_encoder = mm.resolve(self.text_encoder, device=self.device)
+
         negative_prompt = self.negative_prompt if self.negative_prompt is not None else ""
 
-        prompt_embeds = self.encode_prompt(self.positive_prompt)
-        negative_prompt_embeds = self.encode_prompt(negative_prompt)
+        prompt_embeds = self.encode_prompt(self.positive_prompt, tokenizer=tokenizer, text_encoder=text_encoder)
+        negative_prompt_embeds = self.encode_prompt(
+            negative_prompt,
+            tokenizer=tokenizer,
+            text_encoder=text_encoder,
+        )
 
         self.values["prompt_embeds"] = prompt_embeds.to("cpu").detach().clone()
         self.values["negative_prompt_embeds"] = negative_prompt_embeds.to("cpu").detach().clone()
 
         return self.values
 
-    def encode_prompt(self, prompt, max_sequence_length=512):
+    def encode_prompt(self, prompt, *, tokenizer, text_encoder, max_sequence_length=512):
         message = {**self.CHAT_TEMPLATE, "content": prompt}
 
-        text_encoder_prompt = self.tokenizer.apply_chat_template(
+        text_encoder_prompt = tokenizer.apply_chat_template(
             [message],
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=True,
         )
 
-        text_inputs = self.tokenizer(
+        text_inputs = tokenizer(
             text_encoder_prompt,
             padding="max_length",
             max_length=max_sequence_length,
@@ -44,7 +54,7 @@ class PromptEncoderNode(Node):
         text_input_ids = text_inputs.input_ids.to(self.device)
         prompt_masks = text_inputs.attention_mask.to(self.device).bool()
 
-        prompt_embeds = self.text_encoder(
+        prompt_embeds = text_encoder(
             input_ids=text_input_ids,
             attention_mask=prompt_masks,
             output_hidden_states=True,

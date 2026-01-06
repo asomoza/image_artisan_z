@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 
+from iartisanz.modules.generation.graph.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
@@ -10,10 +11,13 @@ class LatentsDecoderNode(Node):
 
     @torch.inference_mode()
     def __call__(self):
-        latents = self.latents.to(self.device, self.vae.dtype)
-        latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
+        mm = get_model_manager()
+        vae = mm.resolve(self.vae, device=self.device)
 
-        decoded = self.vae.decode(latents, return_dict=False)[0]
+        latents = self.latents.to(self.device, vae.dtype)
+        latents = (latents / vae.config.scaling_factor) + vae.config.shift_factor
+
+        decoded = vae.decode(latents, return_dict=False)[0]
         image = decoded[0]
         image = (image / 2 + 0.5).clamp(0, 1)
 

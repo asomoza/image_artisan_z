@@ -8,6 +8,7 @@ import torch
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
+from iartisanz.modules.generation.graph.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes import NODE_CLASSES
 from iartisanz.modules.generation.graph.nodes.image_load_node import ImageLoadNode
 from iartisanz.modules.generation.graph.nodes.lora_node import LoraNode
@@ -75,6 +76,9 @@ class NodeGraphThread(QThread):
         model_node = self.node_graph.get_node_by_name("model")
         if model_node is not None:
             model_node.clear_models()
+
+        # Safety: ensure global manager is cleared even if model node isn't present.
+        get_model_manager().clear()
 
         self.node_graph = None
         self.dtype = None

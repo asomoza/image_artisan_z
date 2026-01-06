@@ -3,6 +3,7 @@ import torch
 from diffusers.utils.torch_utils import randn_tensor
 
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
+from iartisanz.modules.generation.graph.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 from iartisanz.utils.image_converters import normalize, numpy_to_pt
 
@@ -18,6 +19,7 @@ class LatentsNode(Node):
         self.latents = latents
 
     def __call__(self):
+        mm = get_model_manager()
         generator = torch.Generator(device=self.device).manual_seed(self.seed)
 
         height = 2 * (int(self.height) // (self.vae_scale_factor * 2))
@@ -29,6 +31,12 @@ class LatentsNode(Node):
 
         if image is not None:
             try:
+                # Optional input "vae" may be wired (or omitted); either way resolve from ModelManager.
+                vae_input = getattr(self, "vae", None)
+                if vae_input is None:
+                    vae_input = ModelHandle("vae")
+                vae = mm.resolve(vae_input, device=self.device)
+
                 if isinstance(image, np.ndarray):
                     np_image = image
                 else:
@@ -44,8 +52,8 @@ class LatentsNode(Node):
 
                 image = numpy_to_pt(np_image[None, ...]).to(device=self.device, dtype=self.dtype)
                 image = normalize(image)
-                latents = self.vae.encode(image).latent_dist.sample(generator)
-                latents = (latents - self.vae.config.shift_factor) * self.vae.config.scaling_factor
+                latents = vae.encode(image).latent_dist.sample(generator)
+                latents = (latents - vae.config.shift_factor) * vae.config.scaling_factor
                 noise = randn_tensor(shape, generator=generator, device=self.device, dtype=self.dtype)
             except Exception as e:
                 raise IArtisanZNodeError(e, self.__class__.__name__)
