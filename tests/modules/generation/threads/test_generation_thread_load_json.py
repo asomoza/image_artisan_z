@@ -9,12 +9,18 @@ class FakeNode:
         self.image_callback = None
 
 
+class FakeModelNode:
+    def clear_models(self):
+        pass
+
+
 class FakeGraph:
     def __init__(self):
         self.from_json_called = False
         self.from_json_args = None
         self._denoise = FakeNode()
         self._image_send = FakeNode()
+        self._model = FakeModelNode()
         self.nodes = []
 
     def set_abort_function(self, fn):
@@ -29,6 +35,8 @@ class FakeGraph:
             return self._denoise
         if name == "image_send":
             return self._image_send
+        if name == "model":
+            return self._model
         return None
 
 
