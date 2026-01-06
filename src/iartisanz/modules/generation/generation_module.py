@@ -376,6 +376,10 @@ class GenerationModule(BaseModule):
             self.prompts_widget.previous_negative_prompt = None
             self.prompts_widget.previous_seed = None
 
+            # force activate generation
+            self.prompts_widget.set_button_generate()
+            self.generating = False
+
     def on_generation_change_event(self, data):
         attr = data.get("attr")
         if not attr:
@@ -394,6 +398,7 @@ class GenerationModule(BaseModule):
         else:
             self.generation_thread.update_node(attr, value)
 
+    # TODO: refactor this method to make the logic better and cleaner (remove if elif chain)
     def on_manage_dialog_event(self, data):
         dialog_type = data.get("dialog_type")
         action = data.get("action")
@@ -453,14 +458,14 @@ class GenerationModule(BaseModule):
             if action == "open":
                 key = f"lora_advanced_{lora_data.name}_{lora_data.version}"
                 if key not in self.dialogs:
-                    self.dialogs[key] = LoraAdvancedDialog(lora_data)
+                    self.dialogs[key] = LoraAdvancedDialog(key, lora_data)
                     self.dialogs[key].setParent(None)
                     self.dialogs[key].show()
                 else:
                     self.dialogs[key].raise_()
                     self.dialogs[key].activateWindow()
             elif action == "close":
-                key = f"lora_advanced_{lora_data.name}_{lora_data.version}"
+                key = data.get("dialog_key")
                 self.dialogs[key].close()
                 del self.dialogs[key]
 
@@ -484,8 +489,10 @@ class GenerationModule(BaseModule):
             self.generation_thread.remove_lora(data.get("lora"))
         elif action == "enable":
             self.generation_thread.update_lora_enabled(data.get("lora"))
-        elif action == "update_weight":
-            self.generation_thread.update_lora_weight(data.get("lora"))
+        elif action == "update_weights":
+            self.generation_thread.update_lora_weights(data.get("lora"))
+        elif action == "update_lora_transformer_granular_enabled":
+            self.generation_thread.update_lora_transformer_granular_enabled(data.get("lora"))
 
     def on_generate_event(self, data: dict):
         action = data.get("action")
@@ -516,6 +523,7 @@ class GenerationModule(BaseModule):
                 subset.get("seed"), subset.get("positive_prompt"), subset.get("negative_prompt"), True, True, True
             )
 
+    # TODO: refactor this method to make the logic better and cleaner (remove if elif chain)
     def on_source_image_event(self, data: dict):
         action = data.get("action")
         if action == "add":

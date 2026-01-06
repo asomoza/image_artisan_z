@@ -19,6 +19,8 @@ class LoraNode(Node):
         lora_name: str = None,
         version: str = None,
         transformer_weight: float = None,
+        granular_transformer_weights_enabled: bool = False,
+        transformer_granular_weights: dict[str, float] = None,
         is_slider: bool = False,
         database_id: int = 0,
     ):
@@ -28,18 +30,38 @@ class LoraNode(Node):
         self.lora_name = lora_name
         self.version = version
         self.transformer_weight = transformer_weight
+        self.granular_transformer_weights_enabled = granular_transformer_weights_enabled
+        self.transformer_granular_weights = transformer_granular_weights
         self.is_slider = is_slider
         self.database_id = database_id
         self.lora_enabled = True
 
-    def update_lora(self, lora_enabled: bool, transformer_weight: float, is_slider: bool):
+    def update_lora(
+        self,
+        lora_enabled: bool,
+        transformer_weight: float,
+        granular_transformer_weights_enabled: bool,
+        granular_transformer_weights: dict[str, float],
+        is_slider: bool,
+    ):
         self.lora_enabled = lora_enabled
         self.transformer_weight = transformer_weight
+        self.granular_transformer_weights_enabled = granular_transformer_weights_enabled
+        self.transformer_granular_weights = granular_transformer_weights
         self.is_slider = is_slider
         self.set_updated()
 
-    def update_lora_weight(self, transformer_weight: float):
+    def update_lora_weights(self, transformer_weight: float, granular_transformer_weights: dict[str, float]):
         self.transformer_weight = transformer_weight
+        self.transformer_granular_weights = granular_transformer_weights
+        self.set_updated()
+
+    def update_lora_transformer_granular_enabled(self, enabled: bool):
+        self.granular_transformer_weights_enabled = enabled
+        self.set_updated()
+
+    def update_slider_enabled(self, is_slider: bool):
+        self.is_slider = is_slider
         self.set_updated()
 
     def update_lora_enabled(self, lora_enabled: bool):
@@ -84,7 +106,11 @@ class LoraNode(Node):
                 hotswap=False,
             )
 
-        scale = {"transformer": float(self.transformer_weight) if self.transformer_weight is not None else 1.0}
+        scale = {
+            "transformer": self.transformer_granular_weights
+            if self.granular_transformer_weights_enabled
+            else self.transformer_weight
+        }
 
         if not self.lora_enabled:
             scale = {"transformer": 0.0}

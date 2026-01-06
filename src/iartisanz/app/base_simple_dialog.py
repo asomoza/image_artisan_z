@@ -54,7 +54,3 @@ class BaseSimpleDialog(QDialog):
         painter.drawLine(0, 0, 0, self.height())
         painter.drawLine(self.width(), 0, self.width(), self.height())
         painter.drawLine(0, self.height(), self.width(), self.height())
-
-    def closeEvent(self, event):
-        self.closed.emit()
-        super().closeEvent(event)
