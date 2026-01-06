@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import threading
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
@@ -56,6 +57,10 @@ class ModelManager:
         self._components: dict[ModelComponent, Any] = {}
         self._model_id: str | None = None
 
+        # Per-thread defaults for where models should live while the graph runs.
+        # Nodes should not be responsible for model placement; they run under a scope.
+        self._scope_local = threading.local()
+
         # Simple policy: when a component is moved to CUDA, offload the other
         # heavy components (text_encoder/transformer/vae) back to CPU.
         self.offload_others_on_cuda_acquire: bool = True
@@ -71,6 +76,43 @@ class ModelManager:
                     torch.cuda.ipc_collect()
                 except Exception:
                     pass
+
+    def _get_scope_stack(self) -> list[tuple[torch.device | None, torch.dtype | None]]:
+        stack = getattr(self._scope_local, "stack", None)
+        if stack is None:
+            stack = []
+            self._scope_local.stack = stack
+        return stack
+
+    def _scoped_defaults(self) -> tuple[torch.device | None, torch.dtype | None]:
+        stack = self._get_scope_stack()
+        if not stack:
+            return None, None
+        return stack[-1]
+
+    @contextlib.contextmanager
+    def device_scope(
+        self,
+        *,
+        device: torch.device | str | None,
+        dtype: torch.dtype | None = None,
+    ):
+        """Temporarily set default device/dtype for model components.
+
+        Within this scope, calls to `get()` / `resolve()` without an explicit
+        `device` / `dtype` will use these defaults.
+        """
+
+        stack = self._get_scope_stack()
+
+        scoped_device = torch.device(device) if device is not None else None
+        stack.append((scoped_device, dtype))
+        try:
+            yield self
+        finally:
+            # Always unwind even if a node errors.
+            if stack:
+                stack.pop()
 
     def register_active_model(
         self,
@@ -111,6 +153,12 @@ class ModelManager:
                 )
 
             obj = self._components[component]
+
+            scoped_device, scoped_dtype = self._scoped_defaults()
+            if device is None:
+                device = scoped_device
+            if dtype is None:
+                dtype = scoped_dtype
 
             # Tokenizers are not torch modules; leave them as-is.
             if device is None or not _is_torch_module(obj):

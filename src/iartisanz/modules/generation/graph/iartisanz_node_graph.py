@@ -90,6 +90,9 @@ class ImageArtisanZNodeGraph:
 
     @torch.no_grad()
     def __call__(self):
+        # Ensure model placement decisions are made centrally.
+        from iartisanz.modules.generation.graph.model_manager import get_model_manager
+
         self.updated = False
         sorted_nodes = deque()
         visited = set()
@@ -112,29 +115,31 @@ class ImageArtisanZNodeGraph:
             if node not in visited:
                 dfs(node)
 
-        for node in sorted_nodes:
-            if node.updated and node.enabled:
-                node.device = self.device
-                node.dtype = self.dtype
-                start_time = time.time()
+        mm = get_model_manager()
+        with mm.device_scope(device=self.device, dtype=self.dtype):
+            for node in sorted_nodes:
+                if node.updated and node.enabled:
+                    node.device = self.device
+                    node.dtype = self.dtype
+                    start_time = time.time()
 
-                try:
-                    self.executing_node = node
-                    node()
-                except IArtisanZNodeError:
-                    raise
+                    try:
+                        self.executing_node = node
+                        node()
+                    except IArtisanZNodeError:
+                        raise
 
-                end_time = time.time()
-                node.elapsed_time = end_time - start_time
-                self.updated = True
-                self.executing_node = None
+                    end_time = time.time()
+                    node.elapsed_time = end_time - start_time
+                    self.updated = True
+                    self.executing_node = None
 
-                if node.abort:
-                    node.abort = False
-                    self.abort_function()
-                    break
+                    if node.abort:
+                        node.abort = False
+                        self.abort_function()
+                        break
 
-                node.updated = False
+                    node.updated = False
 
     def to_json(self, additional_generation_data: dict | None = None):
         if additional_generation_data is None:

@@ -17,7 +17,7 @@ class PromptEncoderNode(Node):
         mm = get_model_manager()
 
         tokenizer = mm.resolve(self.tokenizer)
-        text_encoder = mm.resolve(self.text_encoder, device=self.device)
+        text_encoder = mm.resolve(self.text_encoder)
 
         negative_prompt = self.negative_prompt if self.negative_prompt is not None else ""
 

@@ -79,7 +79,6 @@ class ZImageModelNode(Node):
                 dtype=self.dtype,
                 local_files_only=True,
                 low_cpu_mem_usage=True,
-                device_map=self.device,
             )
         except OSError as e:
             raise IArtisanZNodeError(f"Error trying to load the text encoder: {e}", self.name) from e
@@ -94,7 +93,6 @@ class ZImageModelNode(Node):
                 torch_dtype=self.dtype,
                 local_files_only=True,
                 low_cpu_mem_usage=True,
-                device_map=self.device,
             )
         except OSError as e:
             raise IArtisanZNodeError(f"Error trying to load the transformer: {e}", self.name) from e
@@ -109,7 +107,6 @@ class ZImageModelNode(Node):
                 torch_dtype=self.dtype,
                 local_files_only=True,
                 low_cpu_mem_usage=True,
-                device_map=self.device,
             )
         except OSError as e:
             raise IArtisanZNodeError(f"Error trying to load the VAE: {e}", self.name) from e

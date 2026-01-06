@@ -12,7 +12,7 @@ class LatentsDecoderNode(Node):
     @torch.inference_mode()
     def __call__(self):
         mm = get_model_manager()
-        vae = mm.resolve(self.vae, device=self.device)
+        vae = mm.resolve(self.vae)
 
         latents = self.latents.to(self.device, vae.dtype)
         latents = (latents / vae.config.scaling_factor) + vae.config.shift_factor

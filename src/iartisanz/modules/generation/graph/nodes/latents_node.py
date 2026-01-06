@@ -35,7 +35,7 @@ class LatentsNode(Node):
                 vae_input = getattr(self, "vae", None)
                 if vae_input is None:
                     vae_input = ModelHandle("vae")
-                vae = mm.resolve(vae_input, device=self.device)
+                vae = mm.resolve(vae_input)
 
                 if isinstance(image, np.ndarray):
                     np_image = image

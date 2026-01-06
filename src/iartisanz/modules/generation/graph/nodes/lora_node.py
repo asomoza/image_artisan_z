@@ -71,7 +71,7 @@ class LoraNode(Node):
 
     def __call__(self):
         mm = get_model_manager()
-        transformer = mm.resolve(self.transformer, device=self.device)
+        transformer = mm.resolve(self.transformer)
 
         if self.adapter_name not in getattr(transformer, "peft_config", {}):
             if not self.path:
@@ -125,7 +125,7 @@ class LoraNode(Node):
     def before_delete(self):
         mm = get_model_manager()
         try:
-            transformer = mm.resolve(self.transformer, device=self.device)
+            transformer = mm.resolve(self.transformer)
         except Exception:
             return
 

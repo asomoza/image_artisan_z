@@ -44,7 +44,7 @@ class DenoiseNode(Node):
     @torch.inference_mode()
     def __call__(self):
         mm = get_model_manager()
-        transformer = mm.resolve(self.transformer, device=self.device)
+        transformer = mm.resolve(self.transformer)
 
         do_classifier_free_guidance = True if self.guidance_scale > 1 else False
 
