@@ -1,8 +1,8 @@
 from typing import Union
 
 import numpy as np
-import PIL
 import torch
+from PIL import Image
 from PyQt6.QtGui import QImage, QPixmap
 
 
@@ -22,7 +22,7 @@ def convert_numpy_to_pixmap(numpy_image: np.array) -> QPixmap:
     return pixmap
 
 
-def pil_to_numpy(images: Union[list[PIL.Image.Image], PIL.Image.Image]) -> np.ndarray:
+def pil_to_numpy(images: Union[list[Image.Image], Image.Image]) -> np.ndarray:
     if not isinstance(images, list):
         images = [images]
     images = [np.array(image).astype(np.float32) / 255.0 for image in images]
