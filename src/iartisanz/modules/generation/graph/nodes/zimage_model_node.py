@@ -2,7 +2,7 @@ import os
 
 import torch
 from diffusers import AutoencoderKL, ZImageTransformer2DModel
-from transformers import Qwen2Tokenizer, Qwen3Model
+from transformers import AutoTokenizer, Qwen2Tokenizer, Qwen3Model
 
 from iartisanz.app.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
@@ -64,7 +64,7 @@ class ZImageModelNode(Node):
         if mm.is_active_model(model_id) and all(
             mm.has(c) for c in ("tokenizer", "text_encoder", "transformer", "vae")
         ):
-            # Fast-path: reuse currently loaded model to avoid expensive reloads.
+            # if model didn't change, reuse loaded ones
             self.values["tokenizer"] = ModelHandle("tokenizer")
             self.values["text_encoder"] = ModelHandle("text_encoder")
             self.values["transformer"] = ModelHandle("transformer")
@@ -77,10 +77,19 @@ class ZImageModelNode(Node):
             return self.values
 
         try:
-            tokenizer = Qwen2Tokenizer.from_pretrained(
-                os.path.join(self.path, "tokenizer"),
-                local_files_only=True,
-            )
+            tokenizer_path = os.path.join(self.path, "tokenizer")
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    tokenizer_path,
+                    local_files_only=True,
+                    use_fast=True,
+                    extra_special_tokens={},
+                )
+            except Exception:
+                tokenizer = Qwen2Tokenizer.from_pretrained(
+                    tokenizer_path,
+                    local_files_only=True,
+                )
             if tokenizer is None:
                 raise IArtisanZNodeError(
                     "Error trying to load the tokenizer, probably the file doesn't exists.", self.name
@@ -138,7 +147,7 @@ class ZImageModelNode(Node):
             vae=vae,
         )
 
-        # Pass lightweight handles through the graph; heavy objects live in ModelManager.
+        # use handles instead of heavy objects
         self.values["tokenizer"] = ModelHandle("tokenizer")
         self.values["text_encoder"] = ModelHandle("text_encoder")
         self.values["transformer"] = ModelHandle("transformer")

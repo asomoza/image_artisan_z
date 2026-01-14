@@ -51,8 +51,12 @@ class DenoiseNode(Node):
 
         do_classifier_free_guidance = True if self.guidance_scale > 1 else False
 
-        guidance_start = float(self.guidance_start_end[0] if hasattr(self, "guidance_start_end") else 0.0)
-        guidance_end = float(self.guidance_start_end[1] if hasattr(self, "guidance_start_end") else 1.0)
+        guidance_start_end = getattr(self, "guidance_start_end", None)
+        if guidance_start_end is None:
+            guidance_start, guidance_end = 0.0, 1.0
+        else:
+            guidance_start = float(guidance_start_end[0])
+            guidance_end = float(guidance_start_end[1])
 
         if hasattr(self, "strength") and self.strength is not None:
             num_inference_steps = int(self.num_inference_steps / self.strength)
