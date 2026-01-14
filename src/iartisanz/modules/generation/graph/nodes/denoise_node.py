@@ -46,6 +46,9 @@ class DenoiseNode(Node):
         mm = get_model_manager()
         transformer = mm.resolve(self.transformer)
 
+        # Avoid repeated dtype casts and small allocations inside the denoise loop.
+        transformer_dtype = transformer.dtype
+
         do_classifier_free_guidance = True if self.guidance_scale > 1 else False
 
         guidance_start = float(self.guidance_start_end[0] if hasattr(self, "guidance_start_end") else 0.0)
@@ -80,6 +83,10 @@ class DenoiseNode(Node):
         prompt_embeds = self.prompt_embeds.to(self.device)
         negative_prompt_embeds = self.negative_prompt_embeds.to(self.device)
 
+        # Pre-cast conditioning once per invocation.
+        prompt_embeds_typed = prompt_embeds.to(dtype=transformer_dtype)
+        negative_prompt_embeds_typed = negative_prompt_embeds.to(dtype=transformer_dtype)
+
         timesteps, num_inference_steps = self.retrieve_timesteps(
             self.scheduler,
             num_inference_steps,
@@ -95,8 +102,11 @@ class DenoiseNode(Node):
         latents = self.latents
         masks = None
 
-        if hasattr(self, "noise") and self.noise is not None:
-            latents = self.scheduler.scale_noise(latents, timesteps[:1], self.noise.to(self.device))
+        noise = getattr(self, "noise", None)
+
+        if noise is not None:
+            noise = noise.to(self.device)
+            latents = self.scheduler.scale_noise(latents, timesteps[:1], noise)
 
             # begin differential diffusion
             if hasattr(self, "image_mask") and self.image_mask is not None:
@@ -132,50 +142,42 @@ class DenoiseNode(Node):
             apply_cfg = do_classifier_free_guidance and current_guidance_scale > 0
 
             if apply_cfg:
-                latents_typed = latents.to(transformer.dtype)
+                latents_typed = latents.to(transformer_dtype)
                 latent_model_input = latents_typed.repeat(2, 1, 1, 1)
-                prompt_embeds_model_input = [
-                    prompt_embeds.to(dtype=transformer.dtype),
-                    negative_prompt_embeds.to(dtype=transformer.dtype),
-                ]
+                prompt_embeds_model_input = (prompt_embeds_typed, negative_prompt_embeds_typed)
                 timestep_model_input = timestep.repeat(2)
             else:
-                latent_model_input = latents.to(transformer.dtype)
-                prompt_embeds_model_input = [prompt_embeds.to(dtype=transformer.dtype)]
+                latent_model_input = latents.to(transformer_dtype)
+                prompt_embeds_model_input = (prompt_embeds_typed,)
                 timestep_model_input = timestep
 
             latent_model_input = latent_model_input.unsqueeze(2)
-            latent_model_input_list = list(latent_model_input.unbind(dim=0))
+            latent_model_input_list = latent_model_input.unbind(dim=0)
 
             model_out_list = transformer(
                 latent_model_input_list, timestep_model_input, prompt_embeds_model_input, return_dict=False
             )[0]
 
             if apply_cfg:
-                # Perform CFG
-                pos_out = model_out_list[:1]
-                neg_out = model_out_list[1:]
+                # Perform CFG. Graph currently uses batch=1, so keep this fast-path.
+                pos = model_out_list[0]
+                neg = model_out_list[1]
+                pred = pos + current_guidance_scale * (pos - neg)
 
-                noise_pred = []
-                for j in range(1):
-                    pos = pos_out[j].float()
-                    neg = neg_out[j].float()
+                # Optional CFG renormalization (do math in fp32 for stability).
+                if cfg_normalization and float(cfg_normalization) > 0.0:
+                    pos_f = pos.float()
+                    pred_f = pred.float()
+                    ori_pos_norm = torch.linalg.vector_norm(pos_f)
+                    new_pos_norm = torch.linalg.vector_norm(pred_f)
+                    max_new_norm = ori_pos_norm * float(cfg_normalization)
+                    if new_pos_norm > max_new_norm:
+                        pred_f = pred_f * (max_new_norm / new_pos_norm)
+                    pred = pred_f.to(dtype=pred.dtype)
 
-                    pred = pos + current_guidance_scale * (pos - neg)
-
-                    # Renormalization
-                    if cfg_normalization and float(cfg_normalization) > 0.0:
-                        ori_pos_norm = torch.linalg.vector_norm(pos)
-                        new_pos_norm = torch.linalg.vector_norm(pred)
-                        max_new_norm = ori_pos_norm * float(cfg_normalization)
-                        if new_pos_norm > max_new_norm:
-                            pred = pred * (max_new_norm / new_pos_norm)
-
-                    noise_pred.append(pred)
-
-                noise_pred = torch.stack(noise_pred, dim=0)
+                noise_pred = pred.unsqueeze(0)
             else:
-                noise_pred = torch.stack([t.float() for t in model_out_list], dim=0)
+                noise_pred = torch.stack([out.float() for out in model_out_list], dim=0)
 
             if self.abort:
                 return
@@ -192,7 +194,8 @@ class DenoiseNode(Node):
 
                 if i < len(timesteps) - 1:
                     noise_timestep = timesteps[i + 1]
-                    image_latent = self.scheduler.scale_noise(self.latents, torch.tensor([noise_timestep]), self.noise)
+                    # Keep timestep tensor on-device; avoid creating a new CPU tensor each step.
+                    image_latent = self.scheduler.scale_noise(self.latents, noise_timestep[None], noise)
 
                     mask = masks[i].to(latents.dtype)
                     latents = image_latent * mask + latents * (1 - mask)
@@ -203,7 +206,8 @@ class DenoiseNode(Node):
             if (is_last or is_step_boundary) and self.callback is not None:
                 self.callback(step_idx, t, latents)
 
-        self.values["latents"] = latents.to("cpu").detach().clone()
+        # Return a detached CPU copy; avoid an extra clone.
+        self.values["latents"] = latents.detach().to("cpu")
 
         return self.values
 
