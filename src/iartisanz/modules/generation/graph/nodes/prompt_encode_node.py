@@ -1,6 +1,6 @@
 import torch
 
-from iartisanz.modules.generation.graph.model_manager import get_model_manager
+from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
@@ -51,8 +51,11 @@ class PromptEncoderNode(Node):
             return_tensors="pt",
         )
 
-        text_input_ids = text_inputs.input_ids.to(self.device)
-        prompt_masks = text_inputs.attention_mask.to(self.device).bool()
+        # Keep the text encoder wherever ModelManager placed it (often CPU).
+        # Move input tensors to the encoder device rather than forcing graph device.
+        encoder_device = next(text_encoder.parameters()).device
+        text_input_ids = text_inputs.input_ids.to(encoder_device)
+        prompt_masks = text_inputs.attention_mask.to(encoder_device).bool()
 
         prompt_embeds = text_encoder(
             input_ids=text_input_ids,

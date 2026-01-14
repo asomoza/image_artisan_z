@@ -2,8 +2,8 @@ import numpy as np
 import torch
 from diffusers.utils.torch_utils import randn_tensor
 
+from iartisanz.app.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
-from iartisanz.modules.generation.graph.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 from iartisanz.utils.image_converters import normalize, numpy_to_pt
 

@@ -49,6 +49,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
 
         granular_layout = QHBoxLayout()
         granular_scales_checkbox = QCheckBox("Enable granular scales")
+        granular_scales_checkbox.setChecked(self.lora.granular_transformer_weights_enabled)
         granular_scales_checkbox.toggled.connect(self.on_granular)
         granular_layout.addWidget(granular_scales_checkbox, alignment=Qt.AlignmentFlag.AlignLeft)
 

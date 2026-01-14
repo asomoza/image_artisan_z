@@ -3,8 +3,8 @@ import os
 from diffusers.loaders.lora_conversion_utils import _convert_non_diffusers_z_image_lora_to_diffusers
 from diffusers.models.model_loading_utils import load_state_dict
 
+from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
-from iartisanz.modules.generation.graph.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
@@ -73,6 +73,22 @@ class LoraNode(Node):
         mm = get_model_manager()
         transformer = mm.resolve(self.transformer)
 
+        # If this adapter name was previously loaded from a different file, force a reload.
+        # This prevents stale adapters when users swap LoRAs that share adapter names.
+        existing_src = mm.get_lora_source(self.adapter_name) if self.adapter_name else None
+        if (
+            self.adapter_name
+            and existing_src is not None
+            and self.path
+            and existing_src != self.path
+            and self.adapter_name in getattr(transformer, "peft_config", {})
+        ):
+            try:
+                transformer.delete_adapters([self.adapter_name])
+            except Exception:
+                pass
+            mm.clear_lora_source(self.adapter_name)
+
         if self.adapter_name not in getattr(transformer, "peft_config", {}):
             if not self.path:
                 raise IArtisanZNodeError("LoRA path is empty.", self.name)
@@ -110,6 +126,8 @@ class LoraNode(Node):
                 hotswap=False,
             )
 
+            mm.set_lora_source(self.adapter_name, self.path)
+
         scale = {
             "transformer": self.transformer_granular_weights
             if self.granular_transformer_weights_enabled
@@ -133,3 +151,6 @@ class LoraNode(Node):
             transformer.delete_adapters([self.adapter_name])
         except Exception:
             pass
+
+        if self.adapter_name:
+            mm.clear_lora_source(self.adapter_name)

@@ -31,13 +31,15 @@ def extract_dict_from_json_graph(json_graph: Any, wanted: Iterable[Any], *, incl
                 {
                     "id": state.get("id", node.get("id")),
                     "name": state.get("name", node.get("name")),
-                    "adapter_name": state.get("adapter_name"),
-                    "lora_name": state.get("lora_name"),
-                    "path": state.get("path"),
-                    "transformer_weight": state.get("transformer_weight"),
-                    "version": state.get("version"),
+                    "adapter_name": state.get("adapter_name", None),
+                    "lora_name": state.get("lora_name", None),
+                    "path": state.get("path", None),
+                    "transformer_weight": state.get("transformer_weight", 1.0),
+                    "version": state.get("version", None),
                     "enabled": state.get("enabled", node.get("enabled")),
-                    "database_id": state.get("database_id", node.get("database_id")),
+                    "database_id": state.get("database_id", 0),
+                    "granular_transformer_weights_enabled": state.get("granular_transformer_weights_enabled", False),
+                    "granular_transformer_weights": state.get("transformer_granular_weights", {}),
                 }
             )
 

@@ -91,7 +91,7 @@ class ImageArtisanZNodeGraph:
     @torch.no_grad()
     def __call__(self):
         # Ensure model placement decisions are made centrally.
-        from iartisanz.modules.generation.graph.model_manager import get_model_manager
+        from iartisanz.app.model_manager import get_model_manager
 
         self.updated = False
         sorted_nodes = deque()

@@ -101,6 +101,13 @@ class BaseTorchAppApplication(QApplication):
         return True
 
     def cleanup_on_exit(self):
+        try:
+            from iartisanz.app.model_manager import get_model_manager
+
+            get_model_manager().clear()
+        except Exception as e:
+            logger.debug("Failed to clear model manager on exit: %s", e)
+
         self.cleanup_temp_path()
 
     def cleanup_temp_path(self):

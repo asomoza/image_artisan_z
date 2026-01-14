@@ -4,8 +4,8 @@ import torch
 from diffusers import AutoencoderKL, ZImageTransformer2DModel
 from transformers import Qwen2Tokenizer, Qwen3Model
 
+from iartisanz.app.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
-from iartisanz.modules.generation.graph.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
@@ -59,6 +59,22 @@ class ZImageModelNode(Node):
 
     def __call__(self):
         mm = get_model_manager()
+
+        model_id = self.model_name or self.path
+        if mm.is_active_model(model_id) and all(
+            mm.has(c) for c in ("tokenizer", "text_encoder", "transformer", "vae")
+        ):
+            # Fast-path: reuse currently loaded model to avoid expensive reloads.
+            self.values["tokenizer"] = ModelHandle("tokenizer")
+            self.values["text_encoder"] = ModelHandle("text_encoder")
+            self.values["transformer"] = ModelHandle("transformer")
+            self.values["vae"] = ModelHandle("vae")
+
+            transformer = mm.get_raw("transformer")
+            vae = mm.get_raw("vae")
+            self.values["num_channels_latents"] = transformer.in_channels
+            self.values["vae_scale_factor"] = 2 ** (len(vae.config.block_out_channels) - 1)
+            return self.values
 
         try:
             tokenizer = Qwen2Tokenizer.from_pretrained(
@@ -115,7 +131,7 @@ class ZImageModelNode(Node):
             return
 
         mm.register_active_model(
-            model_id=self.model_name or self.path,
+            model_id=model_id,
             tokenizer=tokenizer,
             text_encoder=text_encoder,
             transformer=transformer,

@@ -19,6 +19,9 @@ sys.excepthook = my_exception_hook
 
 
 def main():
+    from iartisanz.app.model_manager import ModelManager, set_global_model_manager
+
+    set_global_model_manager(ModelManager())
     app = BaseTorchAppApplication(sys.argv)
     sys.exit(app.exec())
 

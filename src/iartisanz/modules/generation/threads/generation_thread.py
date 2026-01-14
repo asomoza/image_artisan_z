@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-import numpy as np
 import torch
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
-from iartisanz.modules.generation.graph.model_manager import get_model_manager
+from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
 from iartisanz.modules.generation.graph.nodes import NODE_CLASSES
 from iartisanz.modules.generation.graph.nodes.image_load_node import ImageLoadNode
 from iartisanz.modules.generation.graph.nodes.lora_node import LoraNode
@@ -27,7 +29,8 @@ logger = logging.getLogger(__name__)
 class NodeGraphThread(QThread):
     status_changed = pyqtSignal(str)
     progress_update = pyqtSignal(int, torch.Tensor)
-    generation_finished = pyqtSignal(np.ndarray)
+    # Emits (image: np.ndarray, duration_seconds: float | None)
+    generation_finished = pyqtSignal(object, object)
     generation_error = pyqtSignal(str, bool)
     generation_aborted = pyqtSignal()
 
@@ -37,6 +40,9 @@ class NodeGraphThread(QThread):
         node_graph: ImageArtisanZNodeGraph,
         dtype: torch.dtype,
         device: torch.device,
+        *,
+        graph_factory: Callable[[], ImageArtisanZNodeGraph] | None = None,
+        node_classes: dict | None = None,
     ):
         super().__init__()
 
@@ -45,37 +51,147 @@ class NodeGraphThread(QThread):
         self.device = device
         self.directories = directories
 
-        self.force_new_graph = False
+        # Staged graph is edited by the UI thread. Each generation run executes
+        # a fresh graph instance created from a JSON snapshot.
         self.node_graph.set_abort_function(self.on_aborted)
-        self.loaded_node_graph = None
+        self._job_json_graph: str | None = None
+        self._active_graph: ImageArtisanZNodeGraph | None = None
 
-    def run(self):
-        self.node_graph.dtype = self.dtype
-        self.node_graph.device = self.device
-        self.status_changed.emit("Generating image...")
+        self._graph_factory = graph_factory or ImageArtisanZNodeGraph
+        self._node_classes = node_classes or NODE_CLASSES
 
-        if self.force_new_graph:
-            node = self.node_graph.get_node_by_name("denoise")
+    def get_staged_json_graph(self) -> str:
+        return self.node_graph.to_json()
+
+    def start_generation(self, json_graph: str) -> None:
+        # Snapshot is captured in the UI thread and treated as immutable for this run.
+        self._job_json_graph = json_graph
+        self.start()
+
+    def _wire_callbacks(self, graph: ImageArtisanZNodeGraph) -> None:
+        node = graph.get_node_by_name("denoise")
+        if node is not None:
             node.callback = self.step_progress_update
 
-            node = self.node_graph.get_node_by_name("image_send")
-            node.image_callback = self.preview_image
+        image_send = graph.get_node_by_name("image_send")
+        if image_send is not None:
+            image_send.image_callback = self.preview_image
 
-            self.force_new_graph = False
+    def _create_run_graph_from_json(self, json_graph: str) -> ImageArtisanZNodeGraph:
+        run_graph = self._graph_factory()
+        run_graph.set_abort_function(self.on_aborted)
+        run_graph.from_json(
+            json_graph, node_classes=self._node_classes, callbacks={"preview_image": self.preview_image}
+        )
+        self._wire_callbacks(run_graph)
+        return run_graph
+
+    def _extract_required_loras(self, json_graph: str) -> dict[str, str | None]:
+        """Return adapter_name -> path for LoRAs that should be active for this run."""
+        try:
+            payload = json.loads(json_graph)
+        except Exception:
+            return {}
+
+        required: dict[str, str | None] = {}
+        for node_dict in payload.get("nodes", []) or []:
+            if node_dict.get("class") != "LoraNode":
+                continue
+
+            if node_dict.get("enabled", True) is False:
+                continue
+
+            state = node_dict.get("state", {}) or {}
+            if state.get("lora_enabled", True) is False:
+                continue
+
+            adapter_name = state.get("adapter_name") or node_dict.get("adapter_name")
+            if not adapter_name:
+                continue
+
+            path = state.get("path") or node_dict.get("path")
+            required[str(adapter_name)] = path
+
+        return required
+
+    def _prune_transformer_loras(self, required: dict[str, str | None]) -> None:
+        mm = get_model_manager()
+        if not mm.has("transformer"):
+            return
 
         try:
-            self.node_graph()
+            transformer = mm.get_raw("transformer")
+        except Exception:
+            return
+
+        loaded = set(getattr(transformer, "peft_config", {}) or {})
+        required_names = set(required.keys())
+
+        # Remove adapters that are no longer referenced by the current snapshot.
+        stale = sorted(loaded - required_names)
+        if stale:
+            try:
+                transformer.delete_adapters(stale)
+            except Exception:
+                pass
+            for name in stale:
+                mm.clear_lora_source(name)
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+        # If an adapter_name is reused for a different file, force reload.
+        for name in sorted(loaded & required_names):
+            desired_path = required.get(name)
+            if desired_path is None:
+                continue
+            current_path = mm.get_lora_source(name)
+            if current_path is not None and current_path != desired_path:
+                try:
+                    transformer.delete_adapters([name])
+                except Exception:
+                    pass
+                mm.clear_lora_source(name)
+                if torch.cuda.is_available():
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+
+    def run(self):
+        self.status_changed.emit("Generating image...")
+
+        json_graph = self._job_json_graph or self.get_staged_json_graph()
+
+        # Keep LoRA adapter set in sync with the active snapshot to avoid
+        # accumulating adapters in VRAM across runs.
+        self._prune_transformer_loras(self._extract_required_loras(json_graph))
+
+        run_graph = self._create_run_graph_from_json(json_graph)
+        run_graph.dtype = self.dtype
+        run_graph.device = self.device
+        self._active_graph = run_graph
+
+        try:
+            run_graph()
         except IArtisanZNodeError as e:
             logger.debug(f"Error in node: '{e.node_name}': {e}")
             self.generation_error.emit(f"Error in node '{e.node_name}': {e}", False)
-
-        if not self.node_graph.updated:
-            self.generation_error.emit("Nothing was changed", False)
+        finally:
+            self._active_graph = None
 
     def clean_up(self):
-        model_node = self.node_graph.get_node_by_name("model")
-        if model_node is not None:
-            model_node.clear_models()
+        if self._active_graph is not None:
+            model_node = self._active_graph.get_node_by_name("model")
+            if model_node is not None:
+                model_node.clear_models()
+
+        if self.node_graph is not None:
+            model_node = self.node_graph.get_node_by_name("model")
+            if model_node is not None:
+                model_node.clear_models()
 
         # Safety: ensure global manager is cleared even if model node isn't present.
         get_model_manager().clear()
@@ -99,21 +215,39 @@ class NodeGraphThread(QThread):
     def load_json_graph(self, json_graph: str, callbacks: dict | None = None):
         # TODO: maybe check if the models are different than the loaded ones
         models_node = self.node_graph.get_node_by_name("model")
-        models_node.clear_models()
+        incoming_model_sig = None
+        try:
+            payload = json.loads(json_graph)
+            for node_dict in payload.get("nodes", []) or []:
+                if node_dict.get("name") == "model":
+                    incoming_model_sig = (
+                        node_dict.get("model_name"),
+                        node_dict.get("path"),
+                        node_dict.get("version"),
+                        node_dict.get("model_type"),
+                    )
+                    break
+        except Exception:
+            incoming_model_sig = None
+
+        current_model_sig = None
+        if models_node is not None:
+            current_model_sig = (
+                getattr(models_node, "model_name", None),
+                getattr(models_node, "path", None),
+                getattr(models_node, "version", None),
+                getattr(models_node, "model_type", None),
+            )
+
+        if models_node is not None and incoming_model_sig is not None and incoming_model_sig != current_model_sig:
+            models_node.clear_models()
 
         if callbacks is None:
             callbacks = {"preview_image": self.preview_image}
 
         self.node_graph.from_json(json_graph, node_classes=NODE_CLASSES, callbacks=callbacks)
 
-        # Wire denoise step callback
-        node = self.node_graph.get_node_by_name("denoise")
-        if node is not None:
-            node.callback = self.step_progress_update
-
-        # Wire image_send node to preview images
-        image_send = self.node_graph.get_node_by_name("image_send")
-        image_send.image_callback = self.preview_image
+        self._wire_callbacks(self.node_graph)
 
     def update_model(self, model_data_object: ModelDataObject):
         node = self.node_graph.get_node_by_name("model")
@@ -248,10 +382,17 @@ class NodeGraphThread(QThread):
         self.progress_update.emit(step, latents)
 
     def preview_image(self, image):
-        self.generation_finished.emit(image)
+        duration = None
+        if self._active_graph is not None:
+            denoise_node = self._active_graph.get_node_by_name("denoise")
+            duration = getattr(denoise_node, "elapsed_time", None) if denoise_node is not None else None
+        self.generation_finished.emit(image, duration)
 
     def abort_graph(self):
-        self.node_graph.abort_graph()
+        if self._active_graph is not None:
+            self._active_graph.abort_graph()
+        elif self.node_graph is not None:
+            self.node_graph.abort_graph()
 
     def on_aborted(self):
         self.generation_aborted.emit()

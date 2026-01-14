@@ -47,6 +47,8 @@ class GenerationModule(BaseModule):
         self.node_graph = create_default_graph()
         self.generating = False
 
+        self._last_generation_json_graph: str | None = None
+
         self.init_ui()
         self.dialogs = {}
 
@@ -123,7 +125,6 @@ class GenerationModule(BaseModule):
         self.generation_thread.generation_finished.connect(self.generation_finished)
         self.generation_thread.generation_error.connect(self.on_generation_error)
         self.generation_thread.generation_aborted.connect(self.generation_aborted)
-        self.generation_thread.force_new_graph = True
 
         # Initialize graph nodes from settings
         self.generation_thread.update_nodes(self.gen_settings.to_graph_nodes())
@@ -165,7 +166,9 @@ class GenerationModule(BaseModule):
         if seed_changed:
             self.generation_thread.update_node("seed", seed)
 
-        self.generation_thread.start()
+        json_graph = self.generation_thread.get_staged_json_graph()
+        self._last_generation_json_graph = json_graph
+        self.generation_thread.start_generation(json_graph)
 
     def step_progress_update(self, step: int, latents: torch.Tensor):
         self.progress_bar.setValue(step)
@@ -186,10 +189,7 @@ class GenerationModule(BaseModule):
     def on_status_changed(self, message: str):
         self.event_bus.publish("status_message", {"action": "change", "message": message})
 
-    def generation_finished(self, image):
-        denoise_node = self.node_graph.get_node_by_name("denoise")
-        duration = denoise_node.elapsed_time
-
+    def generation_finished(self, image, duration=None):
         if duration is not None:
             self.event_bus.publish(
                 "status_message",
@@ -208,8 +208,8 @@ class GenerationModule(BaseModule):
         self.image_viewer.set_pixmap(pixmap)
         self.image_viewer.reset_view()
 
-        json_graph = self.node_graph.to_json()
-        self.image_viewer.set_json_graph(json_graph)
+        if self._last_generation_json_graph is not None:
+            self.image_viewer.set_json_graph(self._last_generation_json_graph)
 
         self.prompts_widget.set_button_generate()
         self.generating = False
@@ -300,27 +300,29 @@ class GenerationModule(BaseModule):
         database = Database(os.path.join(self.directories.data_path, "app.db"))
 
         for lora_data in loras_data:
+            database_id = lora_data.get("database_id", 0)
+
+            # needed in case of removal from graph
             lora_data_object = LoraDataObject(
-                id=lora_data.get("database_id", 0),
                 name=lora_data.get("adapter_name", ""),
-                filename=os.path.basename(lora_data.get("path", "")),
                 version=lora_data.get("version", ""),
-                path=lora_data.get("path", ""),
-                transformer_weight=lora_data.get("transformer_weight", 1.0),
-                enabled=lora_data.get("enabled", True),
-                lora_node_name=f"{lora_data.get('adapter_name', '')}_{lora_data.get('version', '')}_lora",
+                filename="",
+                path="",
+                lora_node_name="",
             )
 
-            if lora_data_object.id != 0:
+            if database_id != 0:
                 lora_db_item = database.select_one(
                     "lora_model",
                     ["name", "version", "model_type", "root_filename", "filepath"],
-                    {"id": lora_data_object.id},
+                    {"id": database_id},
                 )
 
                 if lora_db_item is None:
                     # if lora not found in database remove it from the graph
-                    logger.debug(f"LoRA {lora_data_object.name} with id {lora_data_object.id} not found in database.")
+                    logger.debug(
+                        f"LoRA {lora_data.get('adapter_name').name} with id {database_id} not found in database."
+                    )
                     self.generation_thread.remove_lora(lora_data_object)
                     continue
 
@@ -334,6 +336,8 @@ class GenerationModule(BaseModule):
                     path=lora_db_item["filepath"],
                     transformer_weight=lora_data.get("transformer_weight", 1.0),
                     lora_node_name=f"{lora_db_item['name']}_{lora_db_item['version']}_lora",
+                    granular_transformer_weights_enabled=lora_data.get("granular_transformer_weights_enabled", False),
+                    granular_transformer_weights=lora_data.get("granular_transformer_weights", {}),
                 )
                 self.loaded_loras.append(lora_data_object)
             else:

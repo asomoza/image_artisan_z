@@ -5,8 +5,8 @@ from typing import Optional, Union
 import numpy as np
 import torch
 
+from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
-from iartisanz.modules.generation.graph.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 from iartisanz.utils.image_converters import numpy_to_pt
 

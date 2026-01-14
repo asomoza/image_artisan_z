@@ -52,3 +52,35 @@ def test_load_json_graph_wires_callbacks():
 
     assert fake_graph.get_node_by_name("denoise").callback == thread.step_progress_update
     assert fake_graph.get_node_by_name("image_send").image_callback == thread.preview_image
+
+
+def test_create_run_graph_from_json_uses_fresh_graph_and_wires_callbacks():
+    edit_graph = FakeGraph()
+    created: list[FakeGraph] = []
+
+    def _factory() -> FakeGraph:
+        g = FakeGraph()
+        created.append(g)
+        return g
+
+    sentinel_node_classes = {"Fake": object()}
+    thread = NodeGraphThread(
+        None,
+        edit_graph,
+        torch.float32,
+        torch.device("cpu"),
+        graph_factory=_factory,
+        node_classes=sentinel_node_classes,
+    )
+
+    json_graph = '{"hello": "world"}'
+    run_graph = thread._create_run_graph_from_json(json_graph)
+
+    assert run_graph is not edit_graph
+    assert run_graph is created[0]
+
+    assert run_graph.from_json_called
+    assert run_graph.from_json_args[0] == json_graph
+    assert run_graph.from_json_args[1] == sentinel_node_classes
+    assert run_graph.get_node_by_name("denoise").callback == thread.step_progress_update
+    assert run_graph.get_node_by_name("image_send").image_callback == thread.preview_image
