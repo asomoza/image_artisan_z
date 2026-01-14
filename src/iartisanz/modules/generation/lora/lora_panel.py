@@ -68,9 +68,11 @@ class LoraPanel(BasePanel):
         if action == "loras_updated":
             loaded_loras = data.get("loaded_loras")
 
-            if loaded_loras:
-                self.clear_loras_layout()
+            if loaded_loras is None:
+                return
 
-                for lora_data_object in loaded_loras:
-                    lora_widget = LoraAddedItem(lora_data_object)
-                    self.loras_layout.addWidget(lora_widget)
+            self.clear_loras_layout()
+
+            for lora_data_object in loaded_loras:
+                lora_widget = LoraAddedItem(lora_data_object)
+                self.loras_layout.addWidget(lora_widget)

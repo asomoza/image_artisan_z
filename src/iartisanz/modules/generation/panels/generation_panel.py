@@ -3,7 +3,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QSignalBlocker, Qt
-from PyQt6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+)
 from superqt import QDoubleRangeSlider, QLabeledDoubleSlider, QLabeledSlider
 
 from iartisanz.modules.generation.constants import SCHEDULER_NAME_CLASS_MAPPING, SCHEDULER_NAMES
@@ -33,6 +42,7 @@ class GenerationPanel(BasePanel):
             self.gen_settings.guidance_start_end,
             self.gen_settings.scheduler,
             self.gen_settings.model,
+            bool(getattr(self.gen_settings, "use_torch_compile", False)),
         )
 
         self.event_bus.subscribe("model", self.on_model_event)
@@ -121,7 +131,17 @@ class GenerationPanel(BasePanel):
         base_model_layout.addWidget(self.selected_base_model_label, 1, alignment=Qt.AlignmentFlag.AlignRight)
         main_layout.addLayout(base_model_layout)
 
+        self.use_torch_compile_checkbox = QCheckBox("Use torch.compile")
+        self.use_torch_compile_checkbox.setChecked(bool(getattr(self.gen_settings, "use_torch_compile", False)))
+        self.use_torch_compile_checkbox.toggled.connect(self.on_use_torch_compile_toggled)
+        main_layout.addWidget(self.use_torch_compile_checkbox)
+
         main_layout.addStretch()
+
+        clear_graph_button = QPushButton("Clear Graph")
+        clear_graph_button.setObjectName("red_button")
+        clear_graph_button.clicked.connect(self.on_clear_graph_clicked)
+        main_layout.addWidget(clear_graph_button)
 
         clear_vram_button = QPushButton("Clear VRAM")
         clear_vram_button.setObjectName("red_button")
@@ -197,6 +217,7 @@ class GenerationPanel(BasePanel):
         guidance_start_end,
         scheduler: SchedulerDataObject,
         model: ModelDataObject,
+        use_torch_compile: bool = False,
     ):
         # Block signals so we don't emit generation_change while initializing
         blockers = [
@@ -204,6 +225,7 @@ class GenerationPanel(BasePanel):
             QSignalBlocker(self.image_dimensions.height_slider),
             QSignalBlocker(self.steps_slider),
             QSignalBlocker(self.guidance_slider),
+            QSignalBlocker(self.use_torch_compile_checkbox),
         ]
         try:
             self.image_dimensions.width_slider.setValue(int(width))
@@ -213,6 +235,7 @@ class GenerationPanel(BasePanel):
             self.steps_slider.setValue(int(num_inference_steps))
             self.guidance_slider.setValue(float(guidance_scale))
             self.selected_base_model_label.setText(model.name)
+            self.use_torch_compile_checkbox.setChecked(bool(use_torch_compile))
         finally:
             for b in blockers:
                 del b
@@ -229,7 +252,33 @@ class GenerationPanel(BasePanel):
     def open_model_manager_dialog(self):
         self.event_bus.publish("manage_dialog", {"dialog_type": "model_manager", "action": "open"})
 
+    def on_use_torch_compile_toggled(self, checked: bool):
+        self.event_bus.publish("generation_change", {"attr": "use_torch_compile", "value": bool(checked)})
+
+    def _confirm_destructive_action(self, title: str, text: str) -> bool:
+        res = QMessageBox.question(
+            self,
+            title,
+            text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return res == QMessageBox.StandardButton.Yes
+
+    def on_clear_graph_clicked(self):
+        if not self._confirm_destructive_action(
+            "Clear Graph",
+            "This will reset the node graph to defaults (removing LoRAs/source image wiring). Continue?",
+        ):
+            return
+        self.event_bus.publish("module", {"action": "clear_graph"})
+
     def on_clear_vram_clicked(self):
+        if not self._confirm_destructive_action(
+            "Clear VRAM",
+            "This will abort any running generation and unload models from GPU memory. Continue?",
+        ):
+            return
         self.event_bus.publish("module", {"action": "clear_vram"})
 
     #########################################################
@@ -256,5 +305,15 @@ class GenerationPanel(BasePanel):
             guidance_start_end = data.get("guidance_start_end", self.gen_settings.guidance_start_end)
             scheduler = data.get("scheduler", self.gen_settings.scheduler)
             model = data.get("model", self.gen_settings.model)
+            use_torch_compile = data.get("use_torch_compile", getattr(self.gen_settings, "use_torch_compile", False))
 
-            self.update_panel(width, height, num_inference_steps, guidance_scale, guidance_start_end, scheduler, model)
+            self.update_panel(
+                width,
+                height,
+                num_inference_steps,
+                guidance_scale,
+                guidance_start_end,
+                scheduler,
+                model,
+                use_torch_compile,
+            )

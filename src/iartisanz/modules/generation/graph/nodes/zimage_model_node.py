@@ -26,7 +26,10 @@ class ZImageModelNode(Node):
         self.model_type = model_type
 
     def update_model(self, path: str, model_name: str, version: str, model_type: str):
-        self.clear_models()
+        current_sig = (self.path, self.model_name, self.version, self.model_type)
+        new_sig = (path, model_name, version, model_type)
+        if current_sig != new_sig:
+            self.clear_models()
         self.path = path
         self.model_name = model_name
         self.version = version
@@ -51,11 +54,16 @@ class ZImageModelNode(Node):
         return node
 
     def update_inputs(self, node_dict):
-        self.clear_models()
-        self.path = node_dict["path"]
-        self.model_name = node_dict["model_name"]
-        self.version = node_dict["version"]
-        self.model_type = node_dict["model_type"]
+        new_sig = (
+            node_dict["path"],
+            node_dict["model_name"],
+            node_dict["version"],
+            node_dict["model_type"],
+        )
+        current_sig = (self.path, self.model_name, self.version, self.model_type)
+        if current_sig != new_sig:
+            self.clear_models()
+        self.path, self.model_name, self.version, self.model_type = new_sig
 
     def __call__(self):
         mm = get_model_manager()

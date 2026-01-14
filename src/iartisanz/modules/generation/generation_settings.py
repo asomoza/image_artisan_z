@@ -74,6 +74,7 @@ class GenerationSettings:
     scheduler: SchedulerDataObject = field(default_factory=SchedulerDataObject)
     strength: float = 0.5
     model: ModelDataObject = field(default_factory=ModelDataObject)
+    use_torch_compile: bool = False
 
     GROUP: str = "generation"
 
@@ -86,6 +87,7 @@ class GenerationSettings:
         "guidance_start_end",
         "scheduler",
         "strength",
+        "use_torch_compile",
     )
 
     @classmethod
@@ -128,6 +130,11 @@ class GenerationSettings:
             raw_model = _coerce_json(qsettings.value("model", ModelDataObject().to_dict()))
             settings.model = cast_model(raw_model)
 
+            settings.use_torch_compile = _coerce_bool(
+                qsettings.value("use_torch_compile", settings.use_torch_compile),
+                settings.use_torch_compile,
+            )
+
             return settings
         finally:
             qsettings.endGroup()
@@ -144,6 +151,7 @@ class GenerationSettings:
             qsettings.setValue("scheduler", self.scheduler.to_dict())
             qsettings.setValue("strength", float(self.strength))
             qsettings.setValue("model", self.model.to_dict())
+            qsettings.setValue("use_torch_compile", bool(self.use_torch_compile))
         finally:
             qsettings.endGroup()
 
@@ -156,6 +164,7 @@ class GenerationSettings:
             "guidance_scale": float(self.guidance_scale),
             "guidance_start_end": cast_number_range(self.guidance_start_end),
             "scheduler": cast_scheduler(self.scheduler),
+            "use_torch_compile": bool(self.use_torch_compile),
         }
 
     def apply_change(self, attr: str, value: Any) -> tuple[bool, Any | None]:
@@ -209,6 +218,36 @@ class GenerationSettings:
             self.model = cast_model(value)
             return (True, None)
 
+        if attr == "use_torch_compile":
+            self.use_torch_compile = _coerce_bool(value, self.use_torch_compile)
+            return (True, bool(self.use_torch_compile))
+
         # Fallback: handled but not forwarded
         setattr(self, attr, value)
         return (True, None)
+
+    def reset_to_defaults(self, *, preserve_model: bool = True) -> None:
+        """Reset settings to dataclass defaults.
+
+        If preserve_model is True, keeps the currently selected model.
+        """
+
+        current_model = self.model
+        current_right_menu_expanded = self.right_menu_expanded
+
+        defaults = type(self)()
+        self.right_menu_expanded = current_right_menu_expanded
+
+        self.image_width = defaults.image_width
+        self.image_height = defaults.image_height
+        self.num_inference_steps = defaults.num_inference_steps
+        self.guidance_scale = defaults.guidance_scale
+        self.guidance_start_end = list(defaults.guidance_start_end)
+        self.scheduler = defaults.scheduler
+        self.strength = defaults.strength
+        self.use_torch_compile = defaults.use_torch_compile
+
+        if preserve_model:
+            self.model = current_model
+        else:
+            self.model = defaults.model

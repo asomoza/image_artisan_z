@@ -75,6 +75,10 @@ class SourceImagePanel(BasePanel):
         self.event_bus.publish("manage_dialog", {"dialog_type": "source_image", "action": "open"})
 
     def on_remove_source_image(self):
+        self._reset_source_image_ui()
+        self.event_bus.publish("source_image", {"action": "remove"})
+
+    def _reset_source_image_ui(self):
         self.image_text_label.setVisible(False)
         self.source_thumb_label.clear()
         self.enabled_checkbox.setEnabled(False)
@@ -87,7 +91,10 @@ class SourceImagePanel(BasePanel):
         finally:
             del blocker
 
-        self.event_bus.publish("source_image", {"action": "remove"})
+        # Also reset mask UI
+        self.mask_text_label.setVisible(False)
+        self.source_image_mask_thumb_path = None
+        self.source_thumb_mask_label.clear()
 
     #########################################################
     ## SUBSCRIBED BUS EVENTS
@@ -152,3 +159,6 @@ class SourceImagePanel(BasePanel):
                 finally:
                     del strength_blocker
                     del enabled_blocker
+            else:
+                # If the loaded graph has no source image, reset UI to defaults.
+                self._reset_source_image_ui()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .boolean_node import BooleanNode
 from .denoise_node import DenoiseNode
 from .image_load_node import ImageLoadNode
 from .image_send_node import ImageSendNode
@@ -15,6 +16,7 @@ from .zimage_model_node import ZImageModelNode
 
 
 NODE_CLASSES = {
+    "BooleanNode": BooleanNode,
     "DenoiseNode": DenoiseNode,
     "ImageLoadNode": ImageLoadNode,
     "ImageSendNode": ImageSendNode,

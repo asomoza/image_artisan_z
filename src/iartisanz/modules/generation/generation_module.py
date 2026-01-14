@@ -283,6 +283,7 @@ class GenerationModule(BaseModule):
                     "loras",
                     "source_image",
                     "strength",
+                    "use_torch_compile",
                 ]
                 subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
 
@@ -384,6 +385,71 @@ class GenerationModule(BaseModule):
             self.prompts_widget.set_button_generate()
             self.generating = False
 
+        if action == "clear_graph":
+            if self.generating and self.generation_thread is not None:
+                self.on_abort()
+                self.generation_thread.wait()
+
+            # Reset settings to defaults but preserve selected model.
+            self.gen_settings.reset_to_defaults(preserve_model=True)
+            self.selected_model = self.gen_settings.model
+
+            # Reset runtime state related to optional graph branches.
+            self.loaded_loras = []
+            self.source_image_path = None
+            self.source_image_thumb_path = None
+            self.source_image_layers = None
+            self.source_image_mask_path = None
+            self.source_image_mask_thumb_path = None
+
+            # Recreate staged graph/thread without clearing ModelManager / VRAM.
+            old_thread = self.generation_thread
+            self.generation_thread = None
+            self.node_graph = create_default_graph()
+            self.create_generation_thread()
+            if old_thread is not None:
+                try:
+                    old_thread.deleteLater()
+                except Exception:
+                    pass
+
+            # Reset prompts widget defaults
+            self.prompts_widget.previous_positive_prompt = None
+            self.prompts_widget.previous_negative_prompt = None
+            self.prompts_widget.previous_seed = None
+            self.prompts_widget.positive_prompt.setPlainText("")
+            self.prompts_widget.negative_prompt.setPlainText("")
+            self.prompts_widget.seed_text.setText("")
+            self.prompts_widget.random_checkbox.setChecked(True)
+            self.prompts_widget.seed_text.setDisabled(True)
+            self.prompts_widget.use_random_seed = True
+
+            # Update panels that depend on extracted JSON graph state.
+            self.event_bus.publish(
+                "json_graph",
+                {
+                    "action": "loaded",
+                    "data": {
+                        "image_width": self.gen_settings.image_width,
+                        "image_height": self.gen_settings.image_height,
+                        "num_inference_steps": self.gen_settings.num_inference_steps,
+                        "guidance_scale": self.gen_settings.guidance_scale,
+                        "guidance_start_end": self.gen_settings.guidance_start_end,
+                        "scheduler": self.gen_settings.scheduler,
+                        "model": self.gen_settings.model,
+                        "strength": self.gen_settings.strength,
+                        "use_torch_compile": self.gen_settings.use_torch_compile,
+                        "positive_prompt": "",
+                        "negative_prompt": "",
+                        "seed": "",
+                    },
+                },
+            )
+            self.event_bus.publish("lora_panel", {"action": "loras_updated", "loaded_loras": []})
+
+            self.prompts_widget.set_button_generate()
+            self.generating = False
+
     def on_generation_change_event(self, data):
         attr = data.get("attr")
         if not attr:
@@ -399,6 +465,16 @@ class GenerationModule(BaseModule):
             if graph_value is None:
                 return
             self.generation_thread.update_node(attr, graph_value)
+
+            # Special-case: if compilation was turned off, actively disable any already-compiled
+            # model submodules so toggling behaves as expected.
+            if attr == "use_torch_compile" and bool(graph_value) is False:
+                try:
+                    from iartisanz.app.model_manager import get_model_manager
+
+                    get_model_manager().disable_compiled("transformer")
+                except Exception:
+                    pass
         else:
             self.generation_thread.update_node(attr, value)
 
@@ -514,6 +590,7 @@ class GenerationModule(BaseModule):
                 "guidance_start_end",
                 "scheduler",
                 "loras",
+                "use_torch_compile",
             ]
             subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
             self.generation_thread.load_json_graph(json_graph)

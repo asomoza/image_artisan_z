@@ -1,5 +1,6 @@
 from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
+from iartisanz.modules.generation.graph.nodes.boolean_node import BooleanNode
 from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
 from iartisanz.modules.generation.graph.nodes.image_send_node import ImageSendNode
 from iartisanz.modules.generation.graph.nodes.latents_decoder_node import LatentsDecoderNode
@@ -32,6 +33,9 @@ def create_default_graph():
 
     guidance_start_end = NumberRangeNode(value=[0.0, 1.0])
     node_graph.add_node(guidance_start_end, "guidance_start_end")
+
+    use_torch_compile = BooleanNode(value=False)
+    node_graph.add_node(use_torch_compile, "use_torch_compile")
 
     positive_prompt = TextNode()
     node_graph.add_node(positive_prompt, "positive_prompt")
@@ -69,6 +73,7 @@ def create_default_graph():
     denoise.connect("negative_prompt_embeds", prompts_encoder, "negative_prompt_embeds")
     denoise.connect("guidance_scale", guidance_scale, "value")
     denoise.connect("guidance_start_end", guidance_start_end, "value")
+    denoise.connect("use_torch_compile", use_torch_compile, "value")
     node_graph.add_node(denoise, "denoise")
 
     latents_decoder = LatentsDecoderNode()

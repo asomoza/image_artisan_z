@@ -5,7 +5,7 @@ from typing import Optional, Union
 import numpy as np
 import torch
 
-from iartisanz.app.model_manager import get_model_manager
+from iartisanz.app.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.nodes.node import Node
 from iartisanz.utils.image_converters import numpy_to_pt
@@ -29,6 +29,7 @@ class DenoiseNode(Node):
         "sigmas",
         "lora",
         "guidance_start_end",
+        "use_torch_compile",
         "noise",
         "strength",
         "image_mask",
@@ -44,10 +45,39 @@ class DenoiseNode(Node):
     @torch.inference_mode()
     def __call__(self):
         mm = get_model_manager()
-        transformer = mm.resolve(self.transformer)
+        transformer_input = self.transformer
+        transformer_raw = mm.resolve(transformer_input)
+
+        use_torch_compile = bool(getattr(self, "use_torch_compile", False) or False)
+        transformer = transformer_raw
+
+        # If the transformer was previously region-compiled in-place (Diffusers) and the
+        # user toggled compilation off, restore eager behavior.
+        if (
+            (not use_torch_compile)
+            and isinstance(transformer_input, ModelHandle)
+            and transformer_input.component == "transformer"
+        ):
+            try:
+                mm.disable_compiled("transformer")
+            except Exception:
+                pass
 
         # Avoid repeated dtype casts and small allocations inside the denoise loop.
-        transformer_dtype = transformer.dtype
+        transformer_dtype = getattr(transformer_raw, "dtype", None) or getattr(transformer, "dtype", None)
+        if transformer_dtype is None:
+            try:
+                for p in transformer_raw.parameters(recurse=True):
+                    transformer_dtype = p.dtype
+                    break
+                if transformer_dtype is None:
+                    for b in transformer_raw.buffers(recurse=True):
+                        transformer_dtype = b.dtype
+                        break
+            except Exception:
+                transformer_dtype = None
+        if transformer_dtype is None:
+            transformer_dtype = self.dtype or torch.float32
 
         do_classifier_free_guidance = True if self.guidance_scale > 1 else False
 
@@ -78,11 +108,35 @@ class DenoiseNode(Node):
                 if isinstance(self.lora, list):
                     keys = [item[0] for item in self.lora]
                     transformer_values = [item[1]["transformer"] for item in self.lora]
-                    transformer.set_adapters(keys, transformer_values)
+                    transformer_raw.set_adapters(keys, transformer_values)
                 else:
-                    transformer.set_adapters([self.lora[0]], self.lora[1]["transformer"])
+                    transformer_raw.set_adapters([self.lora[0]], self.lora[1]["transformer"])
             except RuntimeError as e:
                 raise IArtisanZNodeError(e, self.__class__.__name__)
+
+        # Compile after adapters are set so the compiled graph matches runtime behavior.
+        if (
+            use_torch_compile
+            and isinstance(transformer_input, ModelHandle)
+            and transformer_input.component == "transformer"
+        ):
+            # If LoRAs are involved, be conservative: clear any cached compiled wrapper
+            # to avoid reusing a graph compiled under a different adapter configuration.
+            if self.lora:
+                try:
+                    mm.clear_compiled("transformer")
+                except Exception:
+                    pass
+
+            try:
+                transformer = mm.get_compiled(
+                    "transformer",
+                    device=self.device,
+                    dtype=self.dtype,
+                    compile_kwargs={"fullgraph": True},
+                )
+            except Exception:
+                transformer = transformer_raw
 
         prompt_embeds = self.prompt_embeds.to(self.device)
         negative_prompt_embeds = self.negative_prompt_embeds.to(self.device)
@@ -157,6 +211,13 @@ class DenoiseNode(Node):
 
             latent_model_input = latent_model_input.unsqueeze(2)
             latent_model_input_list = latent_model_input.unbind(dim=0)
+
+            # If compilation uses CUDA graphs, PyTorch requires marking step boundaries to
+            # avoid reading outputs that get overwritten by subsequent runs.
+            if use_torch_compile and self.device.type == "cuda" and hasattr(torch, "compiler"):
+                mark = getattr(torch.compiler, "cudagraph_mark_step_begin", None)
+                if callable(mark):
+                    mark()
 
             model_out_list = transformer(
                 latent_model_input_list, timestep_model_input, prompt_embeds_model_input, return_dict=False

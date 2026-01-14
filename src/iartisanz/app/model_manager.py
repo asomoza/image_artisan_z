@@ -63,6 +63,11 @@ class ModelManager:
         # Key is adapter_name as used by the transformer.
         self._lora_sources: dict[str, str] = {}
 
+        # Optional compiled module wrappers (torch.compile). Stored separately so
+        # toggling compile on/off does not mutate the raw components.
+        # Key includes model_id + component + device + dtype + compile options.
+        self._compiled_components: dict[tuple[str | None, ModelComponent, str, str, str], Any] = {}
+
     def active_model_id(self) -> str | None:
         with self._lock:
             return self._model_id
@@ -86,12 +91,47 @@ class ModelManager:
             self._components.clear()
             self._model_id = None
             self._lora_sources.clear()
+            self._compiled_components.clear()
             if torch.cuda.is_available():
                 try:
                     torch.cuda.empty_cache()
                     torch.cuda.ipc_collect()
                 except Exception:
                     pass
+
+    def clear_compiled(self, component: ModelComponent | None = None) -> None:
+        with self._lock:
+            if component is None:
+                self._compiled_components.clear()
+                return
+            for key in [k for k in self._compiled_components.keys() if k[1] == component]:
+                self._compiled_components.pop(key, None)
+
+    def disable_compiled(self, component: ModelComponent) -> None:
+        """Best-effort disable of compilation for a component.
+
+        For Diffusers models, `.compile()` typically sets `_compiled_call_impl`.
+        Removing that attribute restores eager execution.
+        """
+
+        try:
+            module = self.get_raw(component)
+        except Exception:
+            self.clear_compiled(component)
+            return
+
+        if _is_torch_module(module):
+            for submod in module.modules():
+                if hasattr(submod, "_compiled_call_impl"):
+                    try:
+                        delattr(submod, "_compiled_call_impl")
+                    except Exception:
+                        try:
+                            setattr(submod, "_compiled_call_impl", None)
+                        except Exception:
+                            pass
+
+        self.clear_compiled(component)
 
     def get_lora_source(self, adapter_name: str) -> str | None:
         with self._lock:
@@ -148,6 +188,8 @@ class ModelManager:
     ):
         with self._lock:
             self._model_id = model_id
+            # Model changed (or re-registered); compiled wrappers are no longer trustworthy.
+            self._compiled_components.clear()
             if tokenizer is not None:
                 self._components["tokenizer"] = tokenizer
             if text_encoder is not None:
@@ -156,6 +198,73 @@ class ModelManager:
                 self._components["transformer"] = transformer
             if vae is not None:
                 self._components["vae"] = vae
+
+    def get_compiled(
+        self,
+        component: ModelComponent,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+        compile_kwargs: dict[str, Any] | None = None,
+    ):
+        """Return a torch.compile-wrapped module for `component`.
+
+        This is cached and does NOT overwrite the raw stored component, so callers can
+        toggle compiled/eager execution without changing results.
+        """
+
+        compile_kwargs = compile_kwargs or {}
+
+        # torch.compile is only available on PyTorch 2.x
+        if not hasattr(torch, "compile"):
+            return self.get(component, device=device, dtype=dtype)
+
+        module = self.get(component, device=device, dtype=dtype)
+        if not _is_torch_module(module):
+            return module
+
+        target_device = torch.device(device) if device is not None else (_module_device(module) or torch.device("cpu"))
+        dtype_key = str(dtype) if dtype is not None else str(getattr(module, "dtype", None))
+        compile_opts_key = repr(sorted(compile_kwargs.items(), key=lambda kv: kv[0]))
+
+        key = (self._model_id, component, str(target_device), dtype_key, compile_opts_key)
+
+        with self._lock:
+            cached = self._compiled_components.get(key)
+            if cached is not None:
+                return cached
+
+        # Diffusers provides regional compilation for some transformer models.
+        # Prefer it when available (it is substantially faster to compile and more compatible).
+        if component == "transformer" and hasattr(module, "compile_repeated_blocks"):
+            compile_kwargs2 = dict(compile_kwargs)
+            compile_kwargs2.setdefault("fullgraph", True)
+
+            # TorchInductor's CUDA graphs can reuse/overwrite outputs between repeated-block
+            # invocations, which can crash with models that call compiled blocks in a loop.
+            # Disable CUDA graphs for this regional compilation path.
+            if target_device.type == "cuda":
+                opts = dict(compile_kwargs2.get("options") or {})
+                opts.setdefault("triton.cudagraphs", False)
+                compile_kwargs2["options"] = opts
+            try:
+                module.compile_repeated_blocks(**compile_kwargs2)
+            except Exception:
+                return module
+
+            with self._lock:
+                # Regional compilation mutates submodules in-place; cache the module marker.
+                self._compiled_components[key] = module
+            return module
+
+        try:
+            compiled = torch.compile(module, **compile_kwargs)
+        except Exception:
+            return module
+
+        with self._lock:
+            self._compiled_components[key] = compiled
+        return compiled
 
     def has(self, component: ModelComponent) -> bool:
         with self._lock:

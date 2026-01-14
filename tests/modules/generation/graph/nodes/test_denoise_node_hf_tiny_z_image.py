@@ -62,7 +62,13 @@ def _slice_bits_i32(latents: torch.Tensor) -> list[int]:
     return _slice_f32(latents).view(torch.int32).tolist()
 
 
-def _run_tiny_random_z_image(*, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+def _run_tiny_random_z_image(
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+    use_torch_compile: bool = False,
+    clear_mm: bool = True,
+) -> torch.Tensor:
     huggingface_hub = pytest.importorskip("huggingface_hub")
     snapshot_download = huggingface_hub.snapshot_download
 
@@ -72,6 +78,7 @@ def _run_tiny_random_z_image(*, device: torch.device, dtype: torch.dtype) -> tor
 
     from iartisanz.app.model_manager import get_model_manager
     from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
+    from iartisanz.modules.generation.graph.nodes.boolean_node import BooleanNode
     from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
     from iartisanz.modules.generation.graph.nodes.latents_node import LatentsNode
     from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
@@ -80,7 +87,8 @@ def _run_tiny_random_z_image(*, device: torch.device, dtype: torch.dtype) -> tor
     from iartisanz.modules.generation.graph.nodes.zimage_model_node import ZImageModelNode
 
     mm = get_model_manager()
-    mm.clear()
+    if clear_mm:
+        mm.clear()
 
     # Keep text encoder on CPU for the CUDA test too, so prompt embeddings match CPU.
     if device.type == "cuda":
@@ -126,6 +134,7 @@ def _run_tiny_random_z_image(*, device: torch.device, dtype: torch.dtype) -> tor
 
     steps_node = NumberNode(number=STEPS)
     guidance_node = NumberNode(number=GUIDANCE_SCALE)
+    compile_node = BooleanNode(value=bool(use_torch_compile))
     denoise_node = DenoiseNode()
 
     prompt_node.connect("tokenizer", model_node, "tokenizer")
@@ -140,8 +149,18 @@ def _run_tiny_random_z_image(*, device: torch.device, dtype: torch.dtype) -> tor
     denoise_node.connect("prompt_embeds", prompt_node, "prompt_embeds")
     denoise_node.connect("negative_prompt_embeds", prompt_node, "negative_prompt_embeds")
     denoise_node.connect("guidance_scale", guidance_node, "value")
+    denoise_node.connect("use_torch_compile", compile_node, "value")
 
-    for node in (model_node, prompt_node, latents_node, scheduler_node, steps_node, guidance_node, denoise_node):
+    for node in (
+        model_node,
+        prompt_node,
+        latents_node,
+        scheduler_node,
+        steps_node,
+        guidance_node,
+        compile_node,
+        denoise_node,
+    ):
         node.device = device
         node.dtype = dtype
 
@@ -157,6 +176,7 @@ def _run_tiny_random_z_image(*, device: torch.device, dtype: torch.dtype) -> tor
         scheduler_node()
         steps_node()
         guidance_node()
+        compile_node()
         denoise_node()
 
     out = denoise_node.values.get("latents")
@@ -180,6 +200,40 @@ def test_denoise_tiny_random_z_image_cpu_golden_regression():
 
     out = _run_tiny_random_z_image(device=torch.device("cpu"), dtype=torch.float32)
     assert _slice_bits_i32(out) == CPU_SLICE_BITS_I32
+
+
+@pytest.mark.hf
+@pytest.mark.slow
+def test_denoise_tiny_random_z_image_cpu_torch_compile_matches_eager():
+    """Compiled vs eager should match on CPU.
+
+    This specifically checks that enabling/disabling torch.compile does not change outputs.
+    """
+
+    if os.environ.get("IARTISANZ_RUN_HF_TESTS") != "1":
+        pytest.skip("Set IARTISANZ_RUN_HF_TESTS=1 to enable Hugging Face integration tests")
+
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile not available")
+
+    torch.manual_seed(0)
+    torch.use_deterministic_algorithms(True)
+    torch.set_num_threads(1)
+
+    device = torch.device("cpu")
+    dtype = torch.float32
+
+    out_eager_1 = _run_tiny_random_z_image(device=device, dtype=dtype, use_torch_compile=False, clear_mm=True)
+    out_compiled = _run_tiny_random_z_image(device=device, dtype=dtype, use_torch_compile=True, clear_mm=False)
+    out_eager_2 = _run_tiny_random_z_image(device=device, dtype=dtype, use_torch_compile=False, clear_mm=False)
+
+    # Eager should be exactly reproducible.
+    torch.testing.assert_close(_slice_f32(out_eager_2), _slice_f32(out_eager_1), rtol=0.0, atol=0.0)
+
+    # torch.compile is allowed tiny fp drift depending on backend / compiler decisions.
+    atol = float(os.environ.get("IARTISANZ_HF_CPU_COMPILE_ATOL", "1e-5"))
+    rtol = float(os.environ.get("IARTISANZ_HF_CPU_COMPILE_RTOL", "1e-4"))
+    torch.testing.assert_close(_slice_f32(out_compiled), _slice_f32(out_eager_1), rtol=rtol, atol=atol)
 
 
 @pytest.mark.hf
