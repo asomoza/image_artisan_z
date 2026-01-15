@@ -240,6 +240,19 @@ class ModelManager:
             compile_kwargs2 = dict(compile_kwargs)
             compile_kwargs2.setdefault("fullgraph", True)
 
+            # When running interactive apps, prompts/shapes can vary between runs.
+            # With fullgraph=True, this can trigger multiple recompilations; increase the
+            # Dynamo cache limit to avoid hitting the default recompile limit.
+            try:
+                import os
+
+                import torch._dynamo.config as dynamo_config
+
+                desired_limit = int(os.environ.get("IARTISANZ_TORCH_DYNAMO_CACHE_LIMIT", "64"))
+                dynamo_config.cache_size_limit = max(int(dynamo_config.cache_size_limit), desired_limit)
+            except Exception:
+                pass
+
             # TorchInductor's CUDA graphs can reuse/overwrite outputs between repeated-block
             # invocations, which can crash with models that call compiled blocks in a loop.
             # Disable CUDA graphs for this regional compilation path.
