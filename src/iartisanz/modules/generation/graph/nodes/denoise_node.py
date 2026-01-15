@@ -79,7 +79,8 @@ class DenoiseNode(Node):
         if transformer_dtype is None:
             transformer_dtype = self.dtype or torch.float32
 
-        do_classifier_free_guidance = True if self.guidance_scale > 1 else False
+        guidance_scale = float(self.guidance_scale)
+        do_classifier_free_guidance = abs(guidance_scale - 1.0) > 1e-6
 
         guidance_start_end = getattr(self, "guidance_start_end", None)
         if guidance_start_end is None:
@@ -193,11 +194,12 @@ class DenoiseNode(Node):
             step_idx = i // order
             step_norm = float(step_idx) / step_norm_den
 
-            current_guidance_scale = self.guidance_scale
+            current_guidance_scale = guidance_scale
             if not (guidance_start <= step_norm <= guidance_end):
-                current_guidance_scale = 0.0
+                # Outside the guidance window, behave like "no guidance".
+                current_guidance_scale = 1.0
 
-            apply_cfg = do_classifier_free_guidance and current_guidance_scale > 0
+            apply_cfg = do_classifier_free_guidance and (abs(float(current_guidance_scale) - 1.0) > 1e-6)
 
             if apply_cfg:
                 latents_typed = latents.to(transformer_dtype)
@@ -225,9 +227,10 @@ class DenoiseNode(Node):
 
             if apply_cfg:
                 # Perform CFG. Graph currently uses batch=1, so keep this fast-path.
+                # Conditioning order here is (pos, neg) based on prompt_embeds_model_input.
                 pos = model_out_list[0]
                 neg = model_out_list[1]
-                pred = pos + current_guidance_scale * (pos - neg)
+                pred = neg + float(current_guidance_scale) * (pos - neg)
 
                 # Optional CFG renormalization (do math in fp32 for stability).
                 if cfg_normalization and float(cfg_normalization) > 0.0:
