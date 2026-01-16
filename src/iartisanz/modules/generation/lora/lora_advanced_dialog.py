@@ -145,7 +145,9 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         for slider in self.layer_sliders.values():
             slider.setRange(self.low_range, self.high_range)
 
-        self.event_bus.publish("lora", {"action": "update_slider", "is_slider": self.lora.is_slider})
+        self.event_bus.publish(
+            "lora", {"action": "update_slider", "lora": self.lora, "is_slider": self.lora.is_slider}
+        )
 
     def on_layer_template_changed(self, index: int):
         if index == 0:

@@ -270,10 +270,13 @@ class NodeGraphThread(QThread):
             adapter_name=lora_data.name,
             lora_name=lora_data.name,
             version=lora_data.version,
-            transformer_weight=1.0,
-            is_slider=False,
+            transformer_weight=lora_data.transformer_weight,
+            granular_transformer_weights_enabled=lora_data.granular_transformer_weights_enabled,
+            transformer_granular_weights=lora_data.granular_transformer_weights,
+            is_slider=lora_data.is_slider,
             database_id=lora_data.id,
         )
+        lora_node.lora_enabled = lora_data.enabled
         lora_node.connect("transformer", self.node_graph.get_node_by_name("model"), "transformer")
         self.node_graph.add_node(lora_node, lora_data.lora_node_name)
 
@@ -294,6 +297,11 @@ class NodeGraphThread(QThread):
         lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
         if lora_node is not None:
             lora_node.update_lora_transformer_granular_enabled(lora_data.granular_transformer_weights_enabled)
+
+    def update_lora_slider_enabled(self, lora_data: LoraDataObject):
+        lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
+        if lora_node is not None:
+            lora_node.update_slider_enabled(lora_data.is_slider)
 
     def remove_lora(self, lora_data: LoraDataObject):
         lora_node = None

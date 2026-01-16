@@ -35,25 +35,6 @@ class LoraPanel(BasePanel):
     def open_lora_dialog(self):
         self.event_bus.publish("manage_dialog", {"dialog_type": "lora_manager", "action": "open"})
 
-    def on_lora_event(self, data: dict):
-        action = data.get("action")
-        if action == "add":
-            lora_widget = LoraAddedItem(data["lora"])
-
-            for i in range(self.loras_layout.count()):
-                item = self.loras_layout.itemAt(i).widget()
-                if item.lora.id == data["lora"].id:
-                    self.event_bus.publish("show_snackbar", {"action": "show", "message": "LoRA already added"})
-                    return
-
-            self.loras_layout.addWidget(lora_widget)
-        elif action == "remove":
-            for i in range(self.loras_layout.count()):
-                item = self.loras_layout.itemAt(i).widget()
-                if item.lora.id == data["lora"].id:
-                    item.setParent(None)
-                    break
-
     def clear_loras_layout(self):
         while self.loras_layout.count():
             child = self.loras_layout.takeAt(0)
@@ -76,3 +57,22 @@ class LoraPanel(BasePanel):
             for lora_data_object in loaded_loras:
                 lora_widget = LoraAddedItem(lora_data_object)
                 self.loras_layout.addWidget(lora_widget)
+
+    def on_lora_event(self, data: dict):
+        action = data.get("action")
+        if action == "add":
+            lora_widget = LoraAddedItem(data["lora"])
+
+            for i in range(self.loras_layout.count()):
+                item = self.loras_layout.itemAt(i).widget()
+                if item.lora.id == data["lora"].id:
+                    self.event_bus.publish("show_snackbar", {"action": "show", "message": "LoRA already added"})
+                    return
+
+            self.loras_layout.addWidget(lora_widget)
+        elif action == "remove":
+            for i in range(self.loras_layout.count()):
+                item = self.loras_layout.itemAt(i).widget()
+                if item.lora.id == data["lora"].id:
+                    item.setParent(None)
+                    break

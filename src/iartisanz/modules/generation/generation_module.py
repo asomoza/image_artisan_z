@@ -333,6 +333,7 @@ class GenerationModule(BaseModule):
                     version=lora_db_item["version"],
                     type=lora_db_item["model_type"],
                     enabled=lora_data.get("enabled", True),
+                    is_slider=lora_data.get("is_slider", False),
                     filename=lora_db_item["root_filename"],
                     path=lora_db_item["filepath"],
                     transformer_weight=lora_data.get("transformer_weight", 1.0),
@@ -573,6 +574,8 @@ class GenerationModule(BaseModule):
             self.generation_thread.update_lora_weights(data.get("lora"))
         elif action == "update_lora_transformer_granular_enabled":
             self.generation_thread.update_lora_transformer_granular_enabled(data.get("lora"))
+        elif action == "update_slider":
+            self.generation_thread.update_lora_slider_enabled(data.get("lora"))
 
     def on_generate_event(self, data: dict):
         action = data.get("action")
