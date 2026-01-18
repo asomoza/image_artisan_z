@@ -33,6 +33,9 @@ class DenoiseNode(Node):
         "noise",
         "strength",
         "image_mask",
+        "controlnet",
+        "control_image_latents",
+        "controlnet_conditioning_scale",
     ]
     OUTPUTS = ["latents"]
     SERIALIZE_EXCLUDE = {"callback"}
@@ -146,6 +149,42 @@ class DenoiseNode(Node):
         prompt_embeds_typed = prompt_embeds.to(dtype=transformer_dtype)
         negative_prompt_embeds_typed = negative_prompt_embeds.to(dtype=transformer_dtype)
 
+        controlnet_input = getattr(self, "controlnet", None)
+        control_image_latents = getattr(self, "control_image_latents", None)
+        has_controlnet = controlnet_input is not None and control_image_latents is not None
+
+        controlnet = None
+        control_image_latents_typed = None
+        controlnet_conditioning_scale = getattr(self, "controlnet_conditioning_scale", None)
+        controlnet_conditioning_scale = (
+            float(controlnet_conditioning_scale) if controlnet_conditioning_scale is not None else 1.0
+        )
+
+        if has_controlnet:
+            controlnet = mm.resolve(controlnet_input)
+            control_image_latents_typed = control_image_latents.to(self.device, dtype=transformer_dtype)
+
+            # For some ControlNet checkpoints (e.g. 2.0), control_in_dim can differ from transformer in_channels.
+            try:
+                control_in_dim = int(getattr(controlnet, "config", {}).get("control_in_dim"))
+            except Exception:
+                control_in_dim = int(getattr(getattr(controlnet, "config", None), "control_in_dim", 0) or 0)
+
+            if control_in_dim and control_image_latents_typed.shape[1] != control_in_dim:
+                if control_image_latents_typed.shape[1] > control_in_dim:
+                    raise IArtisanZNodeError(
+                        f"Control image latents have {control_image_latents_typed.shape[1]} channels but controlnet expects {control_in_dim}.",
+                        self.__class__.__name__,
+                    )
+                pad = torch.zeros(
+                    control_image_latents_typed.shape[0],
+                    control_in_dim - control_image_latents_typed.shape[1],
+                    *control_image_latents_typed.shape[2:],
+                    device=control_image_latents_typed.device,
+                    dtype=control_image_latents_typed.dtype,
+                )
+                control_image_latents_typed = torch.cat([control_image_latents_typed, pad], dim=1)
+
         timesteps, num_inference_steps = self.retrieve_timesteps(
             self.scheduler,
             num_inference_steps,
@@ -221,8 +260,27 @@ class DenoiseNode(Node):
                 if callable(mark):
                     mark()
 
+            controlnet_block_samples = None
+            if has_controlnet:
+                control_context = control_image_latents_typed
+                if apply_cfg:
+                    # Duplicate control conditioning to match (pos, neg) batch.
+                    control_context = torch.cat([control_context] * 2, dim=0)
+
+                controlnet_block_samples = controlnet(
+                    latent_model_input_list,
+                    timestep_model_input,
+                    prompt_embeds_model_input,
+                    control_context,
+                    conditioning_scale=controlnet_conditioning_scale,
+                )
+
             model_out_list = transformer(
-                latent_model_input_list, timestep_model_input, prompt_embeds_model_input, return_dict=False
+                latent_model_input_list,
+                timestep_model_input,
+                prompt_embeds_model_input,
+                controlnet_block_samples=controlnet_block_samples,
+                return_dict=False,
             )[0]
 
             if apply_cfg:

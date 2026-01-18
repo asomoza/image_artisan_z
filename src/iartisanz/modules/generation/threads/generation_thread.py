@@ -12,6 +12,8 @@ from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
 from iartisanz.modules.generation.graph.nodes import NODE_CLASSES
+from iartisanz.modules.generation.graph.nodes.controlnet_conditioning_node import ControlNetConditioningNode
+from iartisanz.modules.generation.graph.nodes.controlnet_model_node import ControlNetModelNode
 from iartisanz.modules.generation.graph.nodes.image_load_node import ImageLoadNode
 from iartisanz.modules.generation.graph.nodes.lora_node import LoraNode
 from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
@@ -385,6 +387,102 @@ class NodeGraphThread(QThread):
 
     def remove_source_image_mask(self):
         self.node_graph.delete_node_by_name("source_image_mask")
+
+    def add_controlnet(self, *, controlnet_path: str, control_image_path: str, conditioning_scale: float = 0.75):
+        """Add ControlNet nodes to the staged graph and wire them into denoising.
+
+        Not called by default. The GUI will call this later when the user opts in.
+        """
+
+        if self.node_graph.get_node_by_name("controlnet_model") is not None:
+            return
+
+        controlnet_model = ControlNetModelNode(path=controlnet_path)
+        self.node_graph.add_node(controlnet_model, "controlnet_model")
+
+        control_image = ImageLoadNode(path=control_image_path)
+        self.node_graph.add_node(control_image, "control_image")
+
+        scale_node = NumberNode(number=float(conditioning_scale))
+        self.node_graph.add_node(scale_node, "controlnet_conditioning_scale")
+
+        conditioning = ControlNetConditioningNode()
+
+        models_node = self.node_graph.get_node_by_name("model")
+        width_node = self.node_graph.get_node_by_name("image_width")
+        height_node = self.node_graph.get_node_by_name("image_height")
+        denoise_node = self.node_graph.get_node_by_name("denoise")
+
+        # ControlNet weights depend on the transformer for shared embeddings.
+        controlnet_model.connect("transformer", models_node, "transformer")
+
+        conditioning.connect("vae", models_node, "vae")
+        conditioning.connect("vae_scale_factor", models_node, "vae_scale_factor")
+        conditioning.connect("control_image", control_image, "image")
+        conditioning.connect("width", width_node, "value")
+        conditioning.connect("height", height_node, "value")
+
+        self.node_graph.add_node(conditioning, "controlnet_conditioning")
+
+        denoise_node.connect("controlnet", controlnet_model, "controlnet")
+        denoise_node.connect("control_image_latents", conditioning, "control_image_latents")
+        denoise_node.connect("controlnet_conditioning_scale", scale_node, "value")
+
+    def update_controlnet(self, *, controlnet_path: str | None = None, control_image_path: str | None = None):
+        model_node = self.node_graph.get_node_by_name("controlnet_model")
+        if model_node is not None and controlnet_path is not None:
+            model_node.update_value(controlnet_path)
+
+        image_node = self.node_graph.get_node_by_name("control_image")
+        if image_node is not None and control_image_path is not None:
+            image_node.update_value(control_image_path)
+
+    def update_controlnet_conditioning_scale(self, conditioning_scale: float):
+        scale_node = self.node_graph.get_node_by_name("controlnet_conditioning_scale")
+        if scale_node is not None:
+            scale_node.update_value(float(conditioning_scale))
+
+    def enable_controlnet(self, enabled: bool):
+        model_node = self.node_graph.get_node_by_name("controlnet_model")
+        image_node = self.node_graph.get_node_by_name("control_image")
+        conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+        scale_node = self.node_graph.get_node_by_name("controlnet_conditioning_scale")
+        denoise_node = self.node_graph.get_node_by_name("denoise")
+
+        if None in (model_node, image_node, conditioning_node, scale_node, denoise_node):
+            return
+
+        model_node.enabled = bool(enabled)
+        image_node.enabled = bool(enabled)
+        conditioning_node.enabled = bool(enabled)
+        scale_node.enabled = bool(enabled)
+
+        if enabled:
+            denoise_node.connect("controlnet", model_node, "controlnet")
+            denoise_node.connect("control_image_latents", conditioning_node, "control_image_latents")
+            denoise_node.connect("controlnet_conditioning_scale", scale_node, "value")
+        else:
+            denoise_node.disconnect("controlnet", model_node, "controlnet")
+            denoise_node.disconnect("control_image_latents", conditioning_node, "control_image_latents")
+            denoise_node.disconnect("controlnet_conditioning_scale", scale_node, "value")
+
+    def remove_controlnet(self):
+        denoise_node = self.node_graph.get_node_by_name("denoise")
+        model_node = self.node_graph.get_node_by_name("controlnet_model")
+        conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+        scale_node = self.node_graph.get_node_by_name("controlnet_conditioning_scale")
+
+        if denoise_node is not None and model_node is not None:
+            denoise_node.disconnect("controlnet", model_node, "controlnet")
+        if denoise_node is not None and conditioning_node is not None:
+            denoise_node.disconnect("control_image_latents", conditioning_node, "control_image_latents")
+        if denoise_node is not None and scale_node is not None:
+            denoise_node.disconnect("controlnet_conditioning_scale", scale_node, "value")
+
+        self.node_graph.delete_node_by_name("controlnet_conditioning")
+        self.node_graph.delete_node_by_name("controlnet_conditioning_scale")
+        self.node_graph.delete_node_by_name("control_image")
+        self.node_graph.delete_node_by_name("controlnet_model")
 
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)

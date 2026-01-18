@@ -20,6 +20,12 @@ def _best_effort_free_vram_after_oom(mm) -> None:
     except Exception:
         pass
 
+    try:
+        if mm.has("controlnet"):
+            mm.offload_to_cpu("controlnet")
+    except Exception:
+        pass
+
     if torch.cuda.is_available():
         try:
             torch.cuda.empty_cache()

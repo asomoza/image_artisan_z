@@ -16,6 +16,7 @@ ModelComponent = Literal[
     "text_encoder",
     "transformer",
     "vae",
+    "controlnet",
 ]
 
 
@@ -185,6 +186,7 @@ class ModelManager:
         text_encoder: Any = None,
         transformer: Any = None,
         vae: Any = None,
+        controlnet: Any = None,
     ):
         with self._lock:
             self._model_id = model_id
@@ -198,6 +200,8 @@ class ModelManager:
                 self._components["transformer"] = transformer
             if vae is not None:
                 self._components["vae"] = vae
+            if controlnet is not None:
+                self._components["controlnet"] = controlnet
 
     def get_compiled(
         self,
@@ -309,9 +313,11 @@ class ModelManager:
         if requesting == "text_encoder":
             return ("vae", "transformer")
         if requesting == "transformer":
-            return ("text_encoder", "vae")
+            return ("text_encoder", "vae", "controlnet")
         if requesting == "vae":
-            return ("text_encoder", "transformer")
+            return ("text_encoder", "transformer", "controlnet")
+        if requesting == "controlnet":
+            return ("text_encoder", "vae", "transformer")
         return ()
 
     def _offload_for_cuda_unlocked(self, requesting: ModelComponent):
