@@ -14,11 +14,15 @@ def test_graph_json_roundtrip_with_optional_controlnet_nodes():
 
     controlnet_model = ControlNetModelNode(path="/tmp/fake_controlnet.safetensors")
     control_image = ImageLoadNode(path="/tmp/fake_control_image.png")
+    init_image = ImageLoadNode(path="/tmp/fake_init_image.png")
+    mask_image = ImageLoadNode(path="/tmp/fake_mask.png", grayscale=True)
     conditioning_scale = NumberNode(number=0.8)
     conditioning = ControlNetConditioningNode()
 
     g.add_node(controlnet_model, name="controlnet_model")
     g.add_node(control_image, name="control_image")
+    g.add_node(init_image, name="control_init_image")
+    g.add_node(mask_image, name="control_mask_image")
     g.add_node(conditioning_scale, name="controlnet_conditioning_scale")
     g.add_node(conditioning, name="controlnet_conditioning")
 
@@ -32,6 +36,8 @@ def test_graph_json_roundtrip_with_optional_controlnet_nodes():
     conditioning.connect("vae", model, "vae")
     conditioning.connect("vae_scale_factor", model, "vae_scale_factor")
     conditioning.connect("control_image", control_image, "image")
+    conditioning.connect("init_image", init_image, "image")
+    conditioning.connect("mask_image", mask_image, "image")
     conditioning.connect("width", width, "value")
     conditioning.connect("height", height, "value")
 
@@ -55,3 +61,8 @@ def test_graph_json_roundtrip_with_optional_controlnet_nodes():
     assert "controlnet" in denoise2.connections
     assert "control_image_latents" in denoise2.connections
     assert "controlnet_conditioning_scale" in denoise2.connections
+
+    conditioning2 = g2.get_node_by_name("controlnet_conditioning")
+    assert conditioning2 is not None
+    assert "mask_image" in conditioning2.connections
+    assert "init_image" in conditioning2.connections

@@ -36,6 +36,9 @@ class DenoiseNode(Node):
         "controlnet",
         "control_image_latents",
         "controlnet_conditioning_scale",
+        "control_guidance_start_end",
+        "control_mode",
+        "prompt_mode_decay",
     ]
     OUTPUTS = ["latents"]
     SERIALIZE_EXCLUDE = {"callback"}
@@ -44,6 +47,22 @@ class DenoiseNode(Node):
         super().__init__()
 
         self.callback = callback
+
+    @staticmethod
+    def _apply_prompt_mode_decay(block_samples: dict, decay: float) -> dict:
+        # Apply in deterministic order (matches "injection count" concept).
+        try:
+            keys = sorted(block_samples.keys())
+        except Exception:
+            return block_samples
+
+        for injection_index, layer_idx in enumerate(keys):
+            try:
+                block_samples[layer_idx] = block_samples[layer_idx] * (float(decay) ** injection_index)
+            except Exception:
+                # If a value is not directly scalable, keep it unchanged.
+                pass
+        return block_samples
 
     @torch.inference_mode()
     def __call__(self):
@@ -153,12 +172,45 @@ class DenoiseNode(Node):
         control_image_latents = getattr(self, "control_image_latents", None)
         has_controlnet = controlnet_input is not None and control_image_latents is not None
 
+        control_mode = getattr(self, "control_mode", None)
+        if control_mode is None:
+            control_mode = "balanced"
+        control_mode = str(control_mode).strip().lower()
+        if control_mode not in {"balanced", "prompt", "controlnet"}:
+            logger.warning(
+                "Unknown control_mode '%s'; falling back to 'balanced'.",
+                control_mode,
+            )
+            control_mode = "balanced"
+
+        use_prompt_mode = control_mode == "prompt"
+        use_guess_mode = control_mode == "controlnet"
+        prompt_mode_decay = getattr(self, "prompt_mode_decay", None)
+        prompt_mode_decay = float(prompt_mode_decay) if prompt_mode_decay is not None else 0.825
+
+        control_guidance_start_end = getattr(self, "control_guidance_start_end", None)
+        if control_guidance_start_end is None:
+            control_guidance_start, control_guidance_end = 0.0, 1.0
+        else:
+            control_guidance_start = float(control_guidance_start_end[0])
+            control_guidance_end = float(control_guidance_start_end[1])
+
+        if control_guidance_start > control_guidance_end:
+            logger.warning(
+                "control_guidance_start (%s) is higher than control_guidance_end (%s); ignoring control guidance window and using full range [0.0, 1.0].",
+                control_guidance_start,
+                control_guidance_end,
+            )
+            control_guidance_start, control_guidance_end = 0.0, 1.0
+
         controlnet = None
         control_image_latents_typed = None
         controlnet_conditioning_scale = getattr(self, "controlnet_conditioning_scale", None)
         controlnet_conditioning_scale = (
             float(controlnet_conditioning_scale) if controlnet_conditioning_scale is not None else 1.0
         )
+
+        control_context_latents_cfg = None
 
         if has_controlnet:
             controlnet = mm.resolve(controlnet_input)
@@ -262,18 +314,64 @@ class DenoiseNode(Node):
 
             controlnet_block_samples = None
             if has_controlnet:
-                control_context = control_image_latents_typed
-                if apply_cfg:
-                    # Duplicate control conditioning to match (pos, neg) batch.
-                    control_context = torch.cat([control_context] * 2, dim=0)
-
-                controlnet_block_samples = controlnet(
-                    latent_model_input_list,
-                    timestep_model_input,
-                    prompt_embeds_model_input,
-                    control_context,
-                    conditioning_scale=controlnet_conditioning_scale,
+                # Per-step keep schedule (1 -> apply, 0 -> skip).
+                step_progress_start = float(step_idx) / float(max(num_inference_steps, 1))
+                step_progress_end = float(step_idx + 1) / float(max(num_inference_steps, 1))
+                keep = 1.0 - float(
+                    step_progress_start < float(control_guidance_start)
+                    or step_progress_end > float(control_guidance_end)
                 )
+                cond_scale = float(keep) * float(controlnet_conditioning_scale)
+
+                if cond_scale <= 0.0:
+                    controlnet_block_samples = None
+                elif apply_cfg and use_guess_mode:
+                    # In "ControlNet more important" mode, only condition the positive branch.
+                    base_batch = int(latents.shape[0])
+
+                    pos_latent_model_input_list = latent_model_input_list[:base_batch]
+                    pos_timestep_model_input = timestep_model_input[:base_batch]
+
+                    # Match the non-CFG prompt input shape. Prompt tensor is already batched.
+                    pos_prompt_embeds_model_input = (prompt_embeds_typed,)
+
+                    pos_controlnet_block_samples = controlnet(
+                        pos_latent_model_input_list,
+                        pos_timestep_model_input,
+                        pos_prompt_embeds_model_input,
+                        control_image_latents_typed,
+                        conditioning_scale=cond_scale,
+                    )
+
+                    # Expand to (pos, neg) batch with zeros for the negative branch.
+                    expanded: dict = {}
+                    for layer_idx, hint in (pos_controlnet_block_samples or {}).items():
+                        try:
+                            expanded[layer_idx] = torch.cat([hint, torch.zeros_like(hint)], dim=0)
+                        except Exception:
+                            # If concatenation fails, fall back to passing pos-only (best-effort).
+                            expanded[layer_idx] = hint
+                    controlnet_block_samples = expanded
+                else:
+                    # Balanced/prompt modes: apply ControlNet to all branches.
+                    control_context = control_image_latents_typed
+                    if apply_cfg:
+                        if control_context_latents_cfg is None:
+                            control_context_latents_cfg = torch.cat([control_context] * 2, dim=0)
+                        control_context = control_context_latents_cfg
+
+                    controlnet_block_samples = controlnet(
+                        latent_model_input_list,
+                        timestep_model_input,
+                        prompt_embeds_model_input,
+                        control_context,
+                        conditioning_scale=cond_scale,
+                    )
+
+                    if use_prompt_mode and controlnet_block_samples is not None:
+                        controlnet_block_samples = self._apply_prompt_mode_decay(
+                            controlnet_block_samples, prompt_mode_decay
+                        )
 
             model_out_list = transformer(
                 latent_model_input_list,

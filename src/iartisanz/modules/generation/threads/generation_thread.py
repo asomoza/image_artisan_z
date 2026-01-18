@@ -388,6 +388,80 @@ class NodeGraphThread(QThread):
     def remove_source_image_mask(self):
         self.node_graph.delete_node_by_name("source_image_mask")
 
+    def add_controlnet_init_image(self, init_image_path: str):
+        """Add a separate init image for ControlNet inpaint conditioning.
+
+        This is intentionally independent from the regular source image used for
+        differential diffusion / img2img.
+        """
+
+        conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+        if conditioning_node is None:
+            return
+
+        if self.node_graph.get_node_by_name("control_init_image") is not None:
+            return
+
+        init_image_node = ImageLoadNode(path=init_image_path)
+        self.node_graph.add_node(init_image_node, "control_init_image")
+
+        try:
+            conditioning_node.connect("init_image", init_image_node, "image")
+        except Exception:
+            pass
+
+    def update_controlnet_init_image(self, init_image_path: str):
+        init_image_node = self.node_graph.get_node_by_name("control_init_image")
+        if init_image_node is not None:
+            init_image_node.update_value(init_image_path)
+
+    def remove_controlnet_init_image(self):
+        conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+        init_image_node = self.node_graph.get_node_by_name("control_init_image")
+        if conditioning_node is not None and init_image_node is not None:
+            try:
+                conditioning_node.disconnect("init_image", init_image_node, "image")
+            except Exception:
+                pass
+        self.node_graph.delete_node_by_name("control_init_image")
+
+    def add_controlnet_mask_image(self, mask_image_path: str):
+        """Add a separate mask image for ControlNet inpaint conditioning.
+
+        This is intentionally independent from the regular differential diffusion
+        mask used by the denoise node.
+        """
+
+        conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+        if conditioning_node is None:
+            return
+
+        if self.node_graph.get_node_by_name("control_mask_image") is not None:
+            return
+
+        mask_node = ImageLoadNode(path=mask_image_path, grayscale=True)
+        self.node_graph.add_node(mask_node, "control_mask_image")
+
+        try:
+            conditioning_node.connect("mask_image", mask_node, "image")
+        except Exception:
+            pass
+
+    def update_controlnet_mask_image(self, mask_image_path: str):
+        mask_node = self.node_graph.get_node_by_name("control_mask_image")
+        if mask_node is not None:
+            mask_node.update_value(mask_image_path)
+
+    def remove_controlnet_mask_image(self):
+        conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+        mask_node = self.node_graph.get_node_by_name("control_mask_image")
+        if conditioning_node is not None and mask_node is not None:
+            try:
+                conditioning_node.disconnect("mask_image", mask_node, "image")
+            except Exception:
+                pass
+        self.node_graph.delete_node_by_name("control_mask_image")
+
     def add_controlnet(self, *, controlnet_path: str, control_image_path: str, conditioning_scale: float = 0.75):
         """Add ControlNet nodes to the staged graph and wire them into denoising.
 
@@ -479,10 +553,28 @@ class NodeGraphThread(QThread):
         if denoise_node is not None and scale_node is not None:
             denoise_node.disconnect("controlnet_conditioning_scale", scale_node, "value")
 
+        control_init_image_node = self.node_graph.get_node_by_name("control_init_image")
+        if conditioning_node is not None and control_init_image_node is not None:
+            try:
+                conditioning_node.disconnect("init_image", control_init_image_node, "image")
+            except Exception:
+                pass
+
+        control_mask_image_node = self.node_graph.get_node_by_name("control_mask_image")
+        if conditioning_node is not None and control_mask_image_node is not None:
+            try:
+                conditioning_node.disconnect("mask_image", control_mask_image_node, "image")
+            except Exception:
+                pass
+
         self.node_graph.delete_node_by_name("controlnet_conditioning")
         self.node_graph.delete_node_by_name("controlnet_conditioning_scale")
         self.node_graph.delete_node_by_name("control_image")
         self.node_graph.delete_node_by_name("controlnet_model")
+
+        # Optional inpaint inputs for ControlNet.
+        self.node_graph.delete_node_by_name("control_init_image")
+        self.node_graph.delete_node_by_name("control_mask_image")
 
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)
