@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem,
 
 from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
+from iartisanz.modules.generation.controlnet.controlnet_image_dialog import ControlNetImageDialog
 from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
@@ -60,6 +61,10 @@ class GenerationModule(BaseModule):
         self.source_image_mask_path = None
         self.source_image_mask_thumb_path = None
         self.loaded_loras: list[LoraDataObject] = []
+        self.controlnet_source_image_path = None
+        self.controlnet_source_image_layers = None
+        self.controlnet_processed_image_path = None
+        self.controlnet_processed_image_layers = None
 
         self.create_generation_thread()
 
@@ -549,6 +554,29 @@ class GenerationModule(BaseModule):
                 key = data.get("dialog_key")
                 self.dialogs[key].close()
                 del self.dialogs[key]
+        elif dialog_type == "controlnet":
+            if action == "open":
+                if "controlnet" not in self.dialogs:
+                    self.dialogs[dialog_type] = ControlNetImageDialog(
+                        dialog_type,
+                        self.directories,
+                        self.preferences,
+                        self.image_viewer,
+                        self.gen_settings.image_width,
+                        self.gen_settings.image_height,
+                        controlnet_source_image_path=self.controlnet_source_image_path,
+                        controlnet_source_image_layers=self.controlnet_source_image_layers,
+                        controlnet_processed_image_path=self.controlnet_processed_image_path,
+                        controlnet_processed_image_layers=self.controlnet_processed_image_layers,
+                    )
+                    self.dialogs[dialog_type].setParent(None)
+                    self.dialogs[dialog_type].show()
+                else:
+                    self.dialogs[dialog_type].raise_()
+                    self.dialogs[dialog_type].activateWindow()
+            elif action == "close":
+                self.dialogs[dialog_type].close()
+                del self.dialogs[dialog_type]
 
     def on_model_event(self, data: dict):
         action = data.get("action")

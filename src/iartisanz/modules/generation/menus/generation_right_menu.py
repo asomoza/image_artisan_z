@@ -8,6 +8,7 @@ from iartisanz.app.directories import DirectoriesObject
 from iartisanz.app.preferences import PreferencesObject
 from iartisanz.buttons.expand_contract_button import ExpandContractButton
 from iartisanz.buttons.vertical_button import VerticalButton
+from iartisanz.modules.generation.controlnet.controlnet_panel import ControlNetPanel
 from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.lora.lora_panel import LoraPanel
 from iartisanz.modules.generation.panels.generation_panel import GenerationPanel
@@ -52,6 +53,7 @@ class GenerationRightMenu(QFrame):
 
         self.add_panel("Generation", GenerationPanel)
         self.add_panel("LoRA", LoraPanel)
+        self.add_panel("ControlNet", ControlNetPanel)
         self.add_panel("Source Image", SourceImagePanel)
 
         self.loras = []

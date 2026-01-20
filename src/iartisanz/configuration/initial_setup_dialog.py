@@ -28,6 +28,8 @@ class InitialSetupDialog(QDialog):
         ("models_loras", "Select LoRAs directory"),
         ("outputs_images", "Select image outputs directory"),
         ("outputs_source_images", "Select source images outputs directory"),
+        ("outputs_controlnet_source_images", "Select ControlNet source images outputs directory"),
+        ("outputs_conditioning_images", "Select conditioning images outputs directory"),
     )
 
     def __init__(
@@ -199,6 +201,8 @@ class InitialSetupDialog(QDialog):
             "models_loras": os.path.join(base, "models", "loras"),
             "outputs_images": os.path.join(base, "outputs", "images"),
             "outputs_source_images": os.path.join(base, "outputs", "source_images"),
+            "outputs_controlnet_source_images": os.path.join(base, "outputs", "controlnet_source_images"),
+            "outputs_conditioning_images": os.path.join(base, "outputs", "conditioning_images"),
         }
 
     def set_defaults(self) -> None:
