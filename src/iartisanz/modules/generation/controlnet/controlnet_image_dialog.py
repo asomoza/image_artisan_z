@@ -2,8 +2,8 @@ import copy
 import logging
 import os
 
-from PyQt6.QtCore import QEvent, QSettings, Qt
-from PyQt6.QtGui import QColor, QCursor, QGuiApplication
+from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer
+from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QImage
 from PyQt6.QtWidgets import QApplication, QComboBox, QHBoxLayout, QLabel, QVBoxLayout
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 
@@ -83,7 +83,6 @@ class ControlNetImageDialog(BaseDialog):
         model_label = QLabel("ControlNet model:")
         control_layout.addWidget(model_label)
 
-        # the model weights live in ~/.iartisanz/models/controlnet eg: Z-Image-Turbo-Fun-Controlnet-Union-2.1-2601-8steps.safetensors
         self.model_combo = QComboBox()
         self.model_combo.addItem("Union", "Z-Image-Turbo-Fun-Controlnet-Union-2.1-2601-8steps")
         self.model_combo.addItem("Union Lite", "Z-Image-Turbo-Fun-Controlnet-Union-2.1-2601-8steps")
@@ -253,6 +252,12 @@ class ControlNetImageDialog(BaseDialog):
     def connect_image_widgets(self):
         self.connect_image_widget(self.controlnet_source_image_widget.image_widget)
         self.connect_image_widget(self.controlnet_condition_image_widget.image_widget)
+        self.controlnet_condition_image_widget.image_widget.image_changed.connect(self._update_add_button_state)
+        self.controlnet_condition_image_widget.image_widget.image_loaded.connect(self._update_add_button_state)
+        if hasattr(self.controlnet_condition_image_widget.image_widget, "layer_manager_widget"):
+            self.controlnet_condition_image_widget.image_widget.layer_manager_widget.delete_layer_clicked.connect(
+                lambda: QTimer.singleShot(0, self._update_add_button_state)
+            )
 
     def connect_image_widget(self, widget: ImageWidget):
         self.brush_size_slider.valueChanged.connect(widget.image_editor.set_brush_size)
@@ -269,11 +274,14 @@ class ControlNetImageDialog(BaseDialog):
             self.depth_widget.setVisible(False)
             self.lines_widget.setVisible(False)
             self.edges_widget.setVisible(False)
+            self.controlnet_source_image_widget.setVisible(False)
             self._clear_preprocessor_model()
         else:
             self.preprocessing_combo.setVisible(True)
             self.preprocessor_label.setVisible(True)
+            self.controlnet_source_image_widget.setVisible(True)
             self.on_preprocessor_changed(self.preprocessing_combo.currentIndex())
+        self._update_add_button_state()
 
     def on_preprocessor_changed(self, index):
         preprocessor = self.preprocessing_combo.itemData(index)
@@ -348,7 +356,7 @@ class ControlNetImageDialog(BaseDialog):
 
     def on_preprocess_finished(self, pixmap):
         self.controlnet_condition_image_widget.image_widget.image_editor.change_layer_image(pixmap)
-        self.controlnet_condition_image_widget.add_button.setEnabled(True)
+        self._update_add_button_state()
 
     def on_preprocess_error(self, message: str):
         logger.error("ControlNet preprocess failed: %s", message)
@@ -359,6 +367,35 @@ class ControlNetImageDialog(BaseDialog):
             self._clear_preprocessor_on_finish = False
             self._clear_preprocessor_model()
         self.controlnet_preprocess_thread = None
+
+    def _update_add_button_state(self):
+        if self.controlnet_condition_image_widget is None:
+            return
+
+        editor = self.controlnet_condition_image_widget.image_widget.image_editor
+        layers = editor.get_all_layers()
+        if not layers:
+            self.controlnet_condition_image_widget.add_button.setEnabled(False)
+            return
+
+        pixmap = editor.get_scene_as_pixmap()
+        self.controlnet_condition_image_widget.add_button.setEnabled(self._pixmap_has_content(pixmap))
+
+    def _pixmap_has_content(self, pixmap) -> bool:
+        if pixmap is None or pixmap.isNull():
+            return False
+
+        image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        if image.isNull():
+            return False
+
+        ptr = image.bits()
+        ptr.setsize(image.sizeInBytes())
+        data = memoryview(ptr)
+        for index in range(3, len(data), 4):
+            if data[index] != 0:
+                return True
+        return False
 
     def on_add_clicked(self):
         if self.dialog_busy:
