@@ -193,6 +193,7 @@ class ControlNetImageDialog(BaseDialog):
             layers=self.controlnet_processed_image_layers,
             delete_original_on_load=False,
         )
+        self.controlnet_condition_image_widget.add_button.clicked.connect(self.on_add_clicked)
         images_layout.addWidget(self.controlnet_condition_image_widget)
         content_layout.addLayout(images_layout)
 
@@ -350,3 +351,6 @@ class ControlNetImageDialog(BaseDialog):
             self._clear_preprocessor_on_finish = False
             self._clear_preprocessor_model()
         self.controlnet_preprocess_thread = None
+
+    def on_add_clicked(self):
+        pass
