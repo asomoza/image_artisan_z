@@ -65,6 +65,8 @@ class GenerationModule(BaseModule):
         self.controlnet_source_image_layers = None
         self.controlnet_processed_image_path = None
         self.controlnet_processed_image_layers = None
+        self.controlnet_model_path = None
+        self.controlnet_condition_thumb_path = None
 
         self.create_generation_thread()
 
@@ -75,6 +77,7 @@ class GenerationModule(BaseModule):
         self.event_bus.subscribe("lora", self.on_lora_event)
         self.event_bus.subscribe("generate", self.on_generate_event)
         self.event_bus.subscribe("source_image", self.on_source_image_event)
+        self.event_bus.subscribe("controlnet", self.on_controlnet_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -407,6 +410,12 @@ class GenerationModule(BaseModule):
             self.source_image_layers = None
             self.source_image_mask_path = None
             self.source_image_mask_thumb_path = None
+            self.controlnet_source_image_path = None
+            self.controlnet_source_image_layers = None
+            self.controlnet_processed_image_path = None
+            self.controlnet_processed_image_layers = None
+            self.controlnet_model_path = None
+            self.controlnet_condition_thumb_path = None
 
             # Recreate staged graph/thread without clearing ModelManager / VRAM.
             old_thread = self.generation_thread
@@ -667,3 +676,49 @@ class GenerationModule(BaseModule):
             self.generation_thread.remove_source_image_mask()
             self.source_image_mask_path = None
             self.source_image_mask_thumb_path = None
+
+    # TODO: refactor this method to make the logic better and cleaner (remove if elif chain)
+    def on_controlnet_event(self, data: dict):
+        action = data.get("action")
+
+        if action in {"add", "update"}:
+            self.controlnet_model_path = data.get("controlnet_model_path")
+            self.controlnet_processed_image_path = data.get("control_image_path")
+            self.controlnet_condition_thumb_path = data.get("control_image_thumb_path")
+
+            conditioning_scale = data.get("conditioning_scale", 0.75)
+            control_guidance_start_end = data.get("control_guidance_start_end", [0.0, 1.0])
+
+            if self.controlnet_model_path and self.controlnet_processed_image_path:
+                self.generation_thread.add_controlnet(
+                    controlnet_path=self.controlnet_model_path,
+                    control_image_path=self.controlnet_processed_image_path,
+                    conditioning_scale=conditioning_scale,
+                )
+                self.generation_thread.update_controlnet(
+                    controlnet_path=self.controlnet_model_path,
+                    control_image_path=self.controlnet_processed_image_path,
+                )
+                self.generation_thread.update_controlnet_conditioning_scale(conditioning_scale)
+                self.generation_thread.update_node("control_guidance_start_end", control_guidance_start_end)
+                self.generation_thread.enable_controlnet(True)
+
+        elif action == "update_conditioning_scale":
+            conditioning_scale = data.get("conditioning_scale")
+            if conditioning_scale is not None:
+                self.generation_thread.update_controlnet_conditioning_scale(conditioning_scale)
+
+        elif action == "update_control_guidance_start_end":
+            control_guidance_start_end = data.get("control_guidance_start_end")
+            if control_guidance_start_end is not None:
+                self.generation_thread.update_node("control_guidance_start_end", control_guidance_start_end)
+
+        elif action == "update_layers":
+            self.controlnet_processed_image_layers = data.get("layers", None)
+
+        elif action == "remove":
+            self.generation_thread.remove_controlnet()
+            self.controlnet_model_path = None
+            self.controlnet_processed_image_path = None
+            self.controlnet_processed_image_layers = None
+            self.controlnet_condition_thumb_path = None

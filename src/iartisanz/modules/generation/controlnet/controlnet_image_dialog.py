@@ -1,4 +1,6 @@
+import copy
 import logging
+import os
 
 from PyQt6.QtCore import QEvent, QSettings, Qt
 from PyQt6.QtGui import QColor, QCursor, QGuiApplication
@@ -15,6 +17,8 @@ from iartisanz.modules.generation.controlnet.controlnet_source_image_widget impo
 from iartisanz.modules.generation.controlnet.preprocessor_option_widget import PreprocessorOptionWidget
 from iartisanz.modules.generation.image.image_widget import ImageWidget
 from iartisanz.modules.generation.threads.controlnet_preprocess_thread import ControlnetPreprocessThread
+from iartisanz.modules.generation.threads.pixmap_save_thread import PixmapSaveThread
+from iartisanz.modules.generation.threads.save_layers_thread import SaveLayersThread
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +49,10 @@ class ControlNetImageDialog(BaseDialog):
 
         self.controlnet_preprocess_thread = None
         self._clear_preprocessor_on_finish = False
+        self.dialog_busy = False
+        self.pixmap_save_thread = None
+        self.save_layers_thread = None
+        self.controlnet_processed_thumb_path = None
 
         self.setWindowTitle("ControlNet")
         self.setMinimumSize(1300, 800)
@@ -353,4 +361,119 @@ class ControlNetImageDialog(BaseDialog):
         self.controlnet_preprocess_thread = None
 
     def on_add_clicked(self):
-        pass
+        if self.dialog_busy:
+            return
+
+        pixmap = self.controlnet_condition_image_widget.image_widget.image_editor.get_scene_as_pixmap()
+        if pixmap is None or pixmap.isNull():
+            return
+
+        self.dialog_busy = True
+
+        if (
+            self.controlnet_processed_image_path is not None
+            and self.directories.temp_path in self.controlnet_processed_image_path
+        ):
+            if os.path.isfile(self.controlnet_processed_image_path):
+                os.remove(self.controlnet_processed_image_path)
+
+        self.pixmap_save_thread = PixmapSaveThread(
+            pixmap,
+            prefix="controlnet_condition",
+            temp_path=self.directories.temp_path,
+            thumb_width=150,
+            thumb_height=150,
+        )
+        self.pixmap_save_thread.save_finished.connect(self.on_controlnet_pixmap_saved)
+        self.pixmap_save_thread.finished.connect(self.on_save_pixmap_thread_finished)
+        self.pixmap_save_thread.error.connect(self.on_error)
+        self.pixmap_save_thread.start()
+
+    def _resolve_controlnet_model_path(self, model_name: str) -> str:
+        if not model_name:
+            return ""
+
+        # Default to the base "models" directory next to diffusers/singlefile paths.
+        base_models_dir = None
+        for candidate in (
+            self.directories.models_singlefile,
+            self.directories.models_diffusers,
+            self.directories.models_loras,
+            self.directories.data_path,
+        ):
+            if candidate:
+                base_models_dir = os.path.dirname(candidate)
+                break
+
+        if base_models_dir is None:
+            base_models_dir = os.path.expanduser("~")
+
+        filename = model_name
+        if not filename.endswith(".safetensors"):
+            filename = f"{filename}.safetensors"
+
+        return os.path.join(base_models_dir, "controlnet", filename)
+
+    def on_controlnet_pixmap_saved(self, image_path: str, thumbnail_path: str):
+        previous_path = self.controlnet_processed_image_path
+
+        if previous_path == image_path:
+            return
+
+        self.controlnet_processed_image_path = image_path
+        self.controlnet_processed_thumb_path = thumbnail_path
+
+        model_name = self.model_combo.itemData(self.model_combo.currentIndex())
+        model_label = self.model_combo.currentText()
+        model_path = self._resolve_controlnet_model_path(model_name)
+
+        self.event_bus.publish(
+            "controlnet",
+            {
+                "action": "add" if previous_path is None else "update",
+                "controlnet_model_name": model_label,
+                "controlnet_model_path": model_path,
+                "control_image_path": image_path,
+                "control_image_thumb_path": thumbnail_path,
+                "conditioning_scale": 0.75,
+                "control_guidance_start_end": [0.0, 1.0],
+            },
+        )
+
+        self.save_layers()
+
+    def save_layers(self):
+        layers = self.controlnet_condition_image_widget.image_widget.image_editor.get_all_layers()
+        self.save_layers_thread = SaveLayersThread(layers, "controlnet_condition_layer", self.directories.temp_path)
+        self.save_layers_thread.error.connect(self.on_error)
+        self.save_layers_thread.finished.connect(self.on_save_layers_thread_finished)
+        self.save_layers_thread.start()
+
+    def on_save_pixmap_thread_finished(self):
+        self.pixmap_save_thread.save_finished.disconnect(self.on_controlnet_pixmap_saved)
+        self.pixmap_save_thread.finished.disconnect(self.on_save_pixmap_thread_finished)
+        self.pixmap_save_thread.error.disconnect(self.on_error)
+        self.pixmap_save_thread = None
+
+        self.dialog_busy = False
+
+    def on_save_layers_thread_finished(self):
+        self.save_layers_thread.finished.disconnect(self.on_save_layers_thread_finished)
+        self.save_layers_thread.error.disconnect(self.on_error)
+        self.save_layers_thread = None
+
+        layers = self.controlnet_condition_image_widget.image_widget.image_editor.get_all_layers()
+        copied_layers = [copy.copy(layer) for layer in layers]
+        for layer in copied_layers:
+            layer.pixmap_item = None
+
+        self.event_bus.publish(
+            "controlnet",
+            {
+                "action": "update_layers",
+                "layers": copied_layers,
+            },
+        )
+
+    def on_error(self, message: str):
+        self.event_bus.publish("show_snackbar", {"action": "show", "message": message})

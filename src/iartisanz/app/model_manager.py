@@ -438,6 +438,88 @@ class ModelManager:
             return self.get(value.component, device=device, dtype=dtype)
         return value
 
+    @contextlib.contextmanager
+    def default_device_scope(self, device: torch.device | str | None):
+        if device is None:
+            yield
+            return
+
+        if hasattr(torch, "get_default_device") and hasattr(torch, "set_default_device"):
+            try:
+                previous = torch.get_default_device()
+            except Exception:
+                previous = None
+            try:
+                if previous is None or torch.device(previous) != torch.device(device):
+                    torch.set_default_device(device)
+                    yield
+                else:
+                    yield
+            finally:
+                if previous is not None:
+                    try:
+                        torch.set_default_device(previous)
+                    except Exception:
+                        pass
+        else:
+            yield
+
+    def ensure_module_device(
+        self,
+        module: Any,
+        *,
+        device: torch.device | str,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        if not _is_torch_module(module):
+            return
+
+        target_device = torch.device(device)
+        needs_move = False
+        try:
+            for p in module.parameters(recurse=True):
+                if p.device != target_device:
+                    needs_move = True
+                    break
+            if not needs_move:
+                for b in module.buffers(recurse=True):
+                    if b.device != target_device:
+                        needs_move = True
+                        break
+        except Exception:
+            needs_move = True
+
+        if needs_move:
+            try:
+                module.to(device=target_device, dtype=dtype)
+            except Exception:
+                try:
+                    module.to(device=target_device)
+                except Exception:
+                    pass
+
+        embedders = getattr(module, "control_all_x_embedder", None)
+        if isinstance(embedders, torch.nn.ModuleDict):
+            for submodule in embedders.values():
+                if _is_torch_module(submodule):
+                    try:
+                        submodule.to(device=target_device, dtype=dtype)
+                    except Exception:
+                        try:
+                            submodule.to(device=target_device)
+                        except Exception:
+                            pass
+        elif isinstance(embedders, dict):
+            for submodule in embedders.values():
+                if _is_torch_module(submodule):
+                    try:
+                        submodule.to(device=target_device, dtype=dtype)
+                    except Exception:
+                        try:
+                            submodule.to(device=target_device)
+                        except Exception:
+                            pass
+
     def offload_to_cpu(self, component: ModelComponent):
         with self._lock:
             self._offload_to_cpu_unlocked(component)

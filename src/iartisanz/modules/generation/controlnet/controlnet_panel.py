@@ -1,5 +1,6 @@
 from PyQt6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
+from iartisanz.modules.generation.controlnet.controlnet_added_item import ControlNetAddedItem
 from iartisanz.modules.generation.panels.base_panel import BasePanel
 
 
@@ -8,6 +9,8 @@ class ControlNetPanel(BasePanel):
         super().__init__(*args)
 
         self.init_ui()
+
+        self.event_bus.subscribe("controlnet", self.on_controlnet_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -25,3 +28,21 @@ class ControlNetPanel(BasePanel):
 
     def open_controlnet_dialog(self):
         self.event_bus.publish("manage_dialog", {"dialog_type": "controlnet", "action": "open"})
+
+    def clear_controlnets_layout(self):
+        while self.controlnets_layout.count():
+            child = self.controlnets_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+    #########################################################
+    ## SUBSCRIBED BUS EVENTS
+    #########################################################
+    def on_controlnet_event(self, data: dict):
+        action = data.get("action")
+        if action in {"add", "update"}:
+            self.clear_controlnets_layout()
+            controlnet_widget = ControlNetAddedItem(data)
+            self.controlnets_layout.addWidget(controlnet_widget)
+        elif action == "remove":
+            self.clear_controlnets_layout()

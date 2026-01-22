@@ -17,6 +17,7 @@ from iartisanz.modules.generation.graph.nodes.controlnet_model_node import Contr
 from iartisanz.modules.generation.graph.nodes.image_load_node import ImageLoadNode
 from iartisanz.modules.generation.graph.nodes.lora_node import LoraNode
 from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
+from iartisanz.modules.generation.graph.nodes.number_range_node import NumberRangeNode
 
 
 if TYPE_CHECKING:
@@ -482,6 +483,9 @@ class NodeGraphThread(QThread):
 
         conditioning = ControlNetConditioningNode()
 
+        control_guidance = NumberRangeNode(value=[0.0, 1.0])
+        self.node_graph.add_node(control_guidance, "control_guidance_start_end")
+
         models_node = self.node_graph.get_node_by_name("model")
         width_node = self.node_graph.get_node_by_name("image_width")
         height_node = self.node_graph.get_node_by_name("image_height")
@@ -501,6 +505,7 @@ class NodeGraphThread(QThread):
         denoise_node.connect("controlnet", controlnet_model, "controlnet")
         denoise_node.connect("control_image_latents", conditioning, "control_image_latents")
         denoise_node.connect("controlnet_conditioning_scale", scale_node, "value")
+        denoise_node.connect("control_guidance_start_end", control_guidance, "value")
 
     def update_controlnet(self, *, controlnet_path: str | None = None, control_image_path: str | None = None):
         model_node = self.node_graph.get_node_by_name("controlnet_model")
@@ -521,30 +526,48 @@ class NodeGraphThread(QThread):
         image_node = self.node_graph.get_node_by_name("control_image")
         conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
         scale_node = self.node_graph.get_node_by_name("controlnet_conditioning_scale")
+        guidance_node = self.node_graph.get_node_by_name("control_guidance_start_end")
         denoise_node = self.node_graph.get_node_by_name("denoise")
 
-        if None in (model_node, image_node, conditioning_node, scale_node, denoise_node):
+        if None in (model_node, image_node, conditioning_node, scale_node, guidance_node, denoise_node):
             return
 
         model_node.enabled = bool(enabled)
         image_node.enabled = bool(enabled)
         conditioning_node.enabled = bool(enabled)
         scale_node.enabled = bool(enabled)
+        guidance_node.enabled = bool(enabled)
 
         if enabled:
-            denoise_node.connect("controlnet", model_node, "controlnet")
-            denoise_node.connect("control_image_latents", conditioning_node, "control_image_latents")
-            denoise_node.connect("controlnet_conditioning_scale", scale_node, "value")
+            if not self._has_connection(denoise_node, "controlnet", model_node, "controlnet"):
+                denoise_node.connect("controlnet", model_node, "controlnet")
+            if not self._has_connection(
+                denoise_node, "control_image_latents", conditioning_node, "control_image_latents"
+            ):
+                denoise_node.connect("control_image_latents", conditioning_node, "control_image_latents")
+            if not self._has_connection(denoise_node, "controlnet_conditioning_scale", scale_node, "value"):
+                denoise_node.connect("controlnet_conditioning_scale", scale_node, "value")
+            if not self._has_connection(denoise_node, "control_guidance_start_end", guidance_node, "value"):
+                denoise_node.connect("control_guidance_start_end", guidance_node, "value")
         else:
             denoise_node.disconnect("controlnet", model_node, "controlnet")
             denoise_node.disconnect("control_image_latents", conditioning_node, "control_image_latents")
             denoise_node.disconnect("controlnet_conditioning_scale", scale_node, "value")
+            denoise_node.disconnect("control_guidance_start_end", guidance_node, "value")
+
+    @staticmethod
+    def _has_connection(node, input_name: str, source_node, output_name: str) -> bool:
+        for connected_node, connected_output in node.connections.get(input_name, []):
+            if connected_node is source_node and connected_output == output_name:
+                return True
+        return False
 
     def remove_controlnet(self):
         denoise_node = self.node_graph.get_node_by_name("denoise")
         model_node = self.node_graph.get_node_by_name("controlnet_model")
         conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
         scale_node = self.node_graph.get_node_by_name("controlnet_conditioning_scale")
+        guidance_node = self.node_graph.get_node_by_name("control_guidance_start_end")
 
         if denoise_node is not None and model_node is not None:
             denoise_node.disconnect("controlnet", model_node, "controlnet")
@@ -552,6 +575,8 @@ class NodeGraphThread(QThread):
             denoise_node.disconnect("control_image_latents", conditioning_node, "control_image_latents")
         if denoise_node is not None and scale_node is not None:
             denoise_node.disconnect("controlnet_conditioning_scale", scale_node, "value")
+        if denoise_node is not None and guidance_node is not None:
+            denoise_node.disconnect("control_guidance_start_end", guidance_node, "value")
 
         control_init_image_node = self.node_graph.get_node_by_name("control_init_image")
         if conditioning_node is not None and control_init_image_node is not None:
@@ -569,6 +594,7 @@ class NodeGraphThread(QThread):
 
         self.node_graph.delete_node_by_name("controlnet_conditioning")
         self.node_graph.delete_node_by_name("controlnet_conditioning_scale")
+        self.node_graph.delete_node_by_name("control_guidance_start_end")
         self.node_graph.delete_node_by_name("control_image")
         self.node_graph.delete_node_by_name("controlnet_model")
 

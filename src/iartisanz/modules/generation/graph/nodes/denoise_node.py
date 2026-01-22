@@ -213,7 +213,7 @@ class DenoiseNode(Node):
         control_context_latents_cfg = None
 
         if has_controlnet:
-            controlnet = mm.resolve(controlnet_input)
+            controlnet = mm.resolve(controlnet_input, device=self.device, dtype=transformer_dtype)
             control_image_latents_typed = control_image_latents.to(self.device, dtype=transformer_dtype)
 
             # For some ControlNet checkpoints (e.g. 2.0), control_in_dim can differ from transformer in_channels.
@@ -335,13 +335,19 @@ class DenoiseNode(Node):
                     # Match the non-CFG prompt input shape. Prompt tensor is already batched.
                     pos_prompt_embeds_model_input = (prompt_embeds_typed,)
 
-                    pos_controlnet_block_samples = controlnet(
-                        pos_latent_model_input_list,
-                        pos_timestep_model_input,
-                        pos_prompt_embeds_model_input,
-                        control_image_latents_typed,
-                        conditioning_scale=cond_scale,
-                    )
+                    with mm.default_device_scope(control_image_latents_typed.device):
+                        mm.ensure_module_device(
+                            controlnet,
+                            device=control_image_latents_typed.device,
+                            dtype=transformer_dtype,
+                        )
+                        pos_controlnet_block_samples = controlnet(
+                            pos_latent_model_input_list,
+                            pos_timestep_model_input,
+                            pos_prompt_embeds_model_input,
+                            control_image_latents_typed,
+                            conditioning_scale=cond_scale,
+                        )
 
                     # Expand to (pos, neg) batch with zeros for the negative branch.
                     expanded: dict = {}
@@ -360,13 +366,19 @@ class DenoiseNode(Node):
                             control_context_latents_cfg = torch.cat([control_context] * 2, dim=0)
                         control_context = control_context_latents_cfg
 
-                    controlnet_block_samples = controlnet(
-                        latent_model_input_list,
-                        timestep_model_input,
-                        prompt_embeds_model_input,
-                        control_context,
-                        conditioning_scale=cond_scale,
-                    )
+                    with mm.default_device_scope(control_context.device):
+                        mm.ensure_module_device(
+                            controlnet,
+                            device=control_context.device,
+                            dtype=transformer_dtype,
+                        )
+                        controlnet_block_samples = controlnet(
+                            latent_model_input_list,
+                            timestep_model_input,
+                            prompt_embeds_model_input,
+                            control_context,
+                            conditioning_scale=cond_scale,
+                        )
 
                     if use_prompt_mode and controlnet_block_samples is not None:
                         controlnet_block_samples = self._apply_prompt_mode_decay(
