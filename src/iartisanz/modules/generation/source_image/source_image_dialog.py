@@ -108,9 +108,13 @@ class SourceImageDialog(BaseDialog):
             self.directories.outputs_images,
             self.directories.temp_path,
             layers=self.source_image_layers,
+            mask_image_path=self.source_image_mask_path,
         )
         self.image_section_widget.source_image_added.connect(self.on_source_image_added)
         self.image_section_widget.add_mask_clicked.connect(self.on_add_mask_clicked)
+        self.image_section_widget.delete_mask_clicked.connect(self.on_delete_mask)
+        if self.source_image_mask_path is not None:
+            self.image_section_widget.set_existing_mask_buttons()
         content_layout.addWidget(self.image_section_widget)
 
         self.mask_section_widget = MaskSectionWidget(
@@ -119,6 +123,7 @@ class SourceImageDialog(BaseDialog):
             self.image_height,
             self.directories.outputs_images,
             self.directories.temp_path,
+            mask_image_path=self.source_image_mask_path,
         )
 
         # set mask editor defaults

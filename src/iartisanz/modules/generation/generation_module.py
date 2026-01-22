@@ -291,6 +291,7 @@ class GenerationModule(BaseModule):
                     "loras",
                     "source_image",
                     "strength",
+                    "source_image_mask",
                     "use_torch_compile",
                 ]
                 subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
@@ -298,6 +299,10 @@ class GenerationModule(BaseModule):
                 # set local values that are not settings-backed
                 if "source_image" in subset:
                     self.source_image_path = subset.get("source_image", None)
+
+                if "source_image_mask" in subset:
+                    self.source_image_mask_path = subset.get("source_image_mask", None)
+                    self.source_image_mask_thumb_path = None
 
                 self.process_lora_data(subset.get("loras", []))
 
@@ -629,11 +634,20 @@ class GenerationModule(BaseModule):
                 "guidance_scale",
                 "guidance_start_end",
                 "scheduler",
+                "source_image",
+                "strength",
+                "source_image_mask",
                 "loras",
                 "use_torch_compile",
             ]
             subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
             self.generation_thread.load_json_graph(json_graph)
+
+            # Keep runtime state in sync so panels/dialogs reflect what was loaded.
+            self.source_image_path = subset.get("source_image")
+            self.source_image_layers = None
+            self.source_image_mask_path = subset.get("source_image_mask")
+            self.source_image_mask_thumb_path = None
 
             self.process_lora_data(subset.get("loras", []))
 
@@ -660,10 +674,25 @@ class GenerationModule(BaseModule):
         elif action == "enable":
             self.generation_thread.enable_source_image(data.get("value"))
         elif action == "remove":
+            try:
+                self.generation_thread.remove_source_image_mask()
+            except Exception:
+                pass
+
+            if self.source_image_mask_path is not None and self.directories.temp_path in self.source_image_mask_path:
+                try:
+                    if os.path.isfile(self.source_image_mask_path):
+                        os.remove(self.source_image_mask_path)
+                except Exception:
+                    pass
+
             self.generation_thread.remove_source_image()
             self.source_image_path = None
             self.source_image_thumb_path = None
             self.source_image_layers = None
+
+            self.source_image_mask_path = None
+            self.source_image_mask_thumb_path = None
         elif action == "add_mask":
             self.source_image_mask_path = data.get("source_image_mask_path")
             self.source_image_mask_thumb_path = data.get("source_image_mask_thumb_path")

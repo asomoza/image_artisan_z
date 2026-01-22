@@ -102,10 +102,13 @@ def source_image_dialog_module(monkeypatch, qapp, fake_superqt, tmp_path: Path):
     class FakeSectionWidget(QWidget):
         source_image_added = pyqtSignal(object)
         add_mask_clicked = pyqtSignal()
+        delete_mask_clicked = pyqtSignal()
 
-        def __init__(self, *args, layers=None, **kwargs):
+        def __init__(self, *args, layers=None, mask_image_path=None, **kwargs):
             super().__init__()
             self.image_widget = FakeImageWidget(FakeImageEditor())
+            self._mask_image_path = mask_image_path
+            self._existing_mask_buttons_set = 0
             if layers is not None:
                 self.image_widget.image_editor.set_layers(layers)
 
@@ -126,14 +129,18 @@ def source_image_dialog_module(monkeypatch, qapp, fake_superqt, tmp_path: Path):
         def on_source_image_added(self):
             self.source_image_added.emit(QPixmap(2, 2))
 
+        def set_existing_mask_buttons(self):
+            self._existing_mask_buttons_set += 1
+
     class FakeMaskSectionWidget(QWidget):
         save_mask_clicked = pyqtSignal()
         mask_canceled = pyqtSignal()
         mask_deleted = pyqtSignal()
 
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args, mask_image_path=None, **kwargs):
             super().__init__()
             self.image_widget = FakeImageWidget(FakeImageEditor())
+            self._mask_image_path = mask_image_path
 
     image_section_mod = ModuleType("iartisanz.modules.generation.source_image.image_section_widget")
     image_section_mod.ImageSectionWidget = FakeSectionWidget
@@ -212,6 +219,9 @@ def _make_dirs(tmp_path: Path):
         models_loras=str(base / "models_loras"),
         outputs_images=str(base / "outputs_images"),
         outputs_source_images=str(base / "outputs_source_images"),
+        outputs_source_masks=str(base / "outputs_source_masks"),
+        outputs_controlnet_source_images=str(base / "outputs_controlnet_source_images"),
+        outputs_conditioning_images=str(base / "outputs_conditioning_images"),
         temp_path=str(base / "temp"),
     )
 
@@ -250,6 +260,36 @@ def test_init_connects_editor_and_sets_defaults(source_image_dialog_module, tmp_
     assert mask_editor.brush_size == 150
     assert mask_editor.hardness == 0.0
     assert mask_editor.steps == 1.25
+
+
+def test_init_with_existing_mask_wires_sections(source_image_dialog_module, tmp_path: Path):
+    from iartisanz.app.preferences import PreferencesObject
+
+    SourceImageDialog = source_image_dialog_module.SourceImageDialog
+
+    directories = _make_dirs(tmp_path)
+    os.makedirs(directories.temp_path, exist_ok=True)
+
+    mask_path = str(tmp_path / "mask.png")
+    Path(mask_path).write_bytes(b"mask")
+
+    dialog = SourceImageDialog(
+        "source_image",
+        directories,
+        PreferencesObject(),
+        None,
+        512,
+        512,
+        source_image_path=str(tmp_path / "some.png"),
+        source_image_layers=None,
+        source_image_mask_path=mask_path,
+    )
+
+    # The dialog should pass the mask path down so it can be edited again.
+    assert getattr(dialog.image_section_widget, "_mask_image_path", None) == mask_path
+    assert getattr(dialog.mask_section_widget, "_mask_image_path", None) == mask_path
+    # And it should flip the ImageSectionWidget UI to "existing mask" state.
+    assert getattr(dialog.image_section_widget, "_existing_mask_buttons_set", 0) == 1
 
 
 def test_on_source_image_added_publishes_update_and_update_layers(source_image_dialog_module, tmp_path: Path):

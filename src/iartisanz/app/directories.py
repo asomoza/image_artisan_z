@@ -9,6 +9,7 @@ class DirectoriesObject:
     models_loras = attr.ib(type=str)
     outputs_images = attr.ib(type=str)
     outputs_source_images = attr.ib(type=str)
+    outputs_source_masks = attr.ib(type=str)
     outputs_controlnet_source_images = attr.ib(type=str)
     outputs_conditioning_images = attr.ib(type=str)
     temp_path = attr.ib(type=str)

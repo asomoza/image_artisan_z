@@ -75,6 +75,7 @@ class BaseTorchAppApplication(QApplication):
         models_loras = settings.value("models_loras", None, type=str)
         outputs_images = settings.value("outputs_images", None, type=str)
         outputs_source_images = settings.value("outputs_source_images", None, type=str)
+        outputs_source_masks = settings.value("outputs_source_masks", None, type=str)
         outputs_controlnet_source_images = settings.value("outputs_controlnet_source_images", None, type=str)
         outputs_conditioning_images = settings.value("outputs_conditioning_images", None, type=str)
 
@@ -85,6 +86,7 @@ class BaseTorchAppApplication(QApplication):
             models_loras=models_loras,
             outputs_images=outputs_images,
             outputs_source_images=outputs_source_images,
+            outputs_source_masks=outputs_source_masks,
             outputs_controlnet_source_images=outputs_controlnet_source_images,
             outputs_conditioning_images=outputs_conditioning_images,
             temp_path=self.temp_path,
@@ -99,6 +101,7 @@ class BaseTorchAppApplication(QApplication):
                 models_loras,
                 outputs_images,
                 outputs_source_images,
+                outputs_source_masks,
                 outputs_controlnet_source_images,
                 outputs_conditioning_images,
             ]

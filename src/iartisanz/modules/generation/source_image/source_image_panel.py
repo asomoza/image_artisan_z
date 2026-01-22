@@ -13,6 +13,7 @@ class SourceImagePanel(BasePanel):
         super().__init__(*args)
 
         self.source_image_thumb_path = None
+        self.source_image_mask_thumb_path = None
 
         self.init_ui()
 
@@ -139,6 +140,7 @@ class SourceImagePanel(BasePanel):
         if action == "loaded":
             data = data.get("data", {})
             source_image_path = data.get("source_image", None)
+            source_image_mask_path = data.get("source_image_mask", None)
 
             if source_image_path is not None:
                 source_pixmap = QPixmap(source_image_path)
@@ -162,3 +164,14 @@ class SourceImagePanel(BasePanel):
             else:
                 # If the loaded graph has no source image, reset UI to defaults.
                 self._reset_source_image_ui()
+
+            # Restore mask preview (if present)
+            if source_image_mask_path is not None:
+                mask_pixmap = QPixmap(source_image_mask_path)
+                mask_thumb_pixmap = mask_pixmap.scaled(150, 150)
+                self.source_thumb_mask_label.setPixmap(mask_thumb_pixmap)
+                self.mask_text_label.setVisible(True)
+            else:
+                self.mask_text_label.setVisible(False)
+                self.source_image_mask_thumb_path = None
+                self.source_thumb_mask_label.clear()

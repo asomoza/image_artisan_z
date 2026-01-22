@@ -28,6 +28,7 @@ class InitialSetupDialog(QDialog):
         ("models_loras", "Select LoRAs directory"),
         ("outputs_images", "Select image outputs directory"),
         ("outputs_source_images", "Select source images outputs directory"),
+        ("outputs_source_masks", "Select source masks outputs directory"),
         ("outputs_controlnet_source_images", "Select ControlNet source images outputs directory"),
         ("outputs_conditioning_images", "Select conditioning images outputs directory"),
     )
@@ -41,7 +42,7 @@ class InitialSetupDialog(QDialog):
     ):
         super().__init__(*args, **kwargs)
 
-        self.dialog_width = 800
+        self.dialog_width = 1000
         self.dialog_height = 800
         self.setFixedSize(self.dialog_width, self.dialog_height)
 
@@ -201,6 +202,7 @@ class InitialSetupDialog(QDialog):
             "models_loras": os.path.join(base, "models", "loras"),
             "outputs_images": os.path.join(base, "outputs", "images"),
             "outputs_source_images": os.path.join(base, "outputs", "source_images"),
+            "outputs_source_masks": os.path.join(base, "outputs", "source_masks"),
             "outputs_controlnet_source_images": os.path.join(base, "outputs", "controlnet_source_images"),
             "outputs_conditioning_images": os.path.join(base, "outputs", "conditioning_images"),
         }

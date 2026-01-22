@@ -65,6 +65,9 @@ def test_check_initial_setup_returns_true_when_all_required_directories_are_set(
         "models_loras": "/models/loras",
         "outputs_images": "/outputs/images",
         "outputs_source_images": "/outputs/source",
+        "outputs_source_masks": "/outputs/source_masks",
+        "outputs_controlnet_source_images": "/outputs/controlnet_source_images",
+        "outputs_conditioning_images": "/outputs/conditioning_images",
     }
     appmod = _import_app_module(monkeypatch, settings_store=settings)
 
