@@ -11,6 +11,7 @@ from iartisanz.buttons.color_button import ColorButton
 from iartisanz.buttons.eyedropper_button import EyeDropperButton
 from iartisanz.modules.generation.controlnet.controlnet_condition_image_widget import ControlNetConditionImageWidget
 from iartisanz.modules.generation.controlnet.controlnet_source_image_widget import ControlNetSourceImageWidget
+from iartisanz.modules.generation.controlnet.preprocessor_option_widget import PreprocessorOptionWidget
 from iartisanz.modules.generation.image.image_widget import ImageWidget
 
 
@@ -54,6 +55,8 @@ class ControlNetImageDialog(BaseDialog):
         self.init_ui()
 
         self.connect_image_widgets()
+        self.on_model_changed(self.model_combo.currentIndex())
+        self.on_preprocessor_changed(self.preprocessing_combo.currentIndex())
 
     def init_ui(self):
         content_layout = QVBoxLayout()
@@ -73,20 +76,53 @@ class ControlNetImageDialog(BaseDialog):
         self.model_combo.addItem("Union Lite", "Z-Image-Turbo-Fun-Controlnet-Union-2.1-2601-8steps")
         self.model_combo.addItem("Tile", "Z-Image-Turbo-Fun-Controlnet-Tile-2.1-2601-8steps")
         self.model_combo.addItem("Tile Lite", "Z-Image-Turbo-Fun-Controlnet-Tile-2.1-2601-8steps")
+        self.model_combo.currentIndexChanged.connect(self.on_model_changed)
         control_layout.addWidget(self.model_combo)
 
+        self.preprocessor_layout = QHBoxLayout()
         self.preprocessor_label = QLabel("Preprocessor:")
-        control_layout.addWidget(self.preprocessor_label)
+        self.preprocessor_layout.addWidget(self.preprocessor_label)
 
         self.preprocessing_combo = QComboBox()
         self.preprocessing_combo.addItem("Depth", "depth")
-        self.preprocessing_combo.addItem("Teed", "teed")
-        self.preprocessing_combo.addItem("LineArt", "lineart")
-        self.preprocessing_combo.addItem("Canny", "canny")
-        self.preprocessing_combo.addItem("Pose", "pose")
-        self.preprocessing_combo.addItem("Hed", "hed")
-        control_layout.addWidget(self.preprocessing_combo)
+        self.preprocessing_combo.addItem("Lines", "lines")
+        self.preprocessing_combo.addItem("Edges", "edges")
+        self.preprocessing_combo.currentIndexChanged.connect(self.on_preprocessor_changed)
+        self.preprocessor_layout.addWidget(self.preprocessing_combo)
+        control_layout.addLayout(self.preprocessor_layout)
+
+        control_layout.setStretch(0, 3)
+        control_layout.setStretch(1, 3)
+        control_layout.setStretch(2, 6)
+
         content_layout.addLayout(control_layout)
+
+        preprocessor_widget_layout = QVBoxLayout()
+        self.depth_widget = PreprocessorOptionWidget(
+            options=[
+                ("DepthAnythingV2 Small", "depth-anything/Depth-Anything-V2-Small-hf"),
+                ("DepthAnythingV2 Base", "depth-anything/Depth-Anything-V2-Base-hf"),
+                ("DepthAnythingV2 Large", "depth-anything/Depth-Anything-V2-Large-hf"),
+                ("ZoeDepth (NYU)", "Intel/zoedepth-nyu"),
+                ("ZoeDepth (KITTI)", "Intel/zoedepth-kitti"),
+                ("ZoeDepth (NYU and KITTI)", "Intel/zoedepth-nyu-kitti"),
+            ]
+        )
+        preprocessor_widget_layout.addWidget(self.depth_widget)
+        self.lines_widget = PreprocessorOptionWidget(
+            options=[
+                ("Lineart", "OzzyGT/lineart"),
+                ("Lineart Standard", None),
+            ]
+        )
+        preprocessor_widget_layout.addWidget(self.lines_widget)
+        self.edges_widget = PreprocessorOptionWidget(
+            options=[
+                ("Teed", "OzzyGT/teed"),
+            ]
+        )
+        preprocessor_widget_layout.addWidget(self.edges_widget)
+        content_layout.addLayout(preprocessor_widget_layout)
 
         brush_layout = QHBoxLayout()
         brush_layout.setContentsMargins(10, 0, 10, 0)
@@ -205,3 +241,22 @@ class ControlNetImageDialog(BaseDialog):
         self.brush_steps_slider.valueChanged.connect(widget.image_editor.set_brush_steps)
         self.color_button.color_changed.connect(widget.image_editor.set_brush_color)
         self.brush_erase_button.brush_selected.connect(widget.set_erase_mode)
+
+    def on_model_changed(self, index):
+        model_name = self.model_combo.itemData(index)
+        if "tile" in model_name.lower():
+            self.preprocessing_combo.setVisible(False)
+            self.preprocessor_label.setVisible(False)
+            self.depth_widget.setVisible(False)
+            self.lines_widget.setVisible(False)
+            self.edges_widget.setVisible(False)
+        else:
+            self.preprocessing_combo.setVisible(True)
+            self.preprocessor_label.setVisible(True)
+            self.on_preprocessor_changed(self.preprocessing_combo.currentIndex())
+
+    def on_preprocessor_changed(self, index):
+        preprocessor = self.preprocessing_combo.itemData(index)
+        self.depth_widget.setVisible(preprocessor == "depth")
+        self.lines_widget.setVisible(preprocessor == "lines")
+        self.edges_widget.setVisible(preprocessor == "edges")
