@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
 from iartisanz.modules.generation.image.image_widget import ImageWidget
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
 
 
 class ControlNetSourceImageWidget(QWidget):
+    preprocess_clicked = pyqtSignal()
+
     def __init__(
         self,
         image_viewer: ImageViewerSimpleWidget,
@@ -62,3 +65,6 @@ class ControlNetSourceImageWidget(QWidget):
         main_layout.addWidget(self.preprocess_button)
 
         self.setLayout(main_layout)
+
+    def disable_buttons(self, state: bool = True):
+        self.preprocess_button.setDisabled(state)

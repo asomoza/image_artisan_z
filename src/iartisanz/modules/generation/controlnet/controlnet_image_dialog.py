@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QApplication, QComboBox, QHBoxLayout, QLabel, QVBoxL
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 
 from iartisanz.app.base_dialog import BaseDialog
+from iartisanz.app.model_manager import get_model_manager
 from iartisanz.buttons.brush_erase_button import BrushEraseButton
 from iartisanz.buttons.color_button import ColorButton
 from iartisanz.buttons.eyedropper_button import EyeDropperButton
@@ -13,6 +14,7 @@ from iartisanz.modules.generation.controlnet.controlnet_condition_image_widget i
 from iartisanz.modules.generation.controlnet.controlnet_source_image_widget import ControlNetSourceImageWidget
 from iartisanz.modules.generation.controlnet.preprocessor_option_widget import PreprocessorOptionWidget
 from iartisanz.modules.generation.image.image_widget import ImageWidget
+from iartisanz.modules.generation.threads.controlnet_preprocess_thread import ControlnetPreprocessThread
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,9 @@ class ControlNetImageDialog(BaseDialog):
         self.controlnet_processed_image_layers = controlnet_processed_image_layers
 
         super().__init__(*args[:3], *args[6:])
+
+        self.controlnet_preprocess_thread = None
+        self._clear_preprocessor_on_finish = False
 
         self.setWindowTitle("ControlNet")
         self.setMinimumSize(1300, 800)
@@ -109,6 +114,7 @@ class ControlNetImageDialog(BaseDialog):
             ]
         )
         preprocessor_widget_layout.addWidget(self.depth_widget)
+        self.depth_widget.preprocessor_changed.connect(self.on_preprocessor_option_changed)
         self.lines_widget = PreprocessorOptionWidget(
             options=[
                 ("Lineart", "OzzyGT/lineart"),
@@ -116,12 +122,14 @@ class ControlNetImageDialog(BaseDialog):
             ]
         )
         preprocessor_widget_layout.addWidget(self.lines_widget)
+        self.lines_widget.preprocessor_changed.connect(self.on_preprocessor_option_changed)
         self.edges_widget = PreprocessorOptionWidget(
             options=[
                 ("Teed", "OzzyGT/teed"),
             ]
         )
         preprocessor_widget_layout.addWidget(self.edges_widget)
+        self.edges_widget.preprocessor_changed.connect(self.on_preprocessor_option_changed)
         content_layout.addLayout(preprocessor_widget_layout)
 
         brush_layout = QHBoxLayout()
@@ -173,6 +181,7 @@ class ControlNetImageDialog(BaseDialog):
             layers=self.controlnet_source_image_layers,
             delete_original_on_load=False,
         )
+        self.controlnet_source_image_widget.preprocess_button.clicked.connect(self.on_preprocess_clicked)
         images_layout.addWidget(self.controlnet_source_image_widget)
 
         self.controlnet_condition_image_widget = ControlNetConditionImageWidget(
@@ -198,6 +207,7 @@ class ControlNetImageDialog(BaseDialog):
         self.settings.setValue("geometry", self.saveGeometry())
 
     def closeEvent(self, event):
+        self._clear_preprocessor_model()
         self.save_settings()
         super().closeEvent(event)
 
@@ -250,6 +260,7 @@ class ControlNetImageDialog(BaseDialog):
             self.depth_widget.setVisible(False)
             self.lines_widget.setVisible(False)
             self.edges_widget.setVisible(False)
+            self._clear_preprocessor_model()
         else:
             self.preprocessing_combo.setVisible(True)
             self.preprocessor_label.setVisible(True)
@@ -260,3 +271,82 @@ class ControlNetImageDialog(BaseDialog):
         self.depth_widget.setVisible(preprocessor == "depth")
         self.lines_widget.setVisible(preprocessor == "lines")
         self.edges_widget.setVisible(preprocessor == "edges")
+        self._clear_preprocessor_model()
+
+    def on_preprocessor_option_changed(self, _index: int):
+        self._clear_preprocessor_model()
+
+    def _clear_preprocessor_model(self):
+        if self.controlnet_preprocess_thread is not None and self.controlnet_preprocess_thread.isRunning():
+            self._clear_preprocessor_on_finish = True
+            return
+        try:
+            get_model_manager().clear_component("preprocessor")
+        except Exception:
+            logger.debug("Failed clearing preprocessor model", exc_info=True)
+
+    def _set_preprocess_buttons_blocked(self, blocked: bool):
+        self.controlnet_source_image_widget.disable_buttons(blocked)
+        self.controlnet_condition_image_widget.disable_buttons(blocked)
+        self.preprocessing_combo.setEnabled(not blocked)
+        self.depth_widget.setEnabled(not blocked)
+        self.lines_widget.setEnabled(not blocked)
+        self.edges_widget.setEnabled(not blocked)
+
+    def on_preprocess_clicked(self):
+        if self.controlnet_preprocess_thread is not None and self.controlnet_preprocess_thread.isRunning():
+            return
+
+        pixmap = self.controlnet_source_image_widget.image_widget.image_editor.get_scene_as_pixmap()
+
+        index = self.preprocessing_combo.currentIndex()
+        preprocessor_type = self.preprocessing_combo.itemData(index)
+
+        # grab the preprocessor type and model from the selected preprocessor widget
+        preprocessor_name = ""
+        preprocessor_model = ""
+        resolution_scale = 1.0
+
+        if preprocessor_type == "depth":
+            preprocessor_name = self.depth_widget.option_combo.currentText()
+            preprocessor_model = self.depth_widget.repo_id
+            resolution_scale = float(self.depth_widget.preprocessor_resolution_slider.value())
+        elif preprocessor_type == "lines":
+            preprocessor_name = self.lines_widget.option_combo.currentText()
+            preprocessor_model = self.lines_widget.repo_id
+            resolution_scale = float(self.lines_widget.preprocessor_resolution_slider.value())
+            if preprocessor_model is None:
+                preprocessor_type = "lineart_standard"
+        elif preprocessor_type == "edges":
+            preprocessor_name = self.edges_widget.option_combo.currentText()
+            preprocessor_model = self.edges_widget.repo_id
+            resolution_scale = float(self.edges_widget.preprocessor_resolution_slider.value())
+            preprocessor_type = "teed"
+
+        self.controlnet_preprocess_thread = ControlnetPreprocessThread(
+            pixmap,
+            preprocessor_type,
+            preprocessor_name,
+            preprocessor_model,
+            resolution_scale,
+        )
+        self.controlnet_preprocess_thread.preprocessor_finished.connect(self.on_preprocess_finished)
+        self.controlnet_preprocess_thread.error.connect(self.on_preprocess_error)
+        self.controlnet_preprocess_thread.finished.connect(self.on_preprocess_thread_finished)
+
+        self._set_preprocess_buttons_blocked(True)
+        self.controlnet_preprocess_thread.start()
+
+    def on_preprocess_finished(self, pixmap):
+        self.controlnet_condition_image_widget.image_widget.image_editor.change_layer_image(pixmap)
+        self.controlnet_condition_image_widget.add_button.setEnabled(True)
+
+    def on_preprocess_error(self, message: str):
+        logger.error("ControlNet preprocess failed: %s", message)
+
+    def on_preprocess_thread_finished(self):
+        self._set_preprocess_buttons_blocked(False)
+        if self._clear_preprocessor_on_finish:
+            self._clear_preprocessor_on_finish = False
+            self._clear_preprocessor_model()
+        self.controlnet_preprocess_thread = None

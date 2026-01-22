@@ -17,6 +17,7 @@ ModelComponent = Literal[
     "transformer",
     "vae",
     "controlnet",
+    "preprocessor",
 ]
 
 
@@ -187,6 +188,7 @@ class ModelManager:
         transformer: Any = None,
         vae: Any = None,
         controlnet: Any = None,
+        preprocessor: Any = None,
     ):
         with self._lock:
             self._model_id = model_id
@@ -202,6 +204,29 @@ class ModelManager:
                 self._components["vae"] = vae
             if controlnet is not None:
                 self._components["controlnet"] = controlnet
+            if preprocessor is not None:
+                self._components["preprocessor"] = preprocessor
+
+    def register_component(self, component: ModelComponent, value: Any) -> None:
+        with self._lock:
+            if value is None:
+                self._components.pop(component, None)
+            else:
+                self._components[component] = value
+            for key in [k for k in self._compiled_components.keys() if k[1] == component]:
+                self._compiled_components.pop(key, None)
+
+    def clear_component(self, component: ModelComponent) -> None:
+        with self._lock:
+            self._components.pop(component, None)
+            for key in [k for k in self._compiled_components.keys() if k[1] == component]:
+                self._compiled_components.pop(key, None)
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+                except Exception:
+                    pass
 
     def get_compiled(
         self,
@@ -311,13 +336,15 @@ class ModelManager:
         #   VAE/transformer to make it fit.
         # - When we need transformer or VAE on GPU, we offload text encoder first.
         if requesting == "text_encoder":
-            return ("vae", "transformer")
+            return ("preprocessor", "vae", "transformer")
         if requesting == "transformer":
-            return ("text_encoder", "vae", "controlnet")
+            return ("preprocessor", "text_encoder", "vae", "controlnet")
         if requesting == "vae":
-            return ("text_encoder", "transformer", "controlnet")
+            return ("preprocessor", "text_encoder", "transformer", "controlnet")
         if requesting == "controlnet":
-            return ("text_encoder", "vae", "transformer")
+            return ("preprocessor", "text_encoder", "vae", "transformer")
+        if requesting == "preprocessor":
+            return ("text_encoder", "vae", "transformer", "controlnet")
         return ()
 
     def _offload_for_cuda_unlocked(self, requesting: ModelComponent):

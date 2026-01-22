@@ -22,6 +22,55 @@ def convert_numpy_to_pixmap(numpy_image: np.array) -> QPixmap:
     return pixmap
 
 
+def pixmap_to_numpy_rgb(pixmap: QPixmap) -> np.ndarray:
+    image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+    width = image.width()
+    height = image.height()
+    ptr = image.bits()
+    ptr.setsize(image.sizeInBytes())
+    arr = np.frombuffer(ptr, np.uint8).reshape(height, width, 4)
+    return arr[:, :, :3].copy()
+
+
+def numpy_to_pixmap(numpy_image: np.ndarray) -> QPixmap:
+    if numpy_image.ndim == 2:
+        data = numpy_image.astype(np.uint8, copy=False)
+        height, width = data.shape
+        qimage = QImage(data.data, width, height, width, QImage.Format.Format_Grayscale8).copy()
+        return QPixmap.fromImage(qimage)
+
+    if numpy_image.shape[2] == 4:
+        data = numpy_image.astype(np.uint8, copy=False)
+        height, width, _ = data.shape
+        qimage = QImage(
+            data.data,
+            width,
+            height,
+            data.strides[0],
+            QImage.Format.Format_RGBA8888,
+        ).copy()
+        return QPixmap.fromImage(qimage)
+
+    data = numpy_image.astype(np.uint8, copy=False)
+    height, width, _ = data.shape
+    qimage = QImage(data.data, width, height, data.strides[0], QImage.Format.Format_RGB888).copy()
+    return QPixmap.fromImage(qimage)
+
+
+def pixmap_to_pil(pixmap: QPixmap) -> Image.Image:
+    image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+    width = image.width()
+    height = image.height()
+    ptr = image.bits()
+    ptr.setsize(image.sizeInBytes())
+    arr = np.frombuffer(ptr, np.uint8).reshape(height, width, 4)
+    return Image.fromarray(arr, mode="RGBA").convert("RGB")
+
+
+def pil_to_pixmap(image: Image.Image) -> QPixmap:
+    return numpy_to_pixmap(np.array(image))
+
+
 def pil_to_numpy(images: Union[list[Image.Image], Image.Image]) -> np.ndarray:
     if not isinstance(images, list):
         images = [images]

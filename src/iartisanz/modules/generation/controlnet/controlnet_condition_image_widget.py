@@ -64,3 +64,6 @@ class ControlNetConditionImageWidget(QWidget):
         main_layout.addWidget(self.add_button)
 
         self.setLayout(main_layout)
+
+    def disable_buttons(self, state: bool = True):
+        self.add_button.setDisabled(state)
