@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "attrs>=25.4.0",
     "diffusers>=0.35.2",
+    "image-gen-aux>=0.1.0.dev0",
     "opencv-python-headless>=4.12.0.88",
     "peft>=0.18.0",
     "protobuf>=5.29.0",
@@ -51,6 +52,7 @@ torchvision = [
   { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 diffusers = { git = "https://github.com/huggingface/diffusers" }
+image-gen-aux = { git = "https://github.com/huggingface/image_gen_aux" }
 
 [project.gui-scripts]
 iartisanz = "iartisanz.__main__:main"
