@@ -129,6 +129,9 @@ class LoraEditWidget(QWidget):
             self.lora_image_label.setPixmap(cropped_pixmap)
             self.image_updated = True
 
+            if self.image_viewer.json_graph is not None:
+                self.model_data.example = self.image_viewer.json_graph
+
     def save_lora_info(self):
         database = Database(os.path.join(self.directories.data_path, "app.db"))
 
@@ -137,9 +140,6 @@ class LoraEditWidget(QWidget):
         self.model_data.model_type = self.model_type_combobox.currentData()
         self.model_data.tags = self.tags_edit.text()
         self.model_data.triggers = self.triggers_edit.toPlainText()
-
-        if self.image_viewer.json_graph is not None:
-            self.model_data.example = self.image_viewer.json_graph
 
         database.update(
             "lora_model",
