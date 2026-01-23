@@ -502,43 +502,40 @@ class GenerationModule(BaseModule):
         else:
             self.generation_thread.update_node(attr, value)
 
-    def on_manage_dialog_event(self, data):
-        dialog_type = data.get("dialog_type")
-        action = data.get("action")
+    def _open_dialog(self, dialog_key, dialog_factory):
+        if dialog_key not in self.dialogs:
+            self.dialogs[dialog_key] = dialog_factory()
+            self.dialogs[dialog_key].setParent(self, Qt.WindowType.Window)
+            self.dialogs[dialog_key].show()
+        else:
+            self.dialogs[dialog_key].raise_()
+            self.dialogs[dialog_key].activateWindow()
 
-        def _open_dialog(dialog_key, dialog_factory):
-            if dialog_key not in self.dialogs:
-                self.dialogs[dialog_key] = dialog_factory()
-                self.dialogs[dialog_key].setParent(self, Qt.WindowType.Window)
-                self.dialogs[dialog_key].show()
-            else:
-                self.dialogs[dialog_key].raise_()
-                self.dialogs[dialog_key].activateWindow()
+    def _close_dialog(self, dialog_key):
+        if dialog_key in self.dialogs:
+            self.dialogs[dialog_key].close()
+            del self.dialogs[dialog_key]
 
-        def _close_dialog(dialog_key):
-            if dialog_key in self.dialogs:
-                self.dialogs[dialog_key].close()
-                del self.dialogs[dialog_key]
+    def _lora_advanced_key(self, lora_data):
+        return f"lora_advanced_{lora_data.name}_{lora_data.version}"
 
-        def _lora_advanced_key(lora_data):
-            return f"lora_advanced_{lora_data.name}_{lora_data.version}"
-
-        dialog_specs = {
+    def _get_dialog_specs(self):
+        return {
             "model_manager": {
                 "key": lambda _data: "model_manager",
-                "factory": lambda: ModelManagerDialog(
+                "factory": lambda _data: ModelManagerDialog(
                     "model_manager", self.directories, self.preferences, self.image_viewer
                 ),
             },
             "lora_manager": {
                 "key": lambda _data: "lora_manager",
-                "factory": lambda: LoraManagerDialog(
+                "factory": lambda _data: LoraManagerDialog(
                     "lora_manager", self.directories, self.preferences, self.image_viewer
                 ),
             },
             "source_image": {
                 "key": lambda _data: "source_image",
-                "factory": lambda: SourceImageDialog(
+                "factory": lambda _data: SourceImageDialog(
                     "source_image",
                     self.directories,
                     self.preferences,
@@ -551,16 +548,16 @@ class GenerationModule(BaseModule):
                 ),
             },
             "lora_advanced": {
-                "key": lambda d: _lora_advanced_key(d.get("lora")),
-                "factory": lambda: LoraAdvancedDialog(
-                    _lora_advanced_key(data.get("lora")),
-                    data.get("lora"),
+                "key": lambda d: self._lora_advanced_key(d.get("lora")),
+                "factory": lambda d: LoraAdvancedDialog(
+                    self._lora_advanced_key(d.get("lora")),
+                    d.get("lora"),
                 ),
                 "close_key": lambda d: d.get("dialog_key"),
             },
             "controlnet": {
                 "key": lambda _data: "controlnet",
-                "factory": lambda: ControlNetImageDialog(
+                "factory": lambda _data: ControlNetImageDialog(
                     "controlnet",
                     self.directories,
                     self.preferences,
@@ -575,7 +572,11 @@ class GenerationModule(BaseModule):
             },
         }
 
-        spec = dialog_specs.get(dialog_type)
+    def on_manage_dialog_event(self, data):
+        dialog_type = data.get("dialog_type")
+        action = data.get("action")
+
+        spec = self._get_dialog_specs().get(dialog_type)
         if not spec:
             return
 
@@ -583,13 +584,13 @@ class GenerationModule(BaseModule):
             dialog_key = spec["key"](data)
             if dialog_key is None:
                 return
-            _open_dialog(dialog_key, spec["factory"])
+            self._open_dialog(dialog_key, lambda: spec["factory"](data))
         elif action == "close":
             close_key_fn = spec.get("close_key", spec["key"])
             dialog_key = close_key_fn(data)
             if dialog_key is None:
                 return
-            _close_dialog(dialog_key)
+            self._close_dialog(dialog_key)
 
     def on_model_event(self, data: dict):
         action = data.get("action")
