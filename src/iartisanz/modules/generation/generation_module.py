@@ -68,6 +68,10 @@ class GenerationModule(BaseModule):
         self.controlnet_model_path = None
         self.controlnet_condition_thumb_path = None
 
+        # ControlNet denoise behavior controls
+        self.controlnet_control_mode = "balanced"
+        self.controlnet_prompt_decay = 0.825
+
         self.create_generation_thread()
 
         self.event_bus.subscribe("model", self.on_model_event)
@@ -498,99 +502,94 @@ class GenerationModule(BaseModule):
         else:
             self.generation_thread.update_node(attr, value)
 
-    # TODO: refactor this method to make the logic better and cleaner (remove if elif chain)
     def on_manage_dialog_event(self, data):
         dialog_type = data.get("dialog_type")
         action = data.get("action")
 
-        if dialog_type == "model_manager":
-            if action == "open":
-                if "model_manager" not in self.dialogs:
-                    self.dialogs[dialog_type] = ModelManagerDialog(
-                        dialog_type, self.directories, self.preferences, self.image_viewer
-                    )
-                    self.dialogs[dialog_type].setParent(None)
-                    self.dialogs[dialog_type].show()
-                else:
-                    self.dialogs[dialog_type].raise_()
-                    self.dialogs[dialog_type].activateWindow()
-            elif action == "close":
-                self.dialogs[dialog_type].close()
-                del self.dialogs[dialog_type]
-        elif dialog_type == "lora_manager":
-            if action == "open":
-                if "lora_manager" not in self.dialogs:
-                    self.dialogs[dialog_type] = LoraManagerDialog(
-                        dialog_type, self.directories, self.preferences, self.image_viewer
-                    )
-                    self.dialogs[dialog_type].setParent(None)
-                    self.dialogs[dialog_type].show()
-                else:
-                    self.dialogs[dialog_type].raise_()
-                    self.dialogs[dialog_type].activateWindow()
-            elif action == "close":
-                self.dialogs[dialog_type].close()
-                del self.dialogs[dialog_type]
-        elif dialog_type == "source_image":
-            if action == "open":
-                if "source_image" not in self.dialogs:
-                    self.dialogs[dialog_type] = SourceImageDialog(
-                        dialog_type,
-                        self.directories,
-                        self.preferences,
-                        self.image_viewer,
-                        self.gen_settings.image_width,
-                        self.gen_settings.image_height,
-                        source_image_path=self.source_image_path,
-                        source_image_layers=self.source_image_layers,
-                        source_image_mask_path=self.source_image_mask_path,
-                    )
-                    self.dialogs[dialog_type].setParent(None)
-                    self.dialogs[dialog_type].show()
-                else:
-                    self.dialogs[dialog_type].raise_()
-                    self.dialogs[dialog_type].activateWindow()
-            elif action == "close":
-                self.dialogs[dialog_type].close()
-                del self.dialogs[dialog_type]
-        elif dialog_type == "lora_advanced":
-            lora_data = data.get("lora")
-            if action == "open":
-                key = f"lora_advanced_{lora_data.name}_{lora_data.version}"
-                if key not in self.dialogs:
-                    self.dialogs[key] = LoraAdvancedDialog(key, lora_data)
-                    self.dialogs[key].setParent(None)
-                    self.dialogs[key].show()
-                else:
-                    self.dialogs[key].raise_()
-                    self.dialogs[key].activateWindow()
-            elif action == "close":
-                key = data.get("dialog_key")
-                self.dialogs[key].close()
-                del self.dialogs[key]
-        elif dialog_type == "controlnet":
-            if action == "open":
-                if "controlnet" not in self.dialogs:
-                    self.dialogs[dialog_type] = ControlNetImageDialog(
-                        dialog_type,
-                        self.directories,
-                        self.preferences,
-                        self.image_viewer,
-                        self.gen_settings.image_width,
-                        self.gen_settings.image_height,
-                        controlnet_source_image_path=self.controlnet_source_image_path,
-                        controlnet_source_image_layers=self.controlnet_source_image_layers,
-                        controlnet_processed_image_path=self.controlnet_processed_image_path,
-                        controlnet_processed_image_layers=self.controlnet_processed_image_layers,
-                    )
-                    self.dialogs[dialog_type].setParent(None)
-                    self.dialogs[dialog_type].show()
-                else:
-                    self.dialogs[dialog_type].raise_()
-                    self.dialogs[dialog_type].activateWindow()
-            elif action == "close":
-                self.dialogs[dialog_type].close()
-                del self.dialogs[dialog_type]
+        def _open_dialog(dialog_key, dialog_factory):
+            if dialog_key not in self.dialogs:
+                self.dialogs[dialog_key] = dialog_factory()
+                self.dialogs[dialog_key].setParent(self, Qt.WindowType.Window)
+                self.dialogs[dialog_key].show()
+            else:
+                self.dialogs[dialog_key].raise_()
+                self.dialogs[dialog_key].activateWindow()
+
+        def _close_dialog(dialog_key):
+            if dialog_key in self.dialogs:
+                self.dialogs[dialog_key].close()
+                del self.dialogs[dialog_key]
+
+        def _lora_advanced_key(lora_data):
+            return f"lora_advanced_{lora_data.name}_{lora_data.version}"
+
+        dialog_specs = {
+            "model_manager": {
+                "key": lambda _data: "model_manager",
+                "factory": lambda: ModelManagerDialog(
+                    "model_manager", self.directories, self.preferences, self.image_viewer
+                ),
+            },
+            "lora_manager": {
+                "key": lambda _data: "lora_manager",
+                "factory": lambda: LoraManagerDialog(
+                    "lora_manager", self.directories, self.preferences, self.image_viewer
+                ),
+            },
+            "source_image": {
+                "key": lambda _data: "source_image",
+                "factory": lambda: SourceImageDialog(
+                    "source_image",
+                    self.directories,
+                    self.preferences,
+                    self.image_viewer,
+                    self.gen_settings.image_width,
+                    self.gen_settings.image_height,
+                    source_image_path=self.source_image_path,
+                    source_image_layers=self.source_image_layers,
+                    source_image_mask_path=self.source_image_mask_path,
+                ),
+            },
+            "lora_advanced": {
+                "key": lambda d: _lora_advanced_key(d.get("lora")),
+                "factory": lambda: LoraAdvancedDialog(
+                    _lora_advanced_key(data.get("lora")),
+                    data.get("lora"),
+                ),
+                "close_key": lambda d: d.get("dialog_key"),
+            },
+            "controlnet": {
+                "key": lambda _data: "controlnet",
+                "factory": lambda: ControlNetImageDialog(
+                    "controlnet",
+                    self.directories,
+                    self.preferences,
+                    self.image_viewer,
+                    self.gen_settings.image_width,
+                    self.gen_settings.image_height,
+                    controlnet_source_image_path=self.controlnet_source_image_path,
+                    controlnet_source_image_layers=self.controlnet_source_image_layers,
+                    controlnet_processed_image_path=self.controlnet_processed_image_path,
+                    controlnet_processed_image_layers=self.controlnet_processed_image_layers,
+                ),
+            },
+        }
+
+        spec = dialog_specs.get(dialog_type)
+        if not spec:
+            return
+
+        if action == "open":
+            dialog_key = spec["key"](data)
+            if dialog_key is None:
+                return
+            _open_dialog(dialog_key, spec["factory"])
+        elif action == "close":
+            close_key_fn = spec.get("close_key", spec["key"])
+            dialog_key = close_key_fn(data)
+            if dialog_key is None:
+                return
+            _close_dialog(dialog_key)
 
     def on_model_event(self, data: dict):
         action = data.get("action")
@@ -710,6 +709,22 @@ class GenerationModule(BaseModule):
     def on_controlnet_event(self, data: dict):
         action = data.get("action")
 
+        def _validate_control_mode(value: object) -> str:
+            mode = str(value or "").strip().lower() or "balanced"
+            if mode not in {"balanced", "prompt", "controlnet"}:
+                logger.warning("Unknown controlnet_control_mode '%s'; falling back to 'balanced'.", mode)
+                return "balanced"
+            return mode
+
+        def _clamp_decay(value: object) -> float:
+            try:
+                v = float(value)
+            except Exception:
+                return 0.825
+            if v != v:  # NaN
+                return 0.825
+            return max(0.0, min(1.0, v))
+
         if action in {"add", "update"}:
             self.controlnet_model_path = data.get("controlnet_model_path")
             self.controlnet_processed_image_path = data.get("control_image_path")
@@ -718,11 +733,19 @@ class GenerationModule(BaseModule):
             conditioning_scale = data.get("conditioning_scale", 0.75)
             control_guidance_start_end = data.get("control_guidance_start_end", [0.0, 1.0])
 
+            # Allow optional values from payload, but keep current if missing.
+            if "controlnet_control_mode" in data:
+                self.controlnet_control_mode = _validate_control_mode(data.get("controlnet_control_mode"))
+            if "controlnet_prompt_decay" in data:
+                self.controlnet_prompt_decay = _clamp_decay(data.get("controlnet_prompt_decay"))
+
             if self.controlnet_model_path and self.controlnet_processed_image_path:
                 self.generation_thread.add_controlnet(
                     controlnet_path=self.controlnet_model_path,
                     control_image_path=self.controlnet_processed_image_path,
                     conditioning_scale=conditioning_scale,
+                    control_mode=self.controlnet_control_mode,
+                    prompt_decay=self.controlnet_prompt_decay,
                 )
                 self.generation_thread.update_controlnet(
                     controlnet_path=self.controlnet_model_path,
@@ -730,6 +753,10 @@ class GenerationModule(BaseModule):
                 )
                 self.generation_thread.update_controlnet_conditioning_scale(conditioning_scale)
                 self.generation_thread.update_node("control_guidance_start_end", control_guidance_start_end)
+
+                # Ensure graph has current values (even if ControlNet existed already).
+                self.generation_thread.update_node("controlnet_control_mode", self.controlnet_control_mode)
+                self.generation_thread.update_node("controlnet_prompt_decay", self.controlnet_prompt_decay)
                 self.generation_thread.enable_controlnet(True)
 
         elif action == "update_conditioning_scale":
@@ -742,6 +769,16 @@ class GenerationModule(BaseModule):
             if control_guidance_start_end is not None:
                 self.generation_thread.update_node("control_guidance_start_end", control_guidance_start_end)
 
+        elif action == "update_control_mode":
+            mode = _validate_control_mode(data.get("controlnet_control_mode"))
+            self.controlnet_control_mode = mode
+            self.generation_thread.update_node("controlnet_control_mode", mode)
+
+        elif action == "update_prompt_decay":
+            decay = _clamp_decay(data.get("controlnet_prompt_decay"))
+            self.controlnet_prompt_decay = decay
+            self.generation_thread.update_node("controlnet_prompt_decay", decay)
+
         elif action == "update_layers":
             self.controlnet_processed_image_layers = data.get("layers", None)
 
@@ -751,3 +788,7 @@ class GenerationModule(BaseModule):
             self.controlnet_processed_image_path = None
             self.controlnet_processed_image_layers = None
             self.controlnet_condition_thumb_path = None
+
+            # Reset behavior controls to defaults.
+            self.controlnet_control_mode = "balanced"
+            self.controlnet_prompt_decay = 0.825

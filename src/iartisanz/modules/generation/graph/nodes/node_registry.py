@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .boolean_node import BooleanNode
+from .choice_node import ChoiceNode
 from .controlnet_conditioning_node import ControlNetConditioningNode
 from .controlnet_model_node import ControlNetModelNode
 from .denoise_node import DenoiseNode
@@ -19,6 +20,7 @@ from .zimage_model_node import ZImageModelNode
 
 NODE_CLASSES = {
     "BooleanNode": BooleanNode,
+    "ChoiceNode": ChoiceNode,
     "ControlNetConditioningNode": ControlNetConditioningNode,
     "ControlNetModelNode": ControlNetModelNode,
     "DenoiseNode": DenoiseNode,
