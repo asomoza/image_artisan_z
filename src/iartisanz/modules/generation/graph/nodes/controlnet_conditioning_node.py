@@ -22,12 +22,160 @@ def _retrieve_latents(encoder_output: Any, *, sample_mode: str = "sample") -> to
     raise AttributeError("Could not access latents of provided encoder_output")
 
 
+def _extract_alpha_mask(image: Any) -> Image.Image | None:
+    """Extract alpha channel as mask (transparent → white/255, opaque → black/0).
+
+    Args:
+        image: PIL Image, numpy array, or torch tensor
+
+    Returns:
+        PIL Image (mode='L') with inverted alpha, or None if no alpha channel
+    """
+    # PIL Image with alpha
+    if hasattr(image, "mode") and image.mode == "RGBA":
+        from PIL import ImageOps
+
+        alpha = image.split()[-1]  # Get alpha channel
+        mask = ImageOps.invert(alpha)  # Invert: 0 (transparent) → 255 (mask)
+        return mask
+
+    # Torch tensor with alpha (BCHW format with 4 channels)
+    if isinstance(image, torch.Tensor) and image.ndim == 4 and image.shape[1] == 4:
+        alpha = image[:, 3:4, :, :]  # Extract alpha channel
+        mask = 1.0 - alpha  # Invert: 0 (transparent) → 1.0 (mask)
+        # Convert to PIL for consistency
+        mask_np = (mask.squeeze(0).squeeze(0).cpu().numpy() * 255).astype(np.uint8)
+        return Image.fromarray(mask_np, mode="L")
+
+    # Numpy array with alpha
+    if isinstance(image, np.ndarray):
+        if image.ndim == 3 and image.shape[2] == 4:  # HWC format
+            alpha = image[:, :, 3]
+            mask = 255 - alpha  # Invert
+            return Image.fromarray(mask.astype(np.uint8), mode="L")
+        elif image.ndim == 4 and image.shape[1] == 4:  # BCHW format
+            alpha = image[0, 3, :, :]
+            mask = 255 - alpha  # Invert
+            return Image.fromarray(mask.astype(np.uint8), mode="L")
+
+    return None
+
+
+def _composite_rgba_to_rgb(image: Any, background_color=(127, 127, 127)) -> Any:
+    """Composite RGBA image onto solid background to remove alpha channel.
+
+    Args:
+        image: PIL Image, numpy array, or torch tensor
+        background_color: RGB tuple (0-255) for background
+
+    Returns:
+        Same type as input, with alpha removed
+    """
+    # PIL Image with alpha
+    if hasattr(image, "mode") and image.mode == "RGBA":
+        bg = Image.new("RGB", image.size, background_color)
+        bg.paste(image, mask=image.split()[-1])
+        return bg
+
+    # Torch tensor with alpha (BCHW format)
+    if isinstance(image, torch.Tensor) and image.ndim == 4 and image.shape[1] == 4:
+        alpha = image[:, 3:4, :, :]
+        rgb = image[:, :3, :, :]
+        bg_tensor = torch.tensor(background_color, device=image.device, dtype=image.dtype).view(1, 3, 1, 1) / 255.0
+        bg = bg_tensor.expand_as(rgb)
+        composited = rgb * alpha + bg * (1.0 - alpha)
+        return composited
+
+    # Numpy array with alpha
+    if isinstance(image, np.ndarray):
+        if image.ndim == 3 and image.shape[2] == 4:  # HWC format
+            alpha = image[:, :, 3:4] / 255.0
+            rgb = image[:, :, :3]
+            bg = np.full_like(rgb, background_color)
+            composited = (rgb * alpha + bg * (1.0 - alpha)).astype(np.uint8)
+            return composited
+
+    return image
+
+
+def _union_masks(
+    mask1: Image.Image | torch.Tensor | None, mask2: Image.Image | torch.Tensor | None
+) -> Image.Image | torch.Tensor | None:
+    """Union two masks: white where either mask is white.
+
+    Args:
+        mask1: First mask (PIL Image, torch tensor, or None)
+        mask2: Second mask (PIL Image, torch tensor, or None)
+
+    Returns:
+        Unioned mask (same type as mask1), or None if both are None
+    """
+    if mask1 is None:
+        return mask2
+    if mask2 is None:
+        return mask1
+
+    # Convert both to numpy for union
+    if isinstance(mask1, torch.Tensor):
+        # Torch tensor: squeeze to 2D if needed
+        m1 = mask1.squeeze().cpu().numpy()
+        if m1.dtype == np.float32 or m1.dtype == np.float64:
+            m1 = (m1 * 255).astype(np.uint8)
+        is_tensor_result = True
+        original_shape = mask1.shape
+    elif isinstance(mask1, Image.Image):
+        m1 = np.array(mask1)
+        is_tensor_result = False
+    else:
+        m1 = np.array(mask1)
+        is_tensor_result = False
+
+    if isinstance(mask2, Image.Image):
+        m2 = np.array(mask2)
+        # Ensure same size
+        if m2.shape != m1.shape:
+            mask2_pil = mask2 if isinstance(mask2, Image.Image) else Image.fromarray(m2, mode="L")
+            target_size = (m1.shape[1], m1.shape[0])  # PIL uses (width, height)
+            mask2_pil = mask2_pil.resize(target_size, Image.Resampling.NEAREST)
+            m2 = np.array(mask2_pil)
+    elif isinstance(mask2, torch.Tensor):
+        m2 = mask2.squeeze().cpu().numpy()
+        if m2.dtype == np.float32 or m2.dtype == np.float64:
+            m2 = (m2 * 255).astype(np.uint8)
+        # Ensure same size
+        if m2.shape != m1.shape:
+            m2_pil = Image.fromarray(m2, mode="L")
+            target_size = (m1.shape[1], m1.shape[0])
+            m2_pil = m2_pil.resize(target_size, Image.Resampling.NEAREST)
+            m2 = np.array(m2_pil)
+    else:
+        m2 = np.array(mask2)
+
+    # Union
+    union = np.maximum(m1, m2)
+
+    # Return in original format
+    if is_tensor_result:
+        union_float = union.astype(np.float32) / 255.0
+        result = torch.from_numpy(union_float)
+        # Restore original shape
+        while result.ndim < len(original_shape):
+            result = result.unsqueeze(0)
+        return result
+    else:
+        return Image.fromarray(union.astype(np.uint8), mode="L")
+
+
 class ControlNetConditioningNode(Node):
     """Prepares a control image latent tensor for Z-Image ControlNet.
 
     Output is a CPU tensor shaped (B, C, 1, H, W) (the extra dim is 'F').
     DenoiseNode is responsible for duplicating for CFG and for any channel
     padding required by specific ControlNet versions.
+
+    Supports automatic alpha channel extraction: images with transparency automatically
+    generate inpainting masks (transparent regions → masked). Alpha masks are unioned
+    with any explicit mask provided.
 
     This node is optional and not included in the default graph.
     """
@@ -38,6 +186,16 @@ class ControlNetConditioningNode(Node):
     OUTPUTS = ["control_image_latents", "control_image_size"]
 
     SERIALIZE_EXCLUDE = {"control_image_latents"}
+
+    def __init__(self, alpha_composite_color=(127, 127, 127)):
+        """Initialize the node.
+
+        Args:
+            alpha_composite_color: RGB tuple for background when compositing RGBA→RGB.
+                                  Default is gray (127, 127, 127).
+        """
+        super().__init__()
+        self.alpha_composite_color = alpha_composite_color
 
     @torch.inference_mode()
     def __call__(self):
@@ -104,6 +262,27 @@ class ControlNetConditioningNode(Node):
         mask_image = getattr(self, "mask_image", None)
         init_image = getattr(self, "init_image", None)
 
+        # Extract alpha masks from images (transparent → mask)
+        control_alpha_mask = _extract_alpha_mask(control_image) if control_image is not None else None
+        init_alpha_mask = _extract_alpha_mask(init_image) if init_image is not None else None
+
+        # Union all masks: explicit mask + control alpha + init alpha
+        # Anywhere with mask or alpha becomes masked (union operation)
+        final_mask = mask_image
+        if control_alpha_mask is not None:
+            final_mask = _union_masks(final_mask, control_alpha_mask)
+        if init_alpha_mask is not None:
+            final_mask = _union_masks(final_mask, init_alpha_mask)
+
+        # Replace mask_image with the unioned mask
+        mask_image = final_mask
+
+        # Composite RGBA images to RGB (remove alpha channels)
+        if control_image is not None and _extract_alpha_mask(control_image) is not None:
+            control_image = _composite_rgba_to_rgb(control_image, self.alpha_composite_color)
+        if init_image is not None and _extract_alpha_mask(init_image) is not None:
+            init_image = _composite_rgba_to_rgb(init_image, self.alpha_composite_color)
+
         # Determine the base image for control latents
         if control_image is not None:
             base_image = control_image
@@ -164,7 +343,7 @@ class ControlNetConditioningNode(Node):
 
                     if np_mask.dtype != np.uint8:
                         np_mask = np.clip(np_mask, 0, 255).astype(np.uint8)
-                    pil_mask = Image.fromarray(np_mask, mode='L')
+                    pil_mask = Image.fromarray(np_mask, mode="L")
 
                 try:
                     mask_processor = VaeImageProcessor(
