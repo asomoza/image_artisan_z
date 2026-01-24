@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem,
 from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
 from iartisanz.modules.generation.controlnet.controlnet_image_dialog import ControlNetImageDialog
+from iartisanz.modules.generation.controlnet.controlnet_mask_dialog import ControlNetMaskDialog
 from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
@@ -67,6 +68,9 @@ class GenerationModule(BaseModule):
         self.controlnet_processed_image_layers = None
         self.controlnet_model_path = None
         self.controlnet_condition_thumb_path = None
+        self.controlnet_mask_path = None
+        self.controlnet_mask_final_path = None
+        self.controlnet_mask_thumb_path = None
 
         # ControlNet denoise behavior controls
         self.controlnet_control_mode = "balanced"
@@ -570,6 +574,19 @@ class GenerationModule(BaseModule):
                     controlnet_processed_image_layers=self.controlnet_processed_image_layers,
                 ),
             },
+            "controlnet_mask": {
+                "key": lambda _data: "controlnet_mask",
+                "factory": lambda _data: ControlNetMaskDialog(
+                    "controlnet_mask",
+                    self.directories,
+                    self.preferences,
+                    self.image_viewer,
+                    self.gen_settings.image_width,
+                    self.gen_settings.image_height,
+                    controlnet_mask_path=self.controlnet_mask_path,
+                    controlnet_image_path=self.controlnet_processed_image_path,
+                ),
+            },
         }
 
     def on_manage_dialog_event(self, data):
@@ -760,6 +777,11 @@ class GenerationModule(BaseModule):
                 self.generation_thread.update_node("controlnet_prompt_decay", self.controlnet_prompt_decay)
                 self.generation_thread.enable_controlnet(True)
 
+                # If a ControlNet inpaint mask already exists, ensure it is wired.
+                if self.controlnet_mask_final_path:
+                    self.generation_thread.add_controlnet_mask_image(self.controlnet_mask_final_path)
+                    self.generation_thread.update_controlnet_mask_image(self.controlnet_mask_final_path)
+
         elif action == "update_conditioning_scale":
             conditioning_scale = data.get("conditioning_scale")
             if conditioning_scale is not None:
@@ -782,6 +804,26 @@ class GenerationModule(BaseModule):
 
         elif action == "update_layers":
             self.controlnet_processed_image_layers = data.get("layers", None)
+
+        elif action == "add_mask":
+            self.controlnet_mask_path = data.get("controlnet_mask_path")
+            self.controlnet_mask_final_path = data.get("controlnet_mask_final_path")
+            self.controlnet_mask_thumb_path = data.get("controlnet_mask_thumb_path")
+            if self.controlnet_mask_final_path:
+                self.generation_thread.add_controlnet_mask_image(self.controlnet_mask_final_path)
+
+        elif action == "update_mask":
+            self.controlnet_mask_path = data.get("controlnet_mask_path")
+            self.controlnet_mask_final_path = data.get("controlnet_mask_final_path")
+            self.controlnet_mask_thumb_path = data.get("controlnet_mask_thumb_path")
+            if self.controlnet_mask_final_path:
+                self.generation_thread.update_controlnet_mask_image(self.controlnet_mask_final_path)
+
+        elif action == "remove_mask":
+            self.generation_thread.remove_controlnet_mask_image()
+            self.controlnet_mask_path = None
+            self.controlnet_mask_final_path = None
+            self.controlnet_mask_thumb_path = None
 
         elif action == "remove":
             self.generation_thread.remove_controlnet()

@@ -26,6 +26,7 @@ class MaskSectionWidget(QWidget):
         outputh_path: str,
         temp_directory: str,
         mask_image_path: str = None,
+        background_image_path: str = None,
     ):
         super().__init__()
 
@@ -34,12 +35,13 @@ class MaskSectionWidget(QWidget):
         self.target_height = target_height
         self.outputh_path = outputh_path
         self.temp_directory = temp_directory
+        self.background_image_path = background_image_path
 
         self.original_image = None
 
         self.init_ui()
 
-        self.image_widget.set_layers(mask_image_path)
+        self.image_widget.set_layers(mask_image_path, background_image_path)
 
     def init_ui(self):
         main_layout = QVBoxLayout()

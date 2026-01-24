@@ -145,9 +145,17 @@ class ControlNetConditioningNode(Node):
                     else:
                         np_mask = np.array(pil_mask)
 
+                    # Squeeze out singleton dimensions for PIL compatibility
+                    np_mask = np.squeeze(np_mask)
+
+                    # Ensure 2D array for grayscale
+                    if np_mask.ndim > 2:
+                        # If still has extra dims, take first channel
+                        np_mask = np_mask[..., 0] if np_mask.shape[-1] <= 4 else np_mask[0]
+
                     if np_mask.dtype != np.uint8:
                         np_mask = np.clip(np_mask, 0, 255).astype(np.uint8)
-                    pil_mask = Image.fromarray(np_mask)
+                    pil_mask = Image.fromarray(np_mask, mode='L')
 
                 try:
                     mask_processor = VaeImageProcessor(

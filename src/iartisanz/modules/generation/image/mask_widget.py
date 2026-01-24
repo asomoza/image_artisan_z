@@ -129,8 +129,8 @@ class MaskWidget(QWidget):
         reset_image_button.clicked.connect(self.image_editor.clear_and_restore)
         reset_view_button.clicked.connect(self.image_editor.reset_view)
 
-    def set_layers(self, mask_image_path: str = None):
-        self.image_layer = self.image_editor.add_layer()
+    def set_layers(self, mask_image_path: str = None, background_image_path: str = None):
+        self.image_layer = self.image_editor.add_layer(background_image_path)
         self.image_layer.layer_name = "Reference Image"
         self.layer_manager_widget.add_layer(self.image_layer)
 

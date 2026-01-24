@@ -39,8 +39,8 @@ class PreprocessorOptionWidget(QWidget):
             self.option_combo.addItem(label, data)
         self.left_layout.addWidget(self.option_combo)
 
-        resolution_label = QLabel("Resolution:")
-        main_layout.addWidget(resolution_label)
+        self.resolution_label = QLabel("Resolution:")
+        main_layout.addWidget(self.resolution_label)
 
         self.preprocessor_resolution_slider = QDoubleSlider(Qt.Orientation.Horizontal)
         self.preprocessor_resolution_slider.setRange(0.05, 1.0)
@@ -63,3 +63,8 @@ class PreprocessorOptionWidget(QWidget):
             self.option_index = value
             self.repo_id = self.option_combo.currentData()
             self.preprocessor_changed.emit(value)
+
+    def set_resolution_visible(self, visible: bool):
+        self.resolution_label.setVisible(visible)
+        self.preprocessor_resolution_slider.setVisible(visible)
+        self.preprocessor_resolution_value_label.setVisible(visible)

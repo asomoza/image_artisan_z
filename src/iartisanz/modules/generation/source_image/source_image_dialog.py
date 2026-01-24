@@ -11,7 +11,7 @@ from iartisanz.app.base_dialog import BaseDialog
 from iartisanz.buttons.brush_erase_button import BrushEraseButton
 from iartisanz.buttons.color_button import ColorButton
 from iartisanz.buttons.eyedropper_button import EyeDropperButton
-from iartisanz.modules.generation.source_image.image_section_widget import ImageSectionWidget
+from iartisanz.modules.generation.common.mask.image_section_widget import ImageSectionWidget
 from iartisanz.modules.generation.source_image.mask_section_widget import MaskSectionWidget
 from iartisanz.modules.generation.threads.mask_pixmap_save_thread import MaskPixmapSaveThread
 from iartisanz.modules.generation.threads.pixmap_save_thread import PixmapSaveThread

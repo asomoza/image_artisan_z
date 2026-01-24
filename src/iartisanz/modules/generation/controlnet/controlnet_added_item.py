@@ -56,6 +56,25 @@ class ControlNetAddedItem(QFrame):
         conditioning_scale_layout.addWidget(self.conditioning_scale_slider)
         main_layout.addLayout(conditioning_scale_layout)
 
+        self.guidance_start_end_label = QLabel("Guidance Start/End")
+        main_layout.addWidget(self.guidance_start_end_label)
+
+        guidance_layout = QHBoxLayout()
+        self.guidance_start_label = QLabel("0%")
+        guidance_layout.addWidget(self.guidance_start_label)
+
+        self.guidance_slider = QDoubleRangeSlider(Qt.Orientation.Horizontal)
+        self.guidance_slider.setRange(0.0, 1.0)
+        self.guidance_slider.setSingleStep(0.01)
+        guidance_layout.addWidget(self.guidance_slider)
+
+        self.guidance_end_label = QLabel("100%")
+        guidance_layout.addWidget(self.guidance_end_label)
+        main_layout.addLayout(guidance_layout)
+
+        self._set_guidance_ui(self.controlnet_data.get("control_guidance_start_end", [0.0, 1.0]))
+        self.guidance_slider.valueChanged.connect(self.on_guidance_changed)
+
         mode_layout = QVBoxLayout()
         mode_layout.addWidget(QLabel("Control mode"))
         self.control_mode_combo = QComboBox()
@@ -79,22 +98,6 @@ class ControlNetAddedItem(QFrame):
         main_layout.addWidget(self.prompt_decay_container)
 
         self._set_control_mode_ui(self.controlnet_data.get("controlnet_control_mode", "balanced"))
-
-        guidance_layout = QHBoxLayout()
-        self.guidance_start_label = QLabel("0%")
-        guidance_layout.addWidget(self.guidance_start_label)
-
-        self.guidance_slider = QDoubleRangeSlider(Qt.Orientation.Horizontal)
-        self.guidance_slider.setRange(0.0, 1.0)
-        self.guidance_slider.setSingleStep(0.01)
-        guidance_layout.addWidget(self.guidance_slider)
-
-        self.guidance_end_label = QLabel("100%")
-        guidance_layout.addWidget(self.guidance_end_label)
-        main_layout.addLayout(guidance_layout)
-
-        self._set_guidance_ui(self.controlnet_data.get("control_guidance_start_end", [0.0, 1.0]))
-        self.guidance_slider.valueChanged.connect(self.on_guidance_changed)
 
         self.setLayout(main_layout)
 

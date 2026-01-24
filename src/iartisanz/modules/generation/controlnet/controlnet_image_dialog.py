@@ -2,6 +2,7 @@ import copy
 import logging
 import os
 
+import cv2
 from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer
 from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QImage
 from PyQt6.QtWidgets import QApplication, QComboBox, QHBoxLayout, QLabel, QVBoxLayout
@@ -12,6 +13,7 @@ from iartisanz.app.model_manager import get_model_manager
 from iartisanz.buttons.brush_erase_button import BrushEraseButton
 from iartisanz.buttons.color_button import ColorButton
 from iartisanz.buttons.eyedropper_button import EyeDropperButton
+from iartisanz.modules.generation.controlnet.canny_preprocessor_widget import CannyPreprocessorWidget
 from iartisanz.modules.generation.controlnet.controlnet_condition_image_widget import ControlNetConditionImageWidget
 from iartisanz.modules.generation.controlnet.controlnet_source_image_widget import ControlNetSourceImageWidget
 from iartisanz.modules.generation.controlnet.preprocessor_option_widget import PreprocessorOptionWidget
@@ -19,6 +21,7 @@ from iartisanz.modules.generation.image.image_widget import ImageWidget
 from iartisanz.modules.generation.threads.controlnet_preprocess_thread import ControlnetPreprocessThread
 from iartisanz.modules.generation.threads.pixmap_save_thread import PixmapSaveThread
 from iartisanz.modules.generation.threads.save_layers_thread import SaveLayersThread
+from iartisanz.utils.image_converters import numpy_to_pixmap, pixmap_to_numpy_rgb
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +56,10 @@ class ControlNetImageDialog(BaseDialog):
         self.pixmap_save_thread = None
         self.save_layers_thread = None
         self.controlnet_processed_thumb_path = None
+        self.canny_update_timer = QTimer(self)
+        self.canny_update_timer.setSingleShot(True)
+        self.canny_update_timer.setInterval(75)
+        self.canny_update_timer.timeout.connect(self._apply_canny_preprocessor)
 
         self.setWindowTitle("ControlNet")
         self.setMinimumSize(1300, 800)
@@ -124,12 +131,17 @@ class ControlNetImageDialog(BaseDialog):
         self.depth_widget.preprocessor_changed.connect(self.on_preprocessor_option_changed)
         self.lines_widget = PreprocessorOptionWidget(
             options=[
+                ("Canny (Realtime)", "canny"),
                 ("Lineart", "OzzyGT/lineart"),
                 ("Lineart Standard", None),
             ]
         )
         preprocessor_widget_layout.addWidget(self.lines_widget)
         self.lines_widget.preprocessor_changed.connect(self.on_preprocessor_option_changed)
+        self.canny_widget = CannyPreprocessorWidget()
+        self.canny_widget.setVisible(False)
+        self.canny_widget.parameters_changed.connect(self.on_canny_params_changed)
+        preprocessor_widget_layout.addWidget(self.canny_widget)
         self.edges_widget = PreprocessorOptionWidget(
             options=[
                 ("Teed", "OzzyGT/teed"),
@@ -254,6 +266,7 @@ class ControlNetImageDialog(BaseDialog):
         self.connect_image_widget(self.controlnet_condition_image_widget.image_widget)
         self.controlnet_condition_image_widget.image_widget.image_changed.connect(self._update_add_button_state)
         self.controlnet_condition_image_widget.image_widget.image_loaded.connect(self._update_add_button_state)
+        self.controlnet_source_image_widget.image_widget.image_changed.connect(self._schedule_canny_update)
         if hasattr(self.controlnet_condition_image_widget.image_widget, "layer_manager_widget"):
             self.controlnet_condition_image_widget.image_widget.layer_manager_widget.delete_layer_clicked.connect(
                 lambda: QTimer.singleShot(0, self._update_add_button_state)
@@ -274,6 +287,7 @@ class ControlNetImageDialog(BaseDialog):
             self.depth_widget.setVisible(False)
             self.lines_widget.setVisible(False)
             self.edges_widget.setVisible(False)
+            self.canny_widget.setVisible(False)
             self.controlnet_source_image_widget.setVisible(False)
             self._clear_preprocessor_model()
         else:
@@ -288,10 +302,33 @@ class ControlNetImageDialog(BaseDialog):
         self.depth_widget.setVisible(preprocessor == "depth")
         self.lines_widget.setVisible(preprocessor == "lines")
         self.edges_widget.setVisible(preprocessor == "edges")
+        self._update_canny_visibility()
         self._clear_preprocessor_model()
 
     def on_preprocessor_option_changed(self, _index: int):
+        self._update_canny_visibility()
         self._clear_preprocessor_model()
+
+    def on_canny_params_changed(self):
+        self._schedule_canny_update()
+
+    def _schedule_canny_update(self):
+        if not self._is_canny_selected():
+            return
+        self.canny_update_timer.start()
+
+    def _is_canny_selected(self) -> bool:
+        return (
+            self.preprocessing_combo.itemData(self.preprocessing_combo.currentIndex()) == "lines"
+            and self.lines_widget.repo_id == "canny"
+        )
+
+    def _update_canny_visibility(self):
+        canny_selected = self._is_canny_selected()
+        self.canny_widget.setVisible(canny_selected)
+        self.lines_widget.set_resolution_visible(not canny_selected)
+        if canny_selected:
+            self._schedule_canny_update()
 
     def _clear_preprocessor_model(self):
         if self.controlnet_preprocess_thread is not None and self.controlnet_preprocess_thread.isRunning():
@@ -309,9 +346,14 @@ class ControlNetImageDialog(BaseDialog):
         self.depth_widget.setEnabled(not blocked)
         self.lines_widget.setEnabled(not blocked)
         self.edges_widget.setEnabled(not blocked)
+        self.canny_widget.setEnabled(not blocked)
 
     def on_preprocess_clicked(self):
         if self.controlnet_preprocess_thread is not None and self.controlnet_preprocess_thread.isRunning():
+            return
+
+        if self._is_canny_selected():
+            self._apply_canny_preprocessor()
             return
 
         pixmap = self.controlnet_source_image_widget.image_widget.image_editor.get_scene_as_pixmap()
@@ -353,6 +395,27 @@ class ControlNetImageDialog(BaseDialog):
 
         self._set_preprocess_buttons_blocked(True)
         self.controlnet_preprocess_thread.start()
+
+    def _apply_canny_preprocessor(self):
+        if not self._is_canny_selected():
+            return
+
+        pixmap = self.controlnet_source_image_widget.image_widget.image_editor.get_scene_as_pixmap()
+        if pixmap is None or pixmap.isNull():
+            return
+
+        low, high, aperture, l2_gradient = self.canny_widget.get_params()
+
+        rgb = pixmap_to_numpy_rgb(pixmap)
+        if rgb.size == 0:
+            return
+
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        edges = cv2.Canny(gray, low, high, apertureSize=aperture, L2gradient=l2_gradient)
+
+        processed_pixmap = numpy_to_pixmap(edges)
+        self.controlnet_condition_image_widget.image_widget.image_editor.change_layer_image(processed_pixmap)
+        self._update_add_button_state()
 
     def on_preprocess_finished(self, pixmap):
         self.controlnet_condition_image_widget.image_widget.image_editor.change_layer_image(pixmap)
