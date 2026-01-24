@@ -126,27 +126,25 @@ class ControlNetConditioningNode(Node):
             if init_image is None:
                 init_image = base_image
 
-            init_latents = _encode_image_latents(init_image)
-            init_latents_5d = init_latents.unsqueeze(2)
-
-            # Build mask condition in latent resolution. Prefer nearest interpolation.
+            # Process mask in pixel space first (needed for masking init_image)
+            # Build mask condition at image resolution before encoding.
             if isinstance(mask_image, torch.Tensor):
-                mask_tensor = mask_image
-                if mask_tensor.ndim == 2:
-                    mask_tensor = mask_tensor.unsqueeze(0).unsqueeze(0)
-                elif mask_tensor.ndim == 3:
-                    mask_tensor = mask_tensor.unsqueeze(0)
+                mask_pixel = mask_image
+                if mask_pixel.ndim == 2:
+                    mask_pixel = mask_pixel.unsqueeze(0).unsqueeze(0)
+                elif mask_pixel.ndim == 3:
+                    mask_pixel = mask_pixel.unsqueeze(0)
 
                 # Normalize to 1-channel BCHW float mask in [0, 1]
-                if mask_tensor.shape[1] != 1:
-                    mask_tensor = mask_tensor.mean(dim=1, keepdim=True)
+                if mask_pixel.shape[1] != 1:
+                    mask_pixel = mask_pixel.mean(dim=1, keepdim=True)
 
-                if mask_tensor.dtype in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64):
-                    mask_tensor = mask_tensor.float() / 255.0
+                if mask_pixel.dtype in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64):
+                    mask_pixel = mask_pixel.float() / 255.0
                 else:
-                    mask_tensor = mask_tensor.float()
+                    mask_pixel = mask_pixel.float()
 
-                mask_tensor = (mask_tensor > 0.5).float()
+                mask_pixel = (mask_pixel > 0.5).float()
             else:
                 # Use Diffusers processor when given PIL/np-like inputs.
                 pil_mask = mask_image
@@ -178,29 +176,59 @@ class ControlNetConditioningNode(Node):
                     # Older/newer diffusers signatures vary slightly.
                     mask_processor = VaeImageProcessor(vae_scale_factor=int(self.vae_scale_factor) * 2)
 
-                mask_tensor = mask_processor.preprocess(pil_mask, height=height, width=width)
-                if mask_tensor.shape[1] != 1:
-                    mask_tensor = mask_tensor.mean(dim=1, keepdim=True)
-                mask_tensor = (mask_tensor > 0.5).float()
+                mask_pixel = mask_processor.preprocess(pil_mask, height=height, width=width)
+                if mask_pixel.shape[1] != 1:
+                    mask_pixel = mask_pixel.mean(dim=1, keepdim=True)
+                mask_pixel = (mask_pixel > 0.5).float()
+
+            # Prepare init_image with pre-masking (matching official VideoX-Fun implementation)
+            # Mask convention: 1.0 = masked/inpaint region, 0.0 = preserve region
+            # So we multiply init_image by (1 - mask) to zero out masked regions
+            init_image_tensor = _preprocess_image_tensor(init_image)
 
             try:
                 vae_device = next(vae.parameters()).device
             except Exception:
                 vae_device = torch.device("cpu")
 
-            mask_tensor = mask_tensor.to(device=vae_device, dtype=vae.dtype)
+            mask_pixel = mask_pixel.to(device=vae_device, dtype=vae.dtype)
+
+            # Ensure mask_pixel matches init_image_tensor spatial dimensions
+            if mask_pixel.shape[-2:] != init_image_tensor.shape[-2:]:
+                mask_pixel = torch.nn.functional.interpolate(
+                    mask_pixel,
+                    size=(init_image_tensor.shape[-2], init_image_tensor.shape[-1]),
+                    mode="nearest",
+                )
+
+            # Apply inverted mask to init_image: preserve only non-masked regions
+            init_image_tensor = init_image_tensor.to(device=vae_device, dtype=vae.dtype)
+            init_image_masked = init_image_tensor * (1.0 - mask_pixel)
+
+            # Encode the masked init_image
+            try:
+                init_latents = _retrieve_latents(vae.encode(init_image_masked), sample_mode="argmax")
+            except Exception as e:
+                raise IArtisanZNodeError(f"Failed encoding masked init image: {e}", self.__class__.__name__) from e
+
+            init_latents = (init_latents - vae.config.shift_factor) * vae.config.scaling_factor
+            init_latents_5d = init_latents.unsqueeze(2)
+
+            # Downsample mask to latent resolution
             mask_tensor = torch.nn.functional.interpolate(
-                mask_tensor,
+                mask_pixel,
                 size=(int(control_latents.shape[-2]), int(control_latents.shape[-1])),
                 mode="nearest",
             )
 
-            # Broadcast mask batch if needed.
+            # Broadcast mask batch if needed
             if mask_tensor.shape[0] != control_latents.shape[0] and mask_tensor.shape[0] == 1:
                 mask_tensor = mask_tensor.expand(control_latents.shape[0], -1, -1, -1)
 
             mask_5d = mask_tensor.unsqueeze(2)
 
+            # Concatenate: [control_latents, mask_condition, init_image_latents]
+            # This matches the official VideoX-Fun implementation
             control_latents_5d = torch.cat([control_latents_5d, mask_5d, init_latents_5d], dim=1)
 
         # Return CPU tensor for downstream nodes (matches PromptEncoderNode/DenoiseNode conventions).
