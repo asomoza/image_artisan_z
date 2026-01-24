@@ -35,6 +35,7 @@ class ControlNetImageDialog(BaseDialog):
         controlnet_source_image_layers=None,
         controlnet_processed_image_path=None,
         controlnet_processed_image_layers=None,
+        is_tile=False,
     ):
         if len(args) <= 5:
             logger.warning("ControlNet Dialog requires the image viewer, the width and the height.")
@@ -47,6 +48,7 @@ class ControlNetImageDialog(BaseDialog):
         self.controlnet_source_image_layers = controlnet_source_image_layers
         self.controlnet_processed_image_path = controlnet_processed_image_path
         self.controlnet_processed_image_layers = controlnet_processed_image_layers
+        self.is_tile = is_tile
 
         super().__init__(*args[:3], *args[6:])
 
@@ -75,7 +77,7 @@ class ControlNetImageDialog(BaseDialog):
         self.init_ui()
 
         self.connect_image_widgets()
-        self.on_model_changed(self.model_combo.currentIndex())
+        self._setup_for_model_type()
         self.on_preprocessor_changed(self.preprocessing_combo.currentIndex())
 
     def init_ui(self):
@@ -86,17 +88,6 @@ class ControlNetImageDialog(BaseDialog):
         control_layout = QHBoxLayout()
         control_layout.setContentsMargins(10, 0, 10, 0)
         control_layout.setSpacing(10)
-
-        model_label = QLabel("ControlNet model:")
-        control_layout.addWidget(model_label)
-
-        self.model_combo = QComboBox()
-        self.model_combo.addItem("Union", "Z-Image-Turbo-Fun-Controlnet-Union-2.1-2601-8steps")
-        self.model_combo.addItem("Union Lite", "Z-Image-Turbo-Fun-Controlnet-Union-2.1-2601-8steps")
-        self.model_combo.addItem("Tile", "Z-Image-Turbo-Fun-Controlnet-Tile-2.1-2601-8steps")
-        self.model_combo.addItem("Tile Lite", "Z-Image-Turbo-Fun-Controlnet-Tile-2.1-2601-8steps")
-        self.model_combo.currentIndexChanged.connect(self.on_model_changed)
-        control_layout.addWidget(self.model_combo)
 
         self.preprocessor_layout = QHBoxLayout()
         self.preprocessor_label = QLabel("Preprocessor:")
@@ -279,9 +270,8 @@ class ControlNetImageDialog(BaseDialog):
         self.color_button.color_changed.connect(widget.image_editor.set_brush_color)
         self.brush_erase_button.brush_selected.connect(widget.set_erase_mode)
 
-    def on_model_changed(self, index):
-        model_name = self.model_combo.itemData(index)
-        if "tile" in model_name.lower():
+    def _setup_for_model_type(self):
+        if self.is_tile:
             self.preprocessing_combo.setVisible(False)
             self.preprocessor_label.setVisible(False)
             self.depth_widget.setVisible(False)
@@ -489,31 +479,6 @@ class ControlNetImageDialog(BaseDialog):
         self.pixmap_save_thread.error.connect(self.on_error)
         self.pixmap_save_thread.start()
 
-    def _resolve_controlnet_model_path(self, model_name: str) -> str:
-        if not model_name:
-            return ""
-
-        # Default to the base "models" directory next to diffusers/singlefile paths.
-        base_models_dir = None
-        for candidate in (
-            self.directories.models_singlefile,
-            self.directories.models_diffusers,
-            self.directories.models_loras,
-            self.directories.data_path,
-        ):
-            if candidate:
-                base_models_dir = os.path.dirname(candidate)
-                break
-
-        if base_models_dir is None:
-            base_models_dir = os.path.expanduser("~")
-
-        filename = model_name
-        if not filename.endswith(".safetensors"):
-            filename = f"{filename}.safetensors"
-
-        return os.path.join(base_models_dir, "controlnet", filename)
-
     def on_controlnet_pixmap_saved(self, image_path: str, thumbnail_path: str):
         previous_path = self.controlnet_processed_image_path
 
@@ -523,16 +488,10 @@ class ControlNetImageDialog(BaseDialog):
         self.controlnet_processed_image_path = image_path
         self.controlnet_processed_thumb_path = thumbnail_path
 
-        model_name = self.model_combo.itemData(self.model_combo.currentIndex())
-        model_label = self.model_combo.currentText()
-        model_path = self._resolve_controlnet_model_path(model_name)
-
         self.event_bus.publish(
             "controlnet",
             {
                 "action": "add" if previous_path is None else "update",
-                "controlnet_model_name": model_label,
-                "controlnet_model_path": model_path,
                 "control_image_path": image_path,
                 "control_image_thumb_path": thumbnail_path,
                 "conditioning_scale": 0.75,

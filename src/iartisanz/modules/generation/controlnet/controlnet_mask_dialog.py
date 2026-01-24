@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 
@@ -10,15 +11,24 @@ from iartisanz.app.base_dialog import BaseDialog
 from iartisanz.buttons.brush_erase_button import BrushEraseButton
 from iartisanz.buttons.color_button import ColorButton
 from iartisanz.buttons.eyedropper_button import EyeDropperButton
+from iartisanz.modules.generation.common.mask.image_section_widget import ImageSectionWidget
 from iartisanz.modules.generation.source_image.mask_section_widget import MaskSectionWidget
 from iartisanz.modules.generation.threads.mask_pixmap_save_thread import MaskPixmapSaveThread
+from iartisanz.modules.generation.threads.pixmap_save_thread import PixmapSaveThread
+from iartisanz.modules.generation.threads.save_layers_thread import SaveLayersThread
 
 
 logger = logging.getLogger(__name__)
 
 
 class ControlNetMaskDialog(BaseDialog):
-    def __init__(self, *args, controlnet_mask_path=None, controlnet_image_path=None):
+    def __init__(
+        self,
+        *args,
+        controlnet_mask_path=None,
+        controlnet_init_image_path=None,
+        controlnet_init_image_layers=None,
+    ):
         if len(args) <= 5:
             logger.warning("ControlNet Mask Dialog requires the image viewer, the width and the height.")
 
@@ -27,11 +37,12 @@ class ControlNetMaskDialog(BaseDialog):
         self.image_height = args[5] if len(args) > 5 else 1024
 
         self.controlnet_mask_path = controlnet_mask_path
-        self.controlnet_image_path = controlnet_image_path
+        self.controlnet_init_image_path = controlnet_init_image_path
+        self.controlnet_init_image_layers = controlnet_init_image_layers
 
         super().__init__(*args[:3], *args[6:])
 
-        self.setWindowTitle("ControlNet Mask Image")
+        self.setWindowTitle("ControlNet Inpainting")
         self.setMinimumSize(900, 900)
 
         self.settings = QSettings("ZCode", "ImageArtisanZ")
@@ -44,8 +55,20 @@ class ControlNetMaskDialog(BaseDialog):
 
         self.dialog_busy = False
         self.pixmap_save_thread = None
+        self.init_image_pixmap_save_thread = None
+        self.init_image_layers_save_thread = None
+
+        self.active_section_widget = None
+        self.active_editor = None
 
         self.init_ui()
+
+        self._connect_editor(self.init_image_section_widget, self.init_image_section_widget.image_widget.image_editor)
+
+        if self.controlnet_init_image_layers is None and self.controlnet_init_image_path is not None:
+            self.init_image_section_widget.image_widget.image_editor.change_layer_image(
+                self.controlnet_init_image_path
+            )
 
     def init_ui(self):
         content_layout = QVBoxLayout()
@@ -89,6 +112,23 @@ class ControlNetMaskDialog(BaseDialog):
 
         content_layout.addLayout(brush_layout)
 
+        # Init image section for inpainting over
+        self.init_image_section_widget = ImageSectionWidget(
+            self.image_viewer,
+            self.image_width,
+            self.image_height,
+            self.directories.outputs_images,
+            self.directories.temp_path,
+            layers=self.controlnet_init_image_layers,
+            mask_image_path=self.controlnet_mask_path,
+        )
+        self.init_image_section_widget.source_image_added.connect(self.on_init_image_added)
+        self.init_image_section_widget.add_mask_clicked.connect(self.on_add_mask_clicked)
+        self.init_image_section_widget.delete_mask_clicked.connect(self.on_delete_mask)
+        if self.controlnet_mask_path is not None:
+            self.init_image_section_widget.set_existing_mask_buttons()
+        content_layout.addWidget(self.init_image_section_widget)
+
         self.mask_section_widget = MaskSectionWidget(
             self.image_viewer,
             self.image_width,
@@ -96,27 +136,17 @@ class ControlNetMaskDialog(BaseDialog):
             self.directories.outputs_images,
             self.directories.temp_path,
             mask_image_path=self.controlnet_mask_path,
-            background_image_path=self.controlnet_image_path,
         )
 
         self.mask_section_widget.image_widget.image_editor.brush_size = 150
         self.mask_section_widget.image_widget.image_editor.hardness = 0.0
         self.mask_section_widget.image_widget.image_editor.steps = 1.25
 
-        self.brush_size_slider.valueChanged.connect(self.mask_section_widget.image_widget.image_editor.set_brush_size)
-        self.brush_hardness_slider.valueChanged.connect(
-            self.mask_section_widget.image_widget.image_editor.set_brush_hardness
-        )
-        self.brush_steps_slider.valueChanged.connect(
-            self.mask_section_widget.image_widget.image_editor.set_brush_steps
-        )
-        self.color_button.color_changed.connect(self.mask_section_widget.image_widget.image_editor.set_brush_color)
-        self.brush_erase_button.brush_selected.connect(self.mask_section_widget.image_widget.set_erase_mode)
-
         self.mask_section_widget.save_mask_clicked.connect(self.on_mask_saved)
         self.mask_section_widget.mask_canceled.connect(self.on_cancel_mask)
         self.mask_section_widget.mask_deleted.connect(self.on_delete_mask)
         content_layout.addWidget(self.mask_section_widget)
+        self.mask_section_widget.setVisible(False)
 
         self.main_layout.addLayout(content_layout)
 
@@ -163,6 +193,11 @@ class ControlNetMaskDialog(BaseDialog):
         return super().eventFilter(obj, event)
 
     def on_mask_saved(self, mask_pixmap: QPixmap, opacity: float):
+        self._connect_editor(self.init_image_section_widget, self.init_image_section_widget.image_widget.image_editor)
+        self.mask_section_widget.hide()
+        self.init_image_section_widget.show()
+        self.init_image_section_widget.add_mask_button.setText("Edit Mask")
+
         if self.dialog_busy:
             return
 
@@ -212,10 +247,30 @@ class ControlNetMaskDialog(BaseDialog):
 
         self.dialog_busy = False
 
+    def on_add_mask_clicked(self, pixmap: QPixmap):
+        self.mask_section_widget.image_widget.image_editor.selected_layer = (
+            self.mask_section_widget.image_widget.image_layer
+        )
+        self.mask_section_widget.image_widget.image_editor.change_layer_image(pixmap)
+        self.mask_section_widget.image_widget.image_editor.selected_layer = (
+            self.mask_section_widget.image_widget.mask_layer
+        )
+
+        self._connect_editor(self.mask_section_widget, self.mask_section_widget.image_widget.image_editor)
+        self.init_image_section_widget.hide()
+        self.mask_section_widget.show()
+
     def on_cancel_mask(self):
-        self.close()
+        self._connect_editor(self.init_image_section_widget, self.init_image_section_widget.image_widget.image_editor)
+        self.mask_section_widget.hide()
+        self.init_image_section_widget.show()
 
     def on_delete_mask(self):
+        self._connect_editor(self.init_image_section_widget, self.init_image_section_widget.image_widget.image_editor)
+        self.mask_section_widget.hide()
+        self.init_image_section_widget.show()
+        self.init_image_section_widget.add_mask_button.setText("Add Mask")
+
         if self.controlnet_mask_path is not None and self.directories.temp_path in self.controlnet_mask_path:
             if os.path.isfile(self.controlnet_mask_path):
                 os.remove(self.controlnet_mask_path)
@@ -225,3 +280,116 @@ class ControlNetMaskDialog(BaseDialog):
 
     def on_error(self, message: str):
         self.event_bus.publish("show_snackbar", {"action": "show", "message": message})
+
+    def _disconnect_current_editor(self):
+        if self.active_editor is None:
+            return
+
+        try:
+            self.brush_size_slider.valueChanged.disconnect()
+            self.brush_hardness_slider.valueChanged.disconnect()
+            self.brush_steps_slider.valueChanged.disconnect()
+            self.color_button.color_changed.disconnect()
+            self.brush_erase_button.brush_selected.disconnect()
+        except Exception:
+            pass
+
+    def _connect_editor(self, section_widget, editor):
+        self._disconnect_current_editor()
+
+        self.active_section_widget = section_widget
+        self.active_editor = editor
+
+        self.brush_size_slider.valueChanged.connect(editor.set_brush_size)
+        self.brush_hardness_slider.valueChanged.connect(editor.set_brush_hardness)
+        self.brush_steps_slider.valueChanged.connect(editor.set_brush_steps)
+        self.color_button.color_changed.connect(editor.set_brush_color)
+        self.brush_erase_button.brush_selected.connect(section_widget.image_widget.set_erase_mode)
+
+        # Sync slider values to current editor
+        self.brush_size_slider.setValue(int(editor.brush_size))
+        self.brush_hardness_slider.setValue(float(editor.hardness))
+        self.brush_steps_slider.setValue(float(editor.steps))
+
+    def on_init_image_added(self, pixmap: QPixmap):
+        if self.dialog_busy:
+            return
+
+        self.dialog_busy = True
+
+        if (
+            self.controlnet_init_image_path is not None
+            and self.directories.temp_path in self.controlnet_init_image_path
+        ):
+            if os.path.isfile(self.controlnet_init_image_path):
+                os.remove(self.controlnet_init_image_path)
+
+        self.init_image_pixmap_save_thread = PixmapSaveThread(
+            pixmap,
+            prefix="controlnet_init_image",
+            temp_path=self.directories.temp_path,
+            thumb_width=150,
+            thumb_height=150,
+        )
+
+        self.init_image_pixmap_save_thread.save_finished.connect(self.on_init_image_pixmap_saved)
+        self.init_image_pixmap_save_thread.finished.connect(self.on_save_init_image_pixmap_thread_finished)
+        self.init_image_pixmap_save_thread.error.connect(self.on_error)
+        self.init_image_pixmap_save_thread.start()
+
+    def on_init_image_pixmap_saved(self, image_path: str, thumb_path: str):
+        previous_path = self.controlnet_init_image_path
+
+        if previous_path == image_path:
+            return
+
+        self.controlnet_init_image_path = image_path
+
+        self.event_bus.publish(
+            "controlnet",
+            {
+                "action": "add_init_image" if previous_path is None else "update_init_image",
+                "controlnet_init_image_path": image_path,
+                "controlnet_init_image_final_path": image_path,
+                "controlnet_init_image_thumb_path": thumb_path,
+            },
+        )
+
+        # Save layers after pixmap save
+        self.controlnet_init_image_layers = (
+            self.init_image_section_widget.image_widget.image_editor.layer_manager.get_layers()
+        )
+
+        self.init_image_layers_save_thread = SaveLayersThread(
+            self.controlnet_init_image_layers, "controlnet_init_img_layer", self.directories.temp_path
+        )
+        self.init_image_layers_save_thread.error.connect(self.on_error)
+        self.init_image_layers_save_thread.finished.connect(self.on_save_init_image_layers_thread_finished)
+        self.init_image_layers_save_thread.start()
+
+    def on_save_init_image_pixmap_thread_finished(self):
+        self.init_image_pixmap_save_thread.save_finished.disconnect(self.on_init_image_pixmap_saved)
+        self.init_image_pixmap_save_thread.finished.disconnect(self.on_save_init_image_pixmap_thread_finished)
+        self.init_image_pixmap_save_thread.error.disconnect(self.on_error)
+        self.init_image_pixmap_save_thread = None
+
+        self.dialog_busy = False
+
+    def on_save_init_image_layers_thread_finished(self):
+        self.init_image_layers_save_thread.finished.disconnect(self.on_save_init_image_layers_thread_finished)
+        self.init_image_layers_save_thread.error.disconnect(self.on_error)
+        self.init_image_layers_save_thread = None
+
+        layers = self.init_image_section_widget.image_widget.image_editor.get_all_layers()
+
+        copied_layers = [copy.copy(layer) for layer in layers]
+        for layer in copied_layers:
+            layer.pixmap_item = None
+
+        self.event_bus.publish(
+            "controlnet",
+            {
+                "action": "update_init_image_layers",
+                "controlnet_init_image_layers": copied_layers,
+            },
+        )

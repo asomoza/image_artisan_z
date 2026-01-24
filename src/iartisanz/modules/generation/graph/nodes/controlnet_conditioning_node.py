@@ -33,8 +33,8 @@ class ControlNetConditioningNode(Node):
     """
 
     PRIORITY = 1
-    REQUIRED_INPUTS = ["vae", "control_image", "width", "height", "vae_scale_factor"]
-    OPTIONAL_INPUTS = ["mask_image", "init_image"]
+    REQUIRED_INPUTS = ["vae", "width", "height", "vae_scale_factor"]
+    OPTIONAL_INPUTS = ["control_image", "mask_image", "init_image"]
     OUTPUTS = ["control_image_latents", "control_image_size"]
 
     SERIALIZE_EXCLUDE = {"control_image_latents"}
@@ -100,20 +100,31 @@ class ControlNetConditioningNode(Node):
             latents = (latents - vae.config.shift_factor) * vae.config.scaling_factor
             return latents
 
-        control_image = self.control_image
-        control_latents = _encode_image_latents(control_image)
+        control_image = getattr(self, "control_image", None)
+        mask_image = getattr(self, "mask_image", None)
+        init_image = getattr(self, "init_image", None)
 
+        # Determine the base image for control latents
+        if control_image is not None:
+            base_image = control_image
+        elif init_image is not None:
+            # Inpainting-only mode: use init_image as the base
+            base_image = init_image
+        else:
+            raise IArtisanZNodeError(
+                "ControlNet conditioning requires either control_image or init_image to be connected.",
+                self.__class__.__name__,
+            )
+
+        control_latents = _encode_image_latents(base_image)
         control_latents_5d = control_latents.unsqueeze(2)
 
         # Optional inpaint conditioning: if a mask is connected, concatenate
         # [control_latents, mask_condition, init_image_latents] along channels.
-        mask_image = getattr(self, "mask_image", None)
-        init_image = getattr(self, "init_image", None)
-
         if mask_image is not None:
-            # Default init image to control image if not provided.
+            # Default init image to base image if not provided separately
             if init_image is None:
-                init_image = control_image
+                init_image = base_image
 
             init_latents = _encode_image_latents(init_image)
             init_latents_5d = init_latents.unsqueeze(2)
@@ -197,7 +208,7 @@ class ControlNetConditioningNode(Node):
 
         # Best-effort size reporting.
         try:
-            control_tensor_for_size = _preprocess_image_tensor(control_image)
+            control_tensor_for_size = _preprocess_image_tensor(base_image)
             self.values["control_image_size"] = (
                 int(control_tensor_for_size.shape[-1]),
                 int(control_tensor_for_size.shape[-2]),

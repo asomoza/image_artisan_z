@@ -179,7 +179,13 @@ class NodeGraphThread(QThread):
         self._active_graph = run_graph
 
         try:
+            # Validate controlnet inpainting configuration before execution
+            run_graph.validate_controlnet_inpainting()
             run_graph()
+        except ValueError as e:
+            # Configuration validation errors
+            logger.debug(f"Configuration error: {e}")
+            self.generation_error.emit(str(e), False)
         except IArtisanZNodeError as e:
             logger.debug(f"Error in node: '{e.node_name}': {e}")
             self.generation_error.emit(f"Error in node '{e.node_name}': {e}", False)
@@ -390,7 +396,7 @@ class NodeGraphThread(QThread):
     def remove_source_image_mask(self):
         self.node_graph.delete_node_by_name("source_image_mask")
 
-    def add_controlnet_init_image(self, init_image_path: str):
+    def add_controlnet_init_image(self, init_image_path: str, controlnet_model_path: str | None = None):
         """Add a separate init image for ControlNet inpaint conditioning.
 
         This is intentionally independent from the regular source image used for
@@ -399,7 +405,12 @@ class NodeGraphThread(QThread):
 
         conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
         if conditioning_node is None:
-            return
+            # Create controlnet infrastructure for inpainting if it doesn't exist
+            if controlnet_model_path:
+                self._ensure_controlnet_infrastructure(controlnet_model_path)
+                conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+            if conditioning_node is None:
+                return
 
         if self.node_graph.get_node_by_name("control_init_image") is not None:
             return
@@ -464,6 +475,80 @@ class NodeGraphThread(QThread):
                 pass
         self.node_graph.delete_node_by_name("control_mask_image")
 
+    def _ensure_controlnet_infrastructure(
+        self,
+        controlnet_path: str,
+        conditioning_scale: float = 0.75,
+        control_mode: str = "balanced",
+        prompt_decay: float = 0.825,
+    ):
+        """Create ControlNet infrastructure nodes if they don't exist.
+
+        This creates all the common nodes needed for ControlNet (model, conditioning,
+        scale, guidance, etc.) but NOT the control_image node, allowing for
+        inpainting-only usage.
+        """
+
+        if self.node_graph.get_node_by_name("controlnet_model") is not None:
+            return
+
+        from iartisanz.modules.generation.graph.nodes.choice_node import ChoiceNode
+        from iartisanz.modules.generation.graph.nodes.controlnet_conditioning_node import ControlNetConditioningNode
+        from iartisanz.modules.generation.graph.nodes.controlnet_model_node import ControlNetModelNode
+        from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
+        from iartisanz.modules.generation.graph.nodes.number_range_node import NumberRangeNode
+
+        controlnet_model = ControlNetModelNode(path=controlnet_path)
+        controlnet_model.enabled = True
+        self.node_graph.add_node(controlnet_model, "controlnet_model")
+
+        scale_node = NumberNode(number=float(conditioning_scale))
+        scale_node.enabled = True
+        self.node_graph.add_node(scale_node, "controlnet_conditioning_scale")
+
+        control_mode_node = ChoiceNode(
+            value=str(control_mode),
+            choices=["balanced", "prompt", "controlnet"],
+            default="balanced",
+        )
+        control_mode_node.enabled = True
+        self.node_graph.add_node(control_mode_node, "controlnet_control_mode")
+
+        prompt_decay_node = NumberNode(number=float(prompt_decay))
+        prompt_decay_node.enabled = True
+        self.node_graph.add_node(prompt_decay_node, "controlnet_prompt_decay")
+
+        conditioning = ControlNetConditioningNode()
+        conditioning.enabled = True
+
+        control_guidance = NumberRangeNode(value=[0.0, 1.0])
+        control_guidance.enabled = True
+        self.node_graph.add_node(control_guidance, "control_guidance_start_end")
+
+        models_node = self.node_graph.get_node_by_name("model")
+        width_node = self.node_graph.get_node_by_name("image_width")
+        height_node = self.node_graph.get_node_by_name("image_height")
+        denoise_node = self.node_graph.get_node_by_name("denoise")
+
+        # ControlNet weights depend on the transformer for shared embeddings.
+        controlnet_model.connect("transformer", models_node, "transformer")
+
+        conditioning.connect("vae", models_node, "vae")
+        conditioning.connect("vae_scale_factor", models_node, "vae_scale_factor")
+        conditioning.connect("width", width_node, "value")
+        conditioning.connect("height", height_node, "value")
+
+        self.node_graph.add_node(conditioning, "controlnet_conditioning")
+
+        denoise_node.connect("controlnet", controlnet_model, "controlnet")
+        denoise_node.connect("control_image_latents", conditioning, "control_image_latents")
+        denoise_node.connect("controlnet_conditioning_scale", scale_node, "value")
+        denoise_node.connect("control_guidance_start_end", control_guidance, "value")
+
+        # ControlNet runtime behavior controls (consumed by DenoiseNode).
+        denoise_node.connect("control_mode", control_mode_node, "value")
+        denoise_node.connect("prompt_mode_decay", prompt_decay_node, "value")
+
     def add_controlnet(
         self,
         *,
@@ -478,57 +563,22 @@ class NodeGraphThread(QThread):
         Not called by default. The GUI will call this later when the user opts in.
         """
 
-        if self.node_graph.get_node_by_name("controlnet_model") is not None:
+        # Create infrastructure if it doesn't exist
+        self._ensure_controlnet_infrastructure(controlnet_path, conditioning_scale, control_mode, prompt_decay)
+
+        # Add control image node if it doesn't exist
+        if self.node_graph.get_node_by_name("control_image") is not None:
             return
 
-        controlnet_model = ControlNetModelNode(path=controlnet_path)
-        self.node_graph.add_node(controlnet_model, "controlnet_model")
+        from iartisanz.modules.generation.graph.nodes.image_load_node import ImageLoadNode
 
         control_image = ImageLoadNode(path=control_image_path)
         self.node_graph.add_node(control_image, "control_image")
 
-        scale_node = NumberNode(number=float(conditioning_scale))
-        self.node_graph.add_node(scale_node, "controlnet_conditioning_scale")
-
-        control_mode_node = ChoiceNode(
-            value=str(control_mode),
-            choices=["balanced", "prompt", "controlnet"],
-            default="balanced",
-        )
-        self.node_graph.add_node(control_mode_node, "controlnet_control_mode")
-
-        prompt_decay_node = NumberNode(number=float(prompt_decay))
-        self.node_graph.add_node(prompt_decay_node, "controlnet_prompt_decay")
-
-        conditioning = ControlNetConditioningNode()
-
-        control_guidance = NumberRangeNode(value=[0.0, 1.0])
-        self.node_graph.add_node(control_guidance, "control_guidance_start_end")
-
-        models_node = self.node_graph.get_node_by_name("model")
-        width_node = self.node_graph.get_node_by_name("image_width")
-        height_node = self.node_graph.get_node_by_name("image_height")
-        denoise_node = self.node_graph.get_node_by_name("denoise")
-
-        # ControlNet weights depend on the transformer for shared embeddings.
-        controlnet_model.connect("transformer", models_node, "transformer")
-
-        conditioning.connect("vae", models_node, "vae")
-        conditioning.connect("vae_scale_factor", models_node, "vae_scale_factor")
-        conditioning.connect("control_image", control_image, "image")
-        conditioning.connect("width", width_node, "value")
-        conditioning.connect("height", height_node, "value")
-
-        self.node_graph.add_node(conditioning, "controlnet_conditioning")
-
-        denoise_node.connect("controlnet", controlnet_model, "controlnet")
-        denoise_node.connect("control_image_latents", conditioning, "control_image_latents")
-        denoise_node.connect("controlnet_conditioning_scale", scale_node, "value")
-        denoise_node.connect("control_guidance_start_end", control_guidance, "value")
-
-        # ControlNet runtime behavior controls (consumed by DenoiseNode).
-        denoise_node.connect("control_mode", control_mode_node, "value")
-        denoise_node.connect("prompt_mode_decay", prompt_decay_node, "value")
+        # Connect control image to conditioning node
+        conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+        if conditioning_node is not None:
+            conditioning_node.connect("control_image", control_image, "image")
 
     def update_controlnet(self, *, controlnet_path: str | None = None, control_image_path: str | None = None):
         model_node = self.node_graph.get_node_by_name("controlnet_model")
@@ -554,9 +604,9 @@ class NodeGraphThread(QThread):
         prompt_decay_node = self.node_graph.get_node_by_name("controlnet_prompt_decay")
         denoise_node = self.node_graph.get_node_by_name("denoise")
 
+        # Control image is optional (for inpainting-only mode)
         if None in (
             model_node,
-            image_node,
             conditioning_node,
             scale_node,
             guidance_node,
@@ -567,7 +617,8 @@ class NodeGraphThread(QThread):
             return
 
         model_node.enabled = bool(enabled)
-        image_node.enabled = bool(enabled)
+        if image_node is not None:
+            image_node.enabled = bool(enabled)
         conditioning_node.enabled = bool(enabled)
         scale_node.enabled = bool(enabled)
         guidance_node.enabled = bool(enabled)

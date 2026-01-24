@@ -73,6 +73,7 @@ class BaseTorchAppApplication(QApplication):
         models_diffusers = settings.value("models_diffusers", None, type=str)
         models_singlefile = settings.value("models_singlefile", None, type=str)
         models_loras = settings.value("models_loras", None, type=str)
+        models_controlnets = settings.value("models_controlnets", None, type=str)
         outputs_images = settings.value("outputs_images", None, type=str)
         outputs_source_images = settings.value("outputs_source_images", None, type=str)
         outputs_source_masks = settings.value("outputs_source_masks", None, type=str)
@@ -84,6 +85,7 @@ class BaseTorchAppApplication(QApplication):
             models_diffusers=models_diffusers,
             models_singlefile=models_singlefile,
             models_loras=models_loras,
+            models_controlnets=models_controlnets,
             outputs_images=outputs_images,
             outputs_source_images=outputs_source_images,
             outputs_source_masks=outputs_source_masks,
@@ -99,6 +101,7 @@ class BaseTorchAppApplication(QApplication):
                 models_diffusers,
                 models_singlefile,
                 models_loras,
+                models_controlnets,
                 outputs_images,
                 outputs_source_images,
                 outputs_source_masks,

@@ -289,3 +289,47 @@ class ImageArtisanZNodeGraph:
             self.delete_node(self.nodes[i])
 
         self.node_counter = 0
+
+    def validate_controlnet_inpainting(self):
+        """Validate ControlNet inpainting configuration.
+
+        Ensures that:
+        - Mask requires both ControlNet and init_image
+        - Init_image requires ControlNet
+        - ControlNet requires either control_image or inpainting components
+        - Invalid configurations raise ValueError
+
+        Raises:
+            ValueError: If the configuration is invalid
+        """
+        # Check for controlnet inpainting nodes
+        has_controlnet = self.get_node_by_name("controlnet_conditioning") is not None
+        has_control_image = self.get_node_by_name("control_image") is not None
+        has_mask = self.get_node_by_name("control_mask_image") is not None
+        has_init_image = self.get_node_by_name("control_init_image") is not None
+
+        # Validate combinations
+        if has_mask and not has_init_image:
+            raise ValueError(
+                "ControlNet mask requires an init_image to be configured. "
+                "Please add an init image in the inpainting dialog."
+            )
+
+        if has_mask and not has_controlnet:
+            raise ValueError(
+                "ControlNet mask requires a ControlNet to be configured. "
+                "Please add a control image first."
+            )
+
+        if has_init_image and not has_controlnet:
+            raise ValueError(
+                "ControlNet init_image requires a ControlNet to be configured. "
+                "Please add a control image first."
+            )
+
+        # If controlnet is configured, it must have either control_image or inpainting
+        if has_controlnet and not has_control_image and not has_init_image and not has_mask:
+            raise ValueError(
+                "ControlNet requires either a control image or inpainting to be configured. "
+                "Please add a control image or set up inpainting."
+            )
