@@ -18,6 +18,7 @@ from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.graph.new_graph import create_default_graph
 from iartisanz.modules.generation.lora.lora_advanced_dialog import LoraAdvancedDialog
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
+from iartisanz.modules.generation.lora.lora_mask_dialog import LoraMaskDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
 from iartisanz.modules.generation.model.model_manager_dialog import ModelManagerDialog
 from iartisanz.modules.generation.source_image.source_image_dialog import SourceImageDialog
@@ -525,6 +526,9 @@ class GenerationModule(BaseModule):
     def _lora_advanced_key(self, lora_data):
         return f"lora_advanced_{lora_data.name}_{lora_data.version}"
 
+    def _lora_mask_key(self, lora_data):
+        return f"lora_mask_{lora_data.name}_{lora_data.version}"
+
     def _get_dialog_specs(self):
         return {
             "model_manager": {
@@ -637,6 +641,80 @@ class GenerationModule(BaseModule):
             self.generation_thread.update_lora_transformer_granular_enabled(data.get("lora"))
         elif action == "update_slider":
             self.generation_thread.update_lora_slider_enabled(data.get("lora"))
+        # Spatial mask events
+        elif action == "update_spatial_mask_enabled":
+            self.generation_thread.update_lora_spatial_mask(data.get("lora"))
+        elif action == "update_mask":
+            lora_data = data.get("lora")
+            lora_data.spatial_mask_path = data.get("lora_mask_path", lora_data.spatial_mask_path)
+            self.generation_thread.update_lora_spatial_mask(lora_data)
+        elif action == "add_mask":
+            lora_data = data.get("lora")
+            lora_data.spatial_mask_path = data.get("lora_mask_path", "")
+            lora_data.spatial_mask_enabled = True
+            self.generation_thread.update_lora_spatial_mask(lora_data)
+        elif action == "remove_mask":
+            lora_data = data.get("lora")
+            lora_data.spatial_mask_path = ""
+            self.generation_thread.update_lora_spatial_mask(lora_data)
+        elif action == "open_mask_dialog":
+            lora_data = data.get("lora")
+            self._open_lora_mask_dialog(lora_data)
+
+    def _open_lora_mask_dialog(self, lora_data: LoraDataObject):
+        """Open the LoRA spatial mask editing dialog.
+
+        Args:
+            lora_data: The LoRA data object to edit mask for
+        """
+        dialog_key = f"lora_mask_{lora_data.name}_{lora_data.version}"
+
+        # Check if dialog already exists
+        if dialog_key in self.dialogs:
+            self.dialogs[dialog_key].raise_()
+            self.dialogs[dialog_key].activateWindow()
+            return
+
+        # Create the mask dialog
+        mask_dialog = LoraMaskDialog(
+            self.event_bus,
+            self.directories,
+            self.preferences,
+            self.image_viewer,
+            self.gen_settings.image_width,
+            self.gen_settings.image_height,
+            lora=lora_data,
+            lora_mask_path=lora_data.spatial_mask_path if lora_data.spatial_mask_path else None,
+        )
+
+        # Connect mask saved signal to update the advanced dialog if it's open
+        def on_mask_saved(path, final_path, thumb_path):
+            # Update the lora data object
+            lora_data.spatial_mask_path = path
+            lora_data.spatial_mask_enabled = True
+
+            # Find and update the advanced dialog if open
+            advanced_key = self._lora_advanced_key(lora_data)
+            if advanced_key in self.dialogs:
+                advanced_dialog = self.dialogs[advanced_key]
+                if hasattr(advanced_dialog, "on_mask_saved"):
+                    advanced_dialog.on_mask_saved(path, final_path, thumb_path)
+                if hasattr(advanced_dialog, "mask_checkbox"):
+                    advanced_dialog.mask_checkbox.setChecked(True)
+
+        mask_dialog.mask_saved.connect(on_mask_saved)
+
+        # Store dialog reference
+        self.dialogs[dialog_key] = mask_dialog
+
+        # Handle dialog close
+        def on_dialog_closed():
+            if dialog_key in self.dialogs:
+                del self.dialogs[dialog_key]
+
+        mask_dialog.finished.connect(on_dialog_closed)
+
+        mask_dialog.show()
 
     def on_generate_event(self, data: dict):
         action = data.get("action")

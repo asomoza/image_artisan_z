@@ -1,4 +1,10 @@
+import logging
 import os
+from typing import Optional
+
+import numpy as np
+import torch
+from PIL import Image
 
 from diffusers.loaders.lora_conversion_utils import _convert_non_diffusers_z_image_lora_to_diffusers
 from diffusers.models.model_loading_utils import load_state_dict
@@ -6,6 +12,9 @@ from diffusers.models.model_loading_utils import load_state_dict
 from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.nodes.node import Node
+
+
+logger = logging.getLogger(__name__)
 
 
 class LoraNode(Node):
@@ -24,6 +33,8 @@ class LoraNode(Node):
         transformer_granular_weights: dict[str, float] = None,
         is_slider: bool = False,
         database_id: int = 0,
+        spatial_mask_enabled: bool = False,
+        spatial_mask_path: str = "",
     ):
         super().__init__()
         self.path = path
@@ -36,6 +47,11 @@ class LoraNode(Node):
         self.is_slider = is_slider
         self.database_id = database_id
         self.lora_enabled = True
+        # Spatial masking
+        self.spatial_mask_enabled = spatial_mask_enabled
+        self.spatial_mask_path = spatial_mask_path
+        self._cached_mask: Optional[torch.Tensor] = None
+        self._mask_load_failed: bool = False
 
     def update_lora(
         self,
@@ -44,12 +60,23 @@ class LoraNode(Node):
         granular_transformer_weights_enabled: bool,
         granular_transformer_weights: dict[str, float],
         is_slider: bool,
+        spatial_mask_enabled: bool = None,
+        spatial_mask_path: str = None,
     ):
         self.lora_enabled = lora_enabled
         self.transformer_weight = transformer_weight
         self.granular_transformer_weights_enabled = granular_transformer_weights_enabled
         self.transformer_granular_weights = granular_transformer_weights
         self.is_slider = is_slider
+        # Update spatial mask if provided
+        if spatial_mask_enabled is not None:
+            self.spatial_mask_enabled = spatial_mask_enabled
+        if spatial_mask_path is not None:
+            if spatial_mask_path != self.spatial_mask_path:
+                # Path changed, clear cache
+                self._cached_mask = None
+                self._mask_load_failed = False
+            self.spatial_mask_path = spatial_mask_path
         self.set_updated()
 
     def update_lora_weights(self, transformer_weight: float, granular_transformer_weights: dict[str, float]):
@@ -68,6 +95,74 @@ class LoraNode(Node):
     def update_lora_enabled(self, lora_enabled: bool):
         self.lora_enabled = lora_enabled
         self.set_updated()
+
+    def update_spatial_mask(self, enabled: bool, path: str = None):
+        """Update spatial mask settings.
+
+        Args:
+            enabled: Whether spatial masking is enabled
+            path: Path to mask file (optional, keeps existing if None)
+        """
+        self.spatial_mask_enabled = enabled
+        if path is not None:
+            if path != self.spatial_mask_path:
+                # Path changed, clear cache
+                self._cached_mask = None
+                self._mask_load_failed = False
+            self.spatial_mask_path = path
+        self.set_updated()
+
+    def _load_spatial_mask(self) -> Optional[torch.Tensor]:
+        """Load spatial mask from file.
+
+        Returns:
+            Mask tensor [1, 1, H, W] with values 0.0-1.0, or None if loading fails
+        """
+        if not self.spatial_mask_enabled:
+            return None
+
+        if not self.spatial_mask_path or not os.path.exists(self.spatial_mask_path):
+            if not self._mask_load_failed:  # Log once
+                logger.warning(
+                    f"[LoraNode] Spatial mask file not found: {self.spatial_mask_path}"
+                )
+                self._mask_load_failed = True
+            return None
+
+        try:
+            # Load mask image
+            mask_img = Image.open(self.spatial_mask_path)
+
+            # Convert to grayscale if needed
+            if mask_img.mode != "L":
+                # Check for alpha channel (RGBA) - use black-over-alpha convention
+                if mask_img.mode == "RGBA":
+                    # Extract alpha channel (painted=255, unpainted=0)
+                    mask_array = np.array(mask_img)[:, :, 3]
+                else:
+                    # Convert RGB to grayscale
+                    mask_img = mask_img.convert("L")
+                    mask_array = np.array(mask_img)
+            else:
+                mask_array = np.array(mask_img)
+
+            # Normalize to [0, 1]
+            mask_array = mask_array.astype(np.float32) / 255.0
+
+            # Convert to tensor: [H, W] -> [1, 1, H, W]
+            mask_tensor = torch.from_numpy(mask_array).unsqueeze(0).unsqueeze(0)
+
+            logger.info(
+                f"[LoraNode] Loaded spatial mask from {self.spatial_mask_path} "
+                f"(shape={mask_tensor.shape})"
+            )
+
+            return mask_tensor
+
+        except Exception as e:
+            logger.error(f"[LoraNode] Failed to load spatial mask: {e}")
+            self._mask_load_failed = True
+            return None
 
     def __call__(self):
         mm = get_model_manager()
@@ -137,7 +232,15 @@ class LoraNode(Node):
         if not self.lora_enabled:
             scale = {"transformer": 0.0}
 
-        self.values["lora"] = (self.adapter_name, scale)
+        # Load spatial mask if enabled
+        spatial_mask = None
+        if self.spatial_mask_enabled and self._cached_mask is None:
+            self._cached_mask = self._load_spatial_mask()
+        if self.spatial_mask_enabled:
+            spatial_mask = self._cached_mask
+
+        # Output 3-tuple: (adapter_name, scale_dict, spatial_mask)
+        self.values["lora"] = (self.adapter_name, scale, spatial_mask)
         return self.values
 
     def before_delete(self):

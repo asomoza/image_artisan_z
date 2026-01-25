@@ -285,6 +285,8 @@ class NodeGraphThread(QThread):
             transformer_granular_weights=lora_data.granular_transformer_weights,
             is_slider=lora_data.is_slider,
             database_id=lora_data.id,
+            spatial_mask_enabled=lora_data.spatial_mask_enabled,
+            spatial_mask_path=lora_data.spatial_mask_path,
         )
         lora_node.lora_enabled = lora_data.enabled
         lora_node.connect("transformer", self.node_graph.get_node_by_name("model"), "transformer")
@@ -312,6 +314,19 @@ class NodeGraphThread(QThread):
         lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
         if lora_node is not None:
             lora_node.update_slider_enabled(lora_data.is_slider)
+
+    def update_lora_spatial_mask(self, lora_data: LoraDataObject):
+        """Update the spatial mask settings for a LoRA.
+
+        Args:
+            lora_data: LoRA data object with updated mask settings
+        """
+        lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
+        if lora_node is not None:
+            lora_node.update_spatial_mask(
+                enabled=lora_data.spatial_mask_enabled,
+                path=lora_data.spatial_mask_path,
+            )
 
     def remove_lora(self, lora_data: LoraDataObject):
         lora_node = None

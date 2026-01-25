@@ -1,8 +1,7 @@
 import inspect
 import logging
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
-import numpy as np
 import torch
 
 from iartisanz.app.model_manager import ModelHandle, get_model_manager
@@ -155,6 +154,38 @@ class DenoiseNode(Node):
 
         return block_samples
 
+    def _extract_lora_masks(self) -> Dict[str, torch.Tensor]:
+        """Extract spatial masks from LoRA inputs.
+
+        LoRA tuples can be 2-tuples (legacy) or 3-tuples (with mask).
+        - 2-tuple: (adapter_name, scale_dict)
+        - 3-tuple: (adapter_name, scale_dict, spatial_mask)
+
+        Returns:
+            Dict mapping adapter_name -> mask_tensor
+            Empty dict if no masks present
+        """
+        if not self.lora:
+            return {}
+
+        masks = {}
+
+        if isinstance(self.lora, list):
+            # Multiple LoRAs
+            for lora_tuple in self.lora:
+                if len(lora_tuple) >= 3 and lora_tuple[2] is not None:
+                    adapter_name = lora_tuple[0]
+                    mask = lora_tuple[2]
+                    masks[adapter_name] = mask
+        else:
+            # Single LoRA
+            if len(self.lora) >= 3 and self.lora[2] is not None:
+                adapter_name = self.lora[0]
+                mask = self.lora[2]
+                masks[adapter_name] = mask
+
+        return masks
+
     @torch.inference_mode()
     def __call__(self):
         mm = get_model_manager()
@@ -217,6 +248,9 @@ class DenoiseNode(Node):
 
         cfg_normalization = self.cfg_normalization if self.cfg_normalization is not None else False
 
+        # Track if we applied LoRA spatial masks (for cleanup)
+        lora_masks_applied = False
+
         if self.lora:
             try:
                 if isinstance(self.lora, list):
@@ -225,6 +259,19 @@ class DenoiseNode(Node):
                     transformer_raw.set_adapters(keys, transformer_values)
                 else:
                     transformer_raw.set_adapters([self.lora[0]], self.lora[1]["transformer"])
+
+                # Extract and apply LoRA spatial masks
+                lora_masks = self._extract_lora_masks()
+                if lora_masks:
+                    from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import (
+                        patch_lora_adapter_with_spatial_mask,
+                    )
+
+                    for adapter_name, mask in lora_masks.items():
+                        logger.info(f"[DenoiseNode] Applying spatial mask to LoRA '{adapter_name}'")
+                        patch_lora_adapter_with_spatial_mask(transformer_raw, adapter_name, mask)
+                    lora_masks_applied = True
+
             except RuntimeError as e:
                 raise IArtisanZNodeError(e, self.__class__.__name__)
 
@@ -544,6 +591,16 @@ class DenoiseNode(Node):
             is_step_boundary = (i + 1) > num_warmup_steps and (i + 1) % order == 0
             if (is_last or is_step_boundary) and self.callback is not None:
                 self.callback(step_idx, t, latents)
+
+        # Clean up LoRA spatial mask patches
+        if lora_masks_applied:
+            from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import (
+                unpatch_all_lora_layers,
+            )
+
+            unpatch_count = unpatch_all_lora_layers()
+            if unpatch_count > 0:
+                logger.debug(f"[DenoiseNode] Cleaned up {unpatch_count} LoRA spatial mask patches")
 
         # Return a detached CPU copy; avoid an extra clone.
         self.values["latents"] = latents.detach().to("cpu")
