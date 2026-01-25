@@ -456,5 +456,158 @@ class TestSpatialMaskEndToEnd:
                 assert bottom_mean < 0.01, f"Bottom (unpainted) should be ~0.0, got {bottom_mean}"
 
 
+class TestTileControlNetWithSpatialMask:
+    """Test that Tile ControlNet works with spatial masking.
+
+    This verifies that there is no technical limitation preventing Tile ControlNet
+    from using spatial masks. The UI currently blocks this combination, but these
+    tests demonstrate it works at the node level.
+    """
+
+    def test_tile_controlnet_with_spatial_mask_works(self):
+        """Tile ControlNet should work with spatial masking - no technical limitation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mask_path = os.path.join(tmpdir, "tile_mask.png")
+            # Create mask with left half painted (restrict Tile to left side)
+            create_test_mask_image_with_alpha(mask_path, 64, 64, painted_region="left")
+
+            # Load mask
+            mask_node = ImageLoadNode(path=mask_path, grayscale=True)
+            mask_node()
+            mask_numpy = mask_node.values["image"]
+
+            # Setup for Tile ControlNet scenario
+            # Note: At node level, there's no distinction between Union and Tile
+            # The control image would be the image itself (or downscaled version)
+            mm = get_model_manager()
+            mm.clear()
+            vae = DummyVAE()
+            mm.register_active_model(model_id="test_tile", vae=vae)
+
+            # Create ControlNet conditioning node with spatial mask
+            node = ControlNetConditioningNode()
+            node.vae = ModelHandle("vae")
+            node.vae_scale_factor = 8
+            node.width = 64
+            node.height = 64
+            # For Tile, control_image is typically the source image
+            node.control_image = torch.randn(1, 3, 64, 64)  # Simulate tile control image
+            node.mask_image = mask_numpy
+            node.differential_diffusion_active = False
+
+            with mm.device_scope(device="cpu", dtype=torch.float32):
+                out = node()
+
+            # Verify spatial mask is generated
+            assert out["spatial_mask"] is not None, "Tile ControlNet should support spatial mask"
+            assert out["control_mode"] == "spatial_controlnet"
+
+            spatial_mask = out["spatial_mask"]
+
+            # Verify mask correctly restricts to left half
+            left_mean = spatial_mask[:, :, :, :32].mean().item()
+            right_mean = spatial_mask[:, :, :, 32:].mean().item()
+
+            assert left_mean > 0.99, f"Left half (painted) should be ~1.0, got {left_mean}"
+            assert right_mean < 0.01, f"Right half (unpainted) should be ~0.0, got {right_mean}"
+
+    def test_tile_spatial_mask_applied_to_blocks(self):
+        """Verify spatial mask is correctly applied to Tile ControlNet blocks."""
+        # Create spatial mask: top painted, bottom unpainted
+        mask = torch.zeros(1, 1, 32, 32)
+        mask[:, :, :16, :] = 1.0  # Top half
+
+        # Create dummy blocks (simulating Tile ControlNet output)
+        # Tile enhances detail, so blocks would contain enhancement information
+        block_samples = {
+            0: torch.ones(1, 32, 32) * 2.0,  # 3D block with enhancement values
+            1: torch.ones(1, 4, 32, 32) * 2.0,  # 4D block with enhancement values
+        }
+
+        # Apply spatial mask
+        latent_shape = (1, 4, 32, 32)
+        masked_blocks = DenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
+
+        # Verify: top half should keep enhancement (2.0), bottom should be zeroed
+        for i, block in masked_blocks.items():
+            if block.ndim == 3:
+                top_mean = block[:, :16, :].mean().item()
+                bottom_mean = block[:, 16:, :].mean().item()
+            else:
+                top_mean = block[:, :, :16, :].mean().item()
+                bottom_mean = block[:, :, 16:, :].mean().item()
+
+            assert abs(top_mean - 2.0) < 0.1, f"Block {i}: Top should keep value ~2.0, got {top_mean}"
+            assert bottom_mean < 0.01, f"Block {i}: Bottom should be zeroed ~0.0, got {bottom_mean}"
+
+    def test_tile_end_to_end_with_spatial_restriction(self):
+        """Complete Tile ControlNet workflow with spatial restriction.
+
+        Simulates a realistic use case:
+        - User has an image they want to enhance with Tile ControlNet
+        - User paints a mask to restrict enhancement to specific regions
+        - Tile should only enhance the masked regions
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create mask with circular pattern (center painted)
+            mask_path = os.path.join(tmpdir, "tile_center_mask.png")
+            img = np.zeros((64, 64, 4), dtype=np.uint8)
+
+            # Paint circular region in center
+            center = 32
+            radius = 20
+            y, x = np.ogrid[:64, :64]
+            circle_mask = (x - center) ** 2 + (y - center) ** 2 <= radius ** 2
+            img[circle_mask, 0:3] = 0  # Black RGB
+            img[circle_mask, 3] = 255  # Opaque alpha
+            cv2.imwrite(mask_path, img)
+
+            # Load and process through pipeline
+            mask_node = ImageLoadNode(path=mask_path, grayscale=True)
+            mask_node()
+            mask_numpy = mask_node.values["image"]
+
+            mm = get_model_manager()
+            mm.clear()
+            vae = DummyVAE()
+            mm.register_active_model(model_id="test_tile", vae=vae)
+
+            cnet_node = ControlNetConditioningNode()
+            cnet_node.vae = ModelHandle("vae")
+            cnet_node.vae_scale_factor = 8
+            cnet_node.width = 64
+            cnet_node.height = 64
+            cnet_node.control_image = torch.randn(1, 3, 64, 64)
+            cnet_node.mask_image = mask_numpy
+            cnet_node.differential_diffusion_active = False
+
+            with mm.device_scope(device="cpu", dtype=torch.float32):
+                cnet_out = cnet_node()
+
+            spatial_mask = cnet_out["spatial_mask"]
+            assert spatial_mask is not None
+
+            # Apply to blocks
+            block_samples = {
+                0: torch.ones(1, 64, 64) * 3.0,  # Tile enhancement values
+            }
+
+            latent_shape = (1, 4, 64, 64)
+            masked_blocks = DenoiseNode._apply_spatial_mask(block_samples, spatial_mask, latent_shape)
+
+            # Verify center region has enhancement, edges are zeroed
+            block = masked_blocks[0]
+            center_region = block[:, 24:40, 24:40]  # Center 16x16
+            edge_region = block[:, :8, :]  # Top edge
+
+            center_mean = center_region.mean().item()
+            edge_mean = edge_region.mean().item()
+
+            # Center should keep enhancement values
+            assert center_mean > 2.5, f"Center (painted) should keep values, got {center_mean}"
+            # Edges should be zeroed
+            assert edge_mean < 0.5, f"Edges (unpainted) should be mostly zero, got {edge_mean}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

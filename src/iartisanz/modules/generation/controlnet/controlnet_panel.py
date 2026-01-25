@@ -198,7 +198,7 @@ class ControlNetPanel(BasePanel):
         layout.addLayout(header_layout)
 
         self.mask_info_label = QLabel(
-            "Inpainting when source image is set(no diff-diff).\nMask condition when is not inpainting."
+            "Restricts where ControlNet applies.\nWith source image: inpainting (no diff-diff) or spatial (with diff-diff)."
         )
         self.mask_info_label.setWordWrap(True)
         self.mask_info_label.setStyleSheet("QLabel { color: gray; font-style: italic; font-size: 9pt; padding: 4px; }")
@@ -230,23 +230,11 @@ class ControlNetPanel(BasePanel):
         )
 
     def open_controlnet_mask_dialog(self):
-        model_index = self.model_combo.currentIndex()
-
-        if model_index > 1:
-            self.event_bus.publish(
-                "show_snackbar", {"action": "show", "message": "Inpainting is not available for Tile controlnets"}
-            )
-            return
-
         self.event_bus.publish("manage_dialog", {"dialog_type": "controlnet_mask", "action": "open"})
 
     def on_model_changed(self, index):
         model_label = self.model_combo.itemText(index)
         model_name = self.model_combo.itemData(index)
-
-        # Update inpainting availability based on model
-        is_tile = index > 1
-        self.add_inpaint_btn.setEnabled(not is_tile)
 
         # Always publish model change to store the model name
         self.event_bus.publish(
