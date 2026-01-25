@@ -119,7 +119,12 @@ def test_union_masks():
 
 
 def test_controlnet_conditioning_with_alpha_control_image():
-    """Test that control_image with alpha auto-generates mask."""
+    """Test that control_image with alpha auto-generates mask for spatial mode.
+
+    After refactoring: alpha in control_image creates a mask, but without init_image,
+    it results in spatial_controlnet mode, not inpainting mode.
+    To get inpainting mode, you need both control_image and init_image with mask.
+    """
     mm = get_model_manager()
     mm.clear()
 
@@ -131,6 +136,7 @@ def test_controlnet_conditioning_with_alpha_control_image():
     node.vae_scale_factor = 8
     node.width = 32
     node.height = 32
+    node.differential_diffusion_active = False
 
     # Create RGBA control image: opaque left, transparent right
     control_rgba = torch.zeros(1, 4, 32, 32)
@@ -142,13 +148,15 @@ def test_controlnet_conditioning_with_alpha_control_image():
     with mm.device_scope(device="cpu", dtype=torch.float32):
         out = node()
 
-    # Should produce inpainting latents (9 channels: 4 + 1 + 4)
+    # Should produce spatial latents (16-channel with mask)
     latents = out["control_image_latents"]
-    assert latents.shape[1] == 9, "Should have mask and init latents from alpha"
+    assert latents.shape[1] == 4, "Should have 16-channel with spatial mask from alpha"
+    assert out["control_mode"] == "spatial_controlnet"
+    assert out["spatial_mask"] is not None
 
 
 def test_controlnet_conditioning_with_alpha_init_image():
-    """Test that init_image with alpha auto-generates mask."""
+    """Test that init_image (source) with alpha auto-generates mask."""
     mm = get_model_manager()
     mm.clear()
 
@@ -160,6 +168,7 @@ def test_controlnet_conditioning_with_alpha_init_image():
     node.vae_scale_factor = 8
     node.width = 32
     node.height = 32
+    node.differential_diffusion_active = False
 
     # Create RGBA init image: opaque left, transparent right
     init_rgba = torch.zeros(1, 4, 32, 32)
@@ -172,8 +181,10 @@ def test_controlnet_conditioning_with_alpha_init_image():
         out = node()
 
     # Should produce inpainting latents (9 channels: 4 + 1 + 4)
+    # Uses init_image as both control and init for inpainting
     latents = out["control_image_latents"]
     assert latents.shape[1] == 9, "Should have mask and init latents from alpha"
+    assert out["control_mode"] == "inpainting_only"
 
 
 def test_controlnet_conditioning_alpha_union_with_explicit_mask():
@@ -189,6 +200,7 @@ def test_controlnet_conditioning_alpha_union_with_explicit_mask():
     node.vae_scale_factor = 8
     node.width = 32
     node.height = 32
+    node.differential_diffusion_active = False
 
     # Create RGBA init image: transparent right half
     init_rgba = torch.zeros(1, 4, 32, 32)
@@ -209,3 +221,4 @@ def test_controlnet_conditioning_alpha_union_with_explicit_mask():
     # Union should have: top half (explicit) + right half (alpha)
     latents = out["control_image_latents"]
     assert latents.shape[1] == 9, "Should have mask and init latents"
+    assert out["control_mode"] == "inpainting_only"

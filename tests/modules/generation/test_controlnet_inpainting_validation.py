@@ -29,17 +29,21 @@ class TestControlNetInpaintingValidation:
     """Test validation of controlnet inpainting configurations."""
 
     def test_mask_without_init_image_raises_error(self):
-        """Mask without init_image should raise ValueError."""
+        """Mask without init_image AND without control_image should raise ValueError.
+
+        Note: Mask with control_image (without init_image) is valid - it's Spatial ControlNet mode.
+        This test validates that mask ALONE (no control_image, no init_image) is invalid.
+        """
         graph = ImageArtisanZNodeGraph()
 
         # Add controlnet nodes
         graph.add_node(ControlNetConditioningNode(), "controlnet_conditioning")
 
-        # Add mask but no init_image
+        # Add mask but no init_image and no control_image
         graph.add_node(ImageLoadNode(path="/fake/mask.png", grayscale=True), "control_mask_image")
 
-        # Validate should raise error
-        with pytest.raises(ValueError, match="ControlNet mask requires an init_image"):
+        # Validate should raise error (mask alone is invalid)
+        with pytest.raises(ValueError, match="ControlNet mask requires either a control image or init_image"):
             graph.validate_controlnet_inpainting()
 
     def test_mask_without_controlnet_raises_error(self):
@@ -108,14 +112,14 @@ class TestControlNetInpaintingValidation:
         graph.validate_controlnet_inpainting()
 
     def test_only_mask_without_both_init_and_controlnet_raises_error(self):
-        """Mask alone (no init, no controlnet) should raise error about init_image first."""
+        """Mask alone (no init, no controlnet, no control_image) should raise error."""
         graph = ImageArtisanZNodeGraph()
 
         # Add only mask
         graph.add_node(ImageLoadNode(path="/fake/mask.png", grayscale=True), "control_mask_image")
 
-        # Should raise error about missing init_image first
-        with pytest.raises(ValueError, match="ControlNet mask requires an init_image"):
+        # Should raise error about missing required inputs
+        with pytest.raises(ValueError, match="ControlNet mask requires either a control image or init_image"):
             graph.validate_controlnet_inpainting()
 
     def test_controlnet_with_no_control_image_and_no_inpainting_raises_error(self):
@@ -149,6 +153,22 @@ class TestControlNetInpaintingValidation:
         graph.add_node(ImageLoadNode(path="/fake/control.png"), "control_image")
 
         # Should not raise - standard controlnet usage
+        graph.validate_controlnet_inpainting()
+
+    def test_controlnet_with_control_image_and_mask_is_valid(self):
+        """ControlNet with control_image + mask (without init_image) should be valid (Spatial ControlNet).
+
+        This is Scenario 2 from the refactoring plan: the mask acts as a spatial restriction,
+        controlling where ControlNet guidance applies, rather than as an inpainting boundary.
+        """
+        graph = ImageArtisanZNodeGraph()
+
+        # Add controlnet with control_image and mask (but NO init_image)
+        graph.add_node(ControlNetConditioningNode(), "controlnet_conditioning")
+        graph.add_node(ImageLoadNode(path="/fake/control.png"), "control_image")
+        graph.add_node(ImageLoadNode(path="/fake/mask.png", grayscale=True), "control_mask_image")
+
+        # Should not raise - Spatial ControlNet mode is valid
         graph.validate_controlnet_inpainting()
 
     def test_controlnet_with_control_image_and_inpainting_is_valid(self):

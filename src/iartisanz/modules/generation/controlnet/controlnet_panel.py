@@ -175,11 +175,11 @@ class ControlNetPanel(BasePanel):
         layout.setSpacing(6)
 
         header_layout = QHBoxLayout()
-        header_label = QLabel("Inpainting:")
+        header_label = QLabel("Spatial Mask:")
         header_layout.addWidget(header_label, alignment=Qt.AlignmentFlag.AlignLeft)
         header_layout.addStretch(1)
 
-        self.add_inpaint_btn = QPushButton("Add")
+        self.add_inpaint_btn = QPushButton("Add Mask")
         self.add_inpaint_btn.clicked.connect(self.open_controlnet_mask_dialog)
         header_layout.addWidget(self.add_inpaint_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
@@ -189,15 +189,14 @@ class ControlNetPanel(BasePanel):
         header_layout.addWidget(self.remove_inpaint_btn, alignment=Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header_layout)
 
-        # Init image preview
-        init_layout = QVBoxLayout()
-        init_label = QLabel("Init Image:")
-        init_layout.addWidget(init_label)
-        self.init_thumb_label = QLabel()
-        self.init_thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.init_thumb_label.setVisible(False)
-        init_layout.addWidget(self.init_thumb_label)
-        layout.addLayout(init_layout)
+        # Info label explaining mask purpose and source image usage
+        self.mask_info_label = QLabel(
+            "Uses Source Image as base.\n"
+            "Mask controls where ControlNet applies."
+        )
+        self.mask_info_label.setWordWrap(True)
+        self.mask_info_label.setStyleSheet("QLabel { color: gray; font-style: italic; font-size: 9pt; padding: 4px; }")
+        layout.addWidget(self.mask_info_label)
 
         # Mask preview
         mask_layout = QVBoxLayout()
@@ -261,7 +260,6 @@ class ControlNetPanel(BasePanel):
         self.event_bus.publish("controlnet", {"action": "remove"})
 
     def on_remove_inpaint_clicked(self):
-        self.event_bus.publish("controlnet", {"action": "remove_init_image"})
         self.event_bus.publish("controlnet", {"action": "remove_mask"})
 
     def on_conditioning_scale_changed(self, value: float):
@@ -342,33 +340,10 @@ class ControlNetPanel(BasePanel):
             self.control_thumb_label.setVisible(False)
             self.remove_control_btn.setVisible(False)
 
-            # Only disable checkbox if init image is also not present
-            if not self.init_thumb_label.isVisible():
+            # Only disable checkbox if mask is also not present
+            if not self.mask_thumb_label.isVisible():
                 self.enable_checkbox.setEnabled(False)
                 self.enable_checkbox.setChecked(False)
-
-        elif action == "add_init_image" or action == "update_init_image":
-            # Show init image preview using thumbnail
-            thumb_path = data.get("controlnet_init_image_thumb_path")
-            if thumb_path:
-                pixmap = QPixmap(thumb_path)
-                if not pixmap.isNull():
-                    pixmap = pixmap.scaled(
-                        150, 150, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-                    )
-                    self.init_thumb_label.setPixmap(pixmap)
-                    self.init_thumb_label.setVisible(True)
-                    self.remove_inpaint_btn.setVisible(True)
-
-            # Enable the checkbox now that we have an init image for inpainting
-            self.enable_checkbox.setEnabled(True)
-
-            # Auto-enable ControlNet when adding init image
-            # Block signals to prevent race condition - enable event will be sent by generation_module
-            if action == "add_init_image":
-                blocker = QSignalBlocker(self.enable_checkbox)
-                self.enable_checkbox.setChecked(True)
-                del blocker
 
         elif action in {"add_mask", "update_mask"}:
             # Show mask preview
@@ -386,16 +361,7 @@ class ControlNetPanel(BasePanel):
         elif action == "remove_mask":
             self.mask_thumb_label.clear()
             self.mask_thumb_label.setVisible(False)
-            # Keep remove button if init image still exists
-            if not self.init_thumb_label.isVisible():
-                self.remove_inpaint_btn.setVisible(False)
-
-        elif action == "remove_init_image":
-            self.init_thumb_label.clear()
-            self.init_thumb_label.setVisible(False)
-            # Keep remove button if mask still exists
-            if not self.mask_thumb_label.isVisible():
-                self.remove_inpaint_btn.setVisible(False)
+            self.remove_inpaint_btn.setVisible(False)
 
             # Only disable checkbox if control image is also not present
             if not self.control_thumb_label.isVisible():

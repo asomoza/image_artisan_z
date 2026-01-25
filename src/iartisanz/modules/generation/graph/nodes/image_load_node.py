@@ -49,7 +49,15 @@ class ImageLoadNode(Node):
             if raw is None:
                 raise FileNotFoundError(path)
 
-            gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+            # If image has alpha channel (4 channels), extract it
+            # Otherwise convert to grayscale
+            if raw.ndim == 3 and raw.shape[2] == 4:
+                gray = raw[:, :, 3]  # Alpha channel
+            elif raw.ndim == 3:
+                gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = raw
+
             mask_image = gray.astype(np.float32) / 255.0
             mask_image = np.expand_dims(mask_image, axis=-1)
 

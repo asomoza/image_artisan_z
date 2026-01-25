@@ -294,7 +294,7 @@ class ImageArtisanZNodeGraph:
         """Validate ControlNet inpainting configuration.
 
         Ensures that:
-        - Mask requires both ControlNet and init_image
+        - Mask requires ControlNet and either control_image (spatial mode) or init_image (inpainting)
         - Init_image requires ControlNet
         - ControlNet requires either control_image or inpainting components
         - Invalid configurations raise ValueError
@@ -303,16 +303,29 @@ class ImageArtisanZNodeGraph:
             ValueError: If the configuration is invalid
         """
         # Check for controlnet inpainting nodes
-        has_controlnet = self.get_node_by_name("controlnet_conditioning") is not None
+        controlnet_node = self.get_node_by_name("controlnet_conditioning")
+        has_controlnet = controlnet_node is not None
         has_control_image = self.get_node_by_name("control_image") is not None
         has_mask = self.get_node_by_name("control_mask_image") is not None
-        has_init_image = self.get_node_by_name("control_init_image") is not None
+
+        # Check for init_image in two ways (for backward compatibility):
+        # 1. NEW: init_image comes from source_image connection (refactored approach)
+        # 2. OLD: separate node named "control_init_image" (legacy approach)
+        has_init_image = False
+        if has_controlnet:
+            # Check if init_image input has a connection (refactored approach)
+            has_init_image = "init_image" in controlnet_node.connections and len(controlnet_node.connections["init_image"]) > 0
+
+        if not has_init_image:
+            # Fallback: check for legacy "control_init_image" node (backward compatibility)
+            has_init_image = self.get_node_by_name("control_init_image") is not None
 
         # Validate combinations
-        if has_mask and not has_init_image:
+        # Mask without init_image is valid if control_image is present (Spatial ControlNet mode)
+        if has_mask and not has_init_image and not has_control_image:
             raise ValueError(
-                "ControlNet mask requires an init_image to be configured. "
-                "Please add an init image in the inpainting dialog."
+                "ControlNet mask requires either a control image or init_image to be configured. "
+                "Please add a control image or source image."
             )
 
         if has_mask and not has_controlnet:

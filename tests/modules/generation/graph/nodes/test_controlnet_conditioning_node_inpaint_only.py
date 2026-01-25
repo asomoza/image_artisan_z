@@ -33,7 +33,11 @@ class DummyVAE(torch.nn.Module):
 
 
 def test_controlnet_conditioning_node_inpaint_only_with_init_image_no_control_image():
-    """Test inpainting-only mode: init_image provided, no control_image."""
+    """Test that init_image alone is not a valid ControlNet scenario.
+
+    After refactoring: ControlNetConditioningNode requires either control_image or a mask.
+    init_image alone is just img2img, which is handled by LatentsNode, not ControlNet.
+    """
     mm = get_model_manager()
     mm.clear()
 
@@ -46,15 +50,18 @@ def test_controlnet_conditioning_node_inpaint_only_with_init_image_no_control_im
     node.width = 32
     node.height = 32
 
-    # Only init_image, no control_image
+    # Only init_image, no control_image, no mask
     node.init_image = torch.zeros(1, 3, 32, 32)
+    node.differential_diffusion_active = False
 
     with mm.device_scope(device="cpu", dtype=torch.float32):
-        out = node()
-
-    # Should produce control latents using init_image as base
-    latents = out["control_image_latents"]
-    assert latents.shape == (1, 4, 1, 4, 4)
+        # Should raise error - invalid ControlNet configuration
+        from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
+        try:
+            out = node()
+            assert False, "Should have raised IArtisanZNodeError"
+        except IArtisanZNodeError as e:
+            assert "Invalid ControlNet configuration" in str(e)
 
 
 def test_controlnet_conditioning_node_inpaint_only_with_init_and_mask():

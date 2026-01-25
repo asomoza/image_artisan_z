@@ -33,9 +33,11 @@ class DenoiseNode(Node):
         "noise",
         "strength",
         "image_mask",
+        "source_mask",
         "controlnet",
         "control_image_latents",
         "controlnet_conditioning_scale",
+        "controlnet_spatial_mask",
         "control_guidance_start_end",
         "control_mode",
         "prompt_mode_decay",
@@ -62,6 +64,95 @@ class DenoiseNode(Node):
             except Exception:
                 # If a value is not directly scalable, keep it unchanged.
                 pass
+        return block_samples
+
+    @staticmethod
+    def _apply_spatial_mask(block_samples: dict, spatial_mask: torch.Tensor, latent_shape: tuple) -> dict:
+        """Apply spatial mask to ControlNet block samples to restrict where they affect generation.
+
+        Args:
+            block_samples: Dict of layer_idx -> block tensor
+            spatial_mask: Mask tensor (H, W) or (1, 1, H, W) in pixel space
+            latent_shape: Shape of latents (B, C, H, W)
+
+        Returns:
+            Modified block_samples dict with spatial mask applied
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Ensure mask is in the right format (B, 1, H, W) - MUST be 4D
+            if spatial_mask.ndim == 2:
+                spatial_mask = spatial_mask.unsqueeze(0).unsqueeze(0)
+            elif spatial_mask.ndim == 3:
+                spatial_mask = spatial_mask.unsqueeze(1)
+            elif spatial_mask.ndim > 4:
+                logger.error(
+                    f"[DenoiseNode._apply_spatial_mask] Spatial mask has too many dimensions: "
+                    f"{spatial_mask.ndim}D (shape={spatial_mask.shape}). Expected 2D, 3D, or 4D. "
+                    f"Squeezing extra dimensions."
+                )
+                # Squeeze extra dimensions
+                while spatial_mask.ndim > 4:
+                    spatial_mask = spatial_mask.squeeze(0)
+
+            # Apply mask to each block sample
+            # NOTE: Each block may have different spatial dimensions, so we resize mask per-block
+            for layer_idx, block_tensor in block_samples.items():
+                try:
+                    # Get the spatial dimensions of this block
+                    block_h, block_w = block_tensor.shape[-2], block_tensor.shape[-1]
+
+                    # Resize mask to match THIS block's spatial dimensions
+                    mask_for_block = torch.nn.functional.interpolate(
+                        spatial_mask, size=(block_h, block_w), mode="bilinear", align_corners=False
+                    )
+
+                    # Move mask to same device and dtype as block
+                    mask_for_block = mask_for_block.to(device=block_tensor.device, dtype=block_tensor.dtype)
+
+                    # CRITICAL: Match the dimensionality of the block tensor
+                    # If block is 3D [B, H, W], squeeze mask from [1, 1, H, W] to [1, H, W]
+                    # If block is 4D [B, C, H, W], keep mask as [1, 1, H, W]
+                    while mask_for_block.ndim > block_tensor.ndim:
+                        mask_for_block = mask_for_block.squeeze(1)
+
+                    # Apply mask: keep ControlNet influence only where mask > 0
+                    # Broadcasting will handle remaining dimensions automatically
+                    masked_block = block_tensor * mask_for_block
+
+                    # Convert to dense if sparse (sparse tensors can cause issues in transformer)
+                    if masked_block.is_sparse:
+                        logger.warning(
+                            f"[DenoiseNode._apply_spatial_mask] Block {layer_idx} became sparse, converting to dense"
+                        )
+                        masked_block = masked_block.to_dense()
+
+                    # Verify we didn't change dimensionality
+                    if masked_block.ndim != block_tensor.ndim:
+                        logger.error(
+                            f"[DenoiseNode._apply_spatial_mask] Dimension mismatch! "
+                            f"Original: {block_tensor.ndim}D ({block_tensor.shape}), "
+                            f"After mask: {masked_block.ndim}D ({masked_block.shape})"
+                        )
+                        # Don't apply mask if dimensions changed
+                        continue
+
+                    block_samples[layer_idx] = masked_block
+
+                except Exception as e:
+                    # If masking fails for a particular layer, keep original
+                    logger.warning(
+                        f"[DenoiseNode._apply_spatial_mask] Failed to mask layer {layer_idx} "
+                        f"(shape={block_tensor.shape}): {e}"
+                    )
+
+        except Exception as e:
+            # If overall masking fails, return original block_samples
+            logger.error(f"[DenoiseNode._apply_spatial_mask] Failed to apply spatial mask: {e}")
+
         return block_samples
 
     @torch.inference_mode()
@@ -259,10 +350,14 @@ class DenoiseNode(Node):
             latents = self.scheduler.scale_noise(latents, timesteps[:1], noise)
 
             # begin differential diffusion
-            if hasattr(self, "image_mask") and self.image_mask is not None:
-                original_mask = np.expand_dims(self.image_mask, axis=0)
-                original_mask = np.concatenate(original_mask, axis=0)
-                original_mask = numpy_to_pt(original_mask[None, ...]).to(device=self.device, dtype=self.dtype)
+            # Explicitly check for None to avoid numpy array truthiness issues
+            source_mask = getattr(self, "source_mask", None)
+            if source_mask is None:
+                source_mask = getattr(self, "image_mask", None)
+            if source_mask is not None:
+                # Convert mask to torch tensor with batch dimension
+                # source_mask shape: (H, W, C) -> (1, H, W, C)
+                original_mask = numpy_to_pt(source_mask[None, ...]).to(device=self.device, dtype=self.dtype)
                 original_mask = torch.nn.functional.interpolate(
                     original_mask, size=(latents.shape[2], latents.shape[3])
                 )
@@ -384,6 +479,14 @@ class DenoiseNode(Node):
                         controlnet_block_samples = self._apply_prompt_mode_decay(
                             controlnet_block_samples, prompt_mode_decay
                         )
+
+            # Apply spatial mask to ControlNet block samples if provided
+            spatial_mask_input = getattr(self, "controlnet_spatial_mask", None)
+
+            if controlnet_block_samples is not None and spatial_mask_input is not None:
+                controlnet_block_samples = self._apply_spatial_mask(
+                    controlnet_block_samples, spatial_mask_input, latents.shape
+                )
 
             model_out_list = transformer(
                 latent_model_input_list,

@@ -11,7 +11,7 @@ from iartisanz.utils.image_converters import normalize, numpy_to_pt
 class LatentsNode(Node):
     REQUIRED_INPUTS = ["vae_scale_factor", "width", "height", "num_channels_latents", "seed"]
     OPTIONAL_INPUTS = ["image", "vae"]
-    OUTPUTS = ["latents", "noise"]
+    OUTPUTS = ["latents", "noise", "source_image", "has_source_image"]
     SERIALIZE_EXCLUDE = {"latents"}
 
     def __init__(self, latents=None):
@@ -62,5 +62,9 @@ class LatentsNode(Node):
 
         self.values["latents"] = latents
         self.values["noise"] = noise
+
+        # Pass through source_image for ControlNet to use as init_image
+        self.values["source_image"] = image if image is not None else None
+        self.values["has_source_image"] = image is not None
 
         return self.values

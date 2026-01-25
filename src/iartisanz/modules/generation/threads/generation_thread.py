@@ -387,7 +387,12 @@ class NodeGraphThread(QThread):
         self.node_graph.add_node(mask_image_node, "source_image_mask")
 
         denoise_node = self.node_graph.get_node_by_name("denoise")
-        denoise_node.connect("image_mask", mask_image_node, "image")
+        denoise_node.connect("source_mask", mask_image_node, "image")
+
+        # Set differential_diffusion_active flag to True when mask is added
+        diff_diff_flag = self.node_graph.get_node_by_name("differential_diffusion_active")
+        if diff_diff_flag is not None:
+            diff_diff_flag.update_value(True)
 
     def update_source_image_mask(self, mask_image_path: str):
         mask_image_node = self.node_graph.get_node_by_name("source_image_mask")
@@ -396,56 +401,37 @@ class NodeGraphThread(QThread):
     def remove_source_image_mask(self):
         self.node_graph.delete_node_by_name("source_image_mask")
 
-    def add_controlnet_init_image(self, init_image_path: str, controlnet_model_path: str | None = None):
-        """Add a separate init image for ControlNet inpaint conditioning.
+        # Set differential_diffusion_active flag to False when mask is removed
+        diff_diff_flag = self.node_graph.get_node_by_name("differential_diffusion_active")
+        if diff_diff_flag is not None:
+            diff_diff_flag.update_value(False)
 
-        This is intentionally independent from the regular source image used for
-        differential diffusion / img2img.
-        """
-
-        conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
-        if conditioning_node is None:
-            # Create controlnet infrastructure for inpainting if it doesn't exist
-            if controlnet_model_path:
-                self._ensure_controlnet_infrastructure(controlnet_model_path)
-                conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
-            if conditioning_node is None:
-                return
-
-        if self.node_graph.get_node_by_name("control_init_image") is not None:
-            return
-
-        init_image_node = ImageLoadNode(path=init_image_path)
-        self.node_graph.add_node(init_image_node, "control_init_image")
-
-        try:
-            conditioning_node.connect("init_image", init_image_node, "image")
-        except Exception:
-            pass
-
-    def update_controlnet_init_image(self, init_image_path: str):
-        init_image_node = self.node_graph.get_node_by_name("control_init_image")
-        if init_image_node is not None:
-            init_image_node.update_value(init_image_path)
-
-    def remove_controlnet_init_image(self):
-        conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
-        init_image_node = self.node_graph.get_node_by_name("control_init_image")
-        if conditioning_node is not None and init_image_node is not None:
-            try:
-                conditioning_node.disconnect("init_image", init_image_node, "image")
-            except Exception:
-                pass
-        self.node_graph.delete_node_by_name("control_init_image")
-
-    def add_controlnet_mask_image(self, mask_image_path: str):
+    def add_controlnet_mask_image(self, mask_image_path: str, controlnet_path: str | None = None):
         """Add a separate mask image for ControlNet inpaint conditioning.
 
         This is intentionally independent from the regular differential diffusion
         mask used by the denoise node.
+
+        Args:
+            mask_image_path: Path to the mask image
+            controlnet_path: Optional path to ControlNet model. If provided and infrastructure
+                           doesn't exist, it will be created to enable inpainting-only mode.
         """
 
         conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+
+        # If conditioning node doesn't exist and we have a controlnet_path,
+        # create the infrastructure to support inpainting-only mode
+        if conditioning_node is None and controlnet_path is not None:
+            self._ensure_controlnet_infrastructure(
+                controlnet_path=controlnet_path,
+                conditioning_scale=0.75,
+                control_mode="balanced",
+                prompt_decay=0.825,
+            )
+            conditioning_node = self.node_graph.get_node_by_name("controlnet_conditioning")
+
+        # If still no conditioning node (no controlnet_path provided), return
         if conditioning_node is None:
             return
 
@@ -492,12 +478,6 @@ class NodeGraphThread(QThread):
         if self.node_graph.get_node_by_name("controlnet_model") is not None:
             return
 
-        from iartisanz.modules.generation.graph.nodes.choice_node import ChoiceNode
-        from iartisanz.modules.generation.graph.nodes.controlnet_conditioning_node import ControlNetConditioningNode
-        from iartisanz.modules.generation.graph.nodes.controlnet_model_node import ControlNetModelNode
-        from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
-        from iartisanz.modules.generation.graph.nodes.number_range_node import NumberRangeNode
-
         controlnet_model = ControlNetModelNode(path=controlnet_path)
         controlnet_model.enabled = True
         self.node_graph.add_node(controlnet_model, "controlnet_model")
@@ -529,6 +509,7 @@ class NodeGraphThread(QThread):
         width_node = self.node_graph.get_node_by_name("image_width")
         height_node = self.node_graph.get_node_by_name("image_height")
         denoise_node = self.node_graph.get_node_by_name("denoise")
+        latents_node = self.node_graph.get_node_by_name("latents")
 
         # ControlNet weights depend on the transformer for shared embeddings.
         controlnet_model.connect("transformer", models_node, "transformer")
@@ -538,12 +519,29 @@ class NodeGraphThread(QThread):
         conditioning.connect("width", width_node, "value")
         conditioning.connect("height", height_node, "value")
 
+        # NEW: Connect source_image from LatentsNode to ControlNet as init_image
+        # This allows ControlNet to use the source_image for inpainting
+        if latents_node is not None:
+            conditioning.connect("init_image", latents_node, "source_image")
+
+        # NEW: Create differential_diffusion_active flag
+        # This will be set to True when source_image_mask exists
+        from iartisanz.modules.generation.graph.nodes.boolean_node import BooleanNode
+
+        diff_diff_flag = BooleanNode(value=False)
+        diff_diff_flag.enabled = True
+        self.node_graph.add_node(diff_diff_flag, "differential_diffusion_active")
+        conditioning.connect("differential_diffusion_active", diff_diff_flag, "value")
+
         self.node_graph.add_node(conditioning, "controlnet_conditioning")
 
         denoise_node.connect("controlnet", controlnet_model, "controlnet")
         denoise_node.connect("control_image_latents", conditioning, "control_image_latents")
         denoise_node.connect("controlnet_conditioning_scale", scale_node, "value")
         denoise_node.connect("control_guidance_start_end", control_guidance, "value")
+
+        # NEW: Connect spatial_mask from ControlNet conditioning to DenoiseNode
+        denoise_node.connect("controlnet_spatial_mask", conditioning, "spatial_mask")
 
         # ControlNet runtime behavior controls (consumed by DenoiseNode).
         denoise_node.connect("control_mode", control_mode_node, "value")

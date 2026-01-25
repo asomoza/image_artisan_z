@@ -63,6 +63,7 @@ def test_check_initial_setup_returns_true_when_all_required_directories_are_set(
         "models_diffusers": "/models/diffusers",
         "models_singlefile": "/models/singlefile",
         "models_loras": "/models/loras",
+        "models_controlnets": "/models/controlnet",
         "outputs_images": "/outputs/images",
         "outputs_source_images": "/outputs/source",
         "outputs_source_masks": "/outputs/source_masks",

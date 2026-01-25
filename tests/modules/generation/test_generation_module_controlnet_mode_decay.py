@@ -83,14 +83,16 @@ def test_controlnet_add_uses_stored_mode_and_decay(generation_module):
     gm.controlnet_control_mode = "prompt"
     gm.controlnet_prompt_decay = 0.4
 
-    gm.controlnet_model_path = None
+    # Model path must be set for add_controlnet to be called
+    gm.controlnet_model_path = "/tmp/fake_controlnet.safetensors"
     gm.controlnet_processed_image_path = None
     gm.controlnet_condition_thumb_path = None
+    gm.controlnet_mask_path = None
+    gm.controlnet_mask_final_path = None
 
     gm.on_controlnet_event(
         {
             "action": "add",
-            "controlnet_model_path": "/tmp/fake_controlnet.safetensors",
             "control_image_path": "/tmp/fake_control_image.png",
             "control_image_thumb_path": "/tmp/thumb.png",
             "conditioning_scale": 0.75,

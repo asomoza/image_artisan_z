@@ -167,25 +167,55 @@ def _union_masks(
 
 
 class ControlNetConditioningNode(Node):
-    """Prepares a control image latent tensor for Z-Image ControlNet.
+    """Prepares a control image latent tensor for Z-Image ControlNet with differential diffusion awareness.
 
     Output is a CPU tensor shaped (B, C, 1, H, W) (the extra dim is 'F').
     DenoiseNode is responsible for duplicating for CFG and for any channel
     padding required by specific ControlNet versions.
 
+    Supports multiple modes with differential diffusion awareness:
+
+    WITHOUT differential diffusion:
+    - Standard ControlNet: control_image only
+    - Spatial ControlNet: control_image + mask_image (spatial restriction)
+    - Inpainting: control_image + mask_image + init_image (33-channel context)
+    - Inpainting-only: mask_image + init_image (no control)
+
+    WITH differential diffusion (source_mask present):
+    - ControlNet + Diff Diff: control_image + source → 16ch, spatial=source_mask
+    - Full Pipeline: control_image + source + cn_mask → 16ch, spatial=cn_mask
+    - Diff Diff + Spatial: source + cn_mask → 16ch (source as base), spatial=cn_mask
+
+    Key: When differential diffusion is active, controlnet_mask becomes a SPATIAL
+    RESTRICTION (where ControlNet applies) rather than an inpainting boundary.
+    This avoids conflicting mask semantics.
+
     Supports automatic alpha channel extraction: images with transparency automatically
-    generate inpainting masks (transparent regions → masked). Alpha masks are unioned
+    generate masks (transparent regions → masked). Alpha masks are unioned
     with any explicit mask provided.
+
+    init_image is typically sourced from SourceImageDialog (source_image),
+    not from ControlNet-specific UI.
 
     This node is optional and not included in the default graph.
     """
 
     PRIORITY = 1
     REQUIRED_INPUTS = ["vae", "width", "height", "vae_scale_factor"]
-    OPTIONAL_INPUTS = ["control_image", "mask_image", "init_image"]
-    OUTPUTS = ["control_image_latents", "control_image_size"]
+    OPTIONAL_INPUTS = [
+        "control_image",
+        "mask_image",  # ControlNet mask
+        "init_image",  # Source image
+        "differential_diffusion_active",  # Boolean flag
+    ]
+    OUTPUTS = [
+        "control_image_latents",
+        "control_image_size",
+        "spatial_mask",  # For spatial restriction in DenoiseNode
+        "control_mode",  # For debugging/logging
+    ]
 
-    SERIALIZE_EXCLUDE = {"control_image_latents"}
+    SERIALIZE_EXCLUDE = {"control_image_latents", "spatial_mask"}
 
     def __init__(self, alpha_composite_color=(127, 127, 127)):
         """Initialize the node.
@@ -196,6 +226,78 @@ class ControlNetConditioningNode(Node):
         """
         super().__init__()
         self.alpha_composite_color = alpha_composite_color
+
+    def _process_mask_to_pixel(self, mask_image, width, height, vae):
+        """Convert mask to pixel-space tensor [B, 1, H, W] in [0, 1].
+
+        Args:
+            mask_image: Mask as PIL Image, numpy array, or torch tensor
+            width: Target width
+            height: Target height
+            vae: VAE model for determining device
+
+        Returns:
+            Torch tensor [B, 1, H, W] with binary mask values
+        """
+        if isinstance(mask_image, torch.Tensor):
+            mask_pixel = mask_image
+            if mask_pixel.ndim == 2:
+                mask_pixel = mask_pixel.unsqueeze(0).unsqueeze(0)
+            elif mask_pixel.ndim == 3:
+                mask_pixel = mask_pixel.unsqueeze(0)
+
+            # Normalize to 1-channel BCHW float mask in [0, 1]
+            if mask_pixel.shape[1] != 1:
+                mask_pixel = mask_pixel.mean(dim=1, keepdim=True)
+
+            if mask_pixel.dtype in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64):
+                mask_pixel = mask_pixel.float() / 255.0
+            else:
+                mask_pixel = mask_pixel.float()
+
+            mask_pixel = (mask_pixel > 0.5).float()
+        else:
+            # Use Diffusers processor when given PIL/np-like inputs.
+            pil_mask = mask_image
+            if not isinstance(pil_mask, Image.Image):
+                if isinstance(pil_mask, np.ndarray):
+                    np_mask = pil_mask
+                else:
+                    np_mask = np.array(pil_mask)
+
+                # Squeeze out singleton dimensions for PIL compatibility
+                np_mask = np.squeeze(np_mask)
+
+                # Ensure 2D array for grayscale
+                if np_mask.ndim > 2:
+                    # If still has extra dims, take first channel
+                    np_mask = np_mask[..., 0] if np_mask.shape[-1] <= 4 else np_mask[0]
+
+                if np_mask.dtype != np.uint8:
+                    # Check if mask is in [0, 1] range (float) and scale to [0, 255]
+                    # Otherwise assume it's already in [0, 255] range
+                    if np_mask.max() <= 1.0:
+                        np_mask = (np_mask * 255).clip(0, 255).astype(np.uint8)
+                    else:
+                        np_mask = np_mask.clip(0, 255).astype(np.uint8)
+                pil_mask = Image.fromarray(np_mask, mode="L")
+
+            try:
+                mask_processor = VaeImageProcessor(
+                    vae_scale_factor=int(self.vae_scale_factor) * 2,
+                    do_binarize=True,
+                    do_convert_grayscale=True,
+                )
+            except TypeError:
+                # Older/newer diffusers signatures vary slightly.
+                mask_processor = VaeImageProcessor(vae_scale_factor=int(self.vae_scale_factor) * 2)
+
+            mask_pixel = mask_processor.preprocess(pil_mask, height=height, width=width)
+            if mask_pixel.shape[1] != 1:
+                mask_pixel = mask_pixel.mean(dim=1, keepdim=True)
+            mask_pixel = (mask_pixel > 0.5).float()
+
+        return mask_pixel
 
     @torch.inference_mode()
     def __call__(self):
@@ -258,23 +360,22 @@ class ControlNetConditioningNode(Node):
             latents = (latents - vae.config.shift_factor) * vae.config.scaling_factor
             return latents
 
+        # Get inputs
         control_image = getattr(self, "control_image", None)
         mask_image = getattr(self, "mask_image", None)
         init_image = getattr(self, "init_image", None)
+        diff_diff_active = getattr(self, "differential_diffusion_active", False)
 
         # Extract alpha masks from images (transparent → mask)
         control_alpha_mask = _extract_alpha_mask(control_image) if control_image is not None else None
         init_alpha_mask = _extract_alpha_mask(init_image) if init_image is not None else None
 
         # Union all masks: explicit mask + control alpha + init alpha
-        # Anywhere with mask or alpha becomes masked (union operation)
         final_mask = mask_image
         if control_alpha_mask is not None:
             final_mask = _union_masks(final_mask, control_alpha_mask)
         if init_alpha_mask is not None:
             final_mask = _union_masks(final_mask, init_alpha_mask)
-
-        # Replace mask_image with the unioned mask
         mask_image = final_mask
 
         # Composite RGBA images to RGB (remove alpha channels)
@@ -283,135 +384,153 @@ class ControlNetConditioningNode(Node):
         if init_image is not None and _extract_alpha_mask(init_image) is not None:
             init_image = _composite_rgba_to_rgb(init_image, self.alpha_composite_color)
 
-        # Determine the base image for control latents
-        if control_image is not None:
-            base_image = control_image
-        elif init_image is not None:
-            # Inpainting-only mode: use init_image as the base
-            base_image = init_image
-        else:
-            raise IArtisanZNodeError(
-                "ControlNet conditioning requires either control_image or init_image to be connected.",
-                self.__class__.__name__,
-            )
+        # Determine mode flags
+        has_control = control_image is not None
+        has_mask = mask_image is not None
+        has_init = init_image is not None
 
-        control_latents = _encode_image_latents(base_image)
-        control_latents_5d = control_latents.unsqueeze(2)
+        # === DECISION TREE: DIFFERENTIAL DIFFUSION MODE ===
+        if diff_diff_active:
+            # Don't use 33-channel inpainting context
+            # Use controlnet_mask as spatial restriction only
 
-        # Optional inpaint conditioning: if a mask is connected, concatenate
-        # [control_latents, mask_condition, init_image_latents] along channels.
-        if mask_image is not None:
-            # Default init image to base image if not provided separately
-            if init_image is None:
-                init_image = base_image
+            if has_control:
+                # Scenario 5 or 6: ControlNet + Diff Diff
+                base_image = control_image
+                control_latents = _encode_image_latents(base_image)
+                control_latents_5d = control_latents.unsqueeze(2)  # 16 channels
+                spatial_mask = mask_image if has_mask else None  # cn_mask → spatial
+                control_mode = "controlnet_diff_diff"
 
-            # Process mask in pixel space first (needed for masking init_image)
-            # Build mask condition at image resolution before encoding.
-            if isinstance(mask_image, torch.Tensor):
-                mask_pixel = mask_image
-                if mask_pixel.ndim == 2:
-                    mask_pixel = mask_pixel.unsqueeze(0).unsqueeze(0)
-                elif mask_pixel.ndim == 3:
-                    mask_pixel = mask_pixel.unsqueeze(0)
+            elif has_mask and has_init:
+                # Scenario 10: Diff Diff + Spatial (no control_image)
+                # Use source as control base for self-guidance
+                base_image = init_image
+                control_latents = _encode_image_latents(base_image)
+                control_latents_5d = control_latents.unsqueeze(2)  # 16 channels
+                spatial_mask = mask_image  # cn_mask → spatial restriction
+                control_mode = "diff_diff_spatial"
 
-                # Normalize to 1-channel BCHW float mask in [0, 1]
-                if mask_pixel.shape[1] != 1:
-                    mask_pixel = mask_pixel.mean(dim=1, keepdim=True)
-
-                if mask_pixel.dtype in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64):
-                    mask_pixel = mask_pixel.float() / 255.0
-                else:
-                    mask_pixel = mask_pixel.float()
-
-                mask_pixel = (mask_pixel > 0.5).float()
             else:
-                # Use Diffusers processor when given PIL/np-like inputs.
-                pil_mask = mask_image
-                if not isinstance(pil_mask, Image.Image):
-                    if isinstance(pil_mask, np.ndarray):
-                        np_mask = pil_mask
-                    else:
-                        np_mask = np.array(pil_mask)
+                # Scenario 9: Diff Diff only (no ControlNet needed)
+                raise IArtisanZNodeError(
+                    "ControlNet not needed for differential diffusion without spatial mask",
+                    self.__class__.__name__
+                )
 
-                    # Squeeze out singleton dimensions for PIL compatibility
-                    np_mask = np.squeeze(np_mask)
+        # === DECISION TREE: STANDARD OR INPAINTING MODE ===
+        else:
+            if has_mask and has_init:
+                # Scenario 4 or 8: Inpainting mode (33-channel context)
+                if has_control:
+                    base_image = control_image
+                    control_mode = "controlnet_inpainting"
+                else:
+                    base_image = init_image  # Inpainting-only
+                    control_mode = "inpainting_only"
 
-                    # Ensure 2D array for grayscale
-                    if np_mask.ndim > 2:
-                        # If still has extra dims, take first channel
-                        np_mask = np_mask[..., 0] if np_mask.shape[-1] <= 4 else np_mask[0]
+                # Encode base image
+                control_latents = _encode_image_latents(base_image)
+                control_latents_5d = control_latents.unsqueeze(2)
 
-                    if np_mask.dtype != np.uint8:
-                        np_mask = np.clip(np_mask, 0, 255).astype(np.uint8)
-                    pil_mask = Image.fromarray(np_mask, mode="L")
+                # Process mask to pixel space
+                mask_pixel = self._process_mask_to_pixel(mask_image, width, height, vae)
 
+                # Apply pre-masking to init_image (official implementation)
+                init_image_tensor = _preprocess_image_tensor(init_image)
                 try:
-                    mask_processor = VaeImageProcessor(
-                        vae_scale_factor=int(self.vae_scale_factor) * 2,
-                        do_binarize=True,
-                        do_convert_grayscale=True,
+                    vae_device = next(vae.parameters()).device
+                except Exception:
+                    vae_device = torch.device("cpu")
+
+                mask_pixel = mask_pixel.to(device=vae_device, dtype=vae.dtype)
+
+                # Ensure mask matches init_image dimensions
+                if mask_pixel.shape[-2:] != init_image_tensor.shape[-2:]:
+                    mask_pixel = torch.nn.functional.interpolate(
+                        mask_pixel,
+                        size=(init_image_tensor.shape[-2], init_image_tensor.shape[-1]),
+                        mode="nearest",
                     )
-                except TypeError:
-                    # Older/newer diffusers signatures vary slightly.
-                    mask_processor = VaeImageProcessor(vae_scale_factor=int(self.vae_scale_factor) * 2)
 
-                mask_pixel = mask_processor.preprocess(pil_mask, height=height, width=width)
-                if mask_pixel.shape[1] != 1:
-                    mask_pixel = mask_pixel.mean(dim=1, keepdim=True)
-                mask_pixel = (mask_pixel > 0.5).float()
+                # Apply inverted mask: preserve only non-masked regions
+                init_image_tensor = init_image_tensor.to(device=vae_device, dtype=vae.dtype)
+                init_image_masked = init_image_tensor * (1.0 - mask_pixel)
 
-            # Prepare init_image with pre-masking (matching official VideoX-Fun implementation)
-            # Mask convention: 1.0 = masked/inpaint region, 0.0 = preserve region
-            # So we multiply init_image by (1 - mask) to zero out masked regions
-            init_image_tensor = _preprocess_image_tensor(init_image)
+                # Encode the masked init_image
+                try:
+                    init_latents = _retrieve_latents(vae.encode(init_image_masked), sample_mode="argmax")
+                except Exception as e:
+                    raise IArtisanZNodeError(f"Failed encoding masked init image: {e}", self.__class__.__name__) from e
 
-            try:
-                vae_device = next(vae.parameters()).device
-            except Exception:
-                vae_device = torch.device("cpu")
+                init_latents = (init_latents - vae.config.shift_factor) * vae.config.scaling_factor
+                init_latents_5d = init_latents.unsqueeze(2)
 
-            mask_pixel = mask_pixel.to(device=vae_device, dtype=vae.dtype)
-
-            # Ensure mask_pixel matches init_image_tensor spatial dimensions
-            if mask_pixel.shape[-2:] != init_image_tensor.shape[-2:]:
-                mask_pixel = torch.nn.functional.interpolate(
+                # Downsample mask to latent resolution
+                mask_tensor = torch.nn.functional.interpolate(
                     mask_pixel,
-                    size=(init_image_tensor.shape[-2], init_image_tensor.shape[-1]),
+                    size=(int(control_latents.shape[-2]), int(control_latents.shape[-1])),
                     mode="nearest",
                 )
 
-            # Apply inverted mask to init_image: preserve only non-masked regions
-            init_image_tensor = init_image_tensor.to(device=vae_device, dtype=vae.dtype)
-            init_image_masked = init_image_tensor * (1.0 - mask_pixel)
+                # Broadcast mask batch if needed
+                if mask_tensor.shape[0] != control_latents.shape[0] and mask_tensor.shape[0] == 1:
+                    mask_tensor = mask_tensor.expand(control_latents.shape[0], -1, -1, -1)
 
-            # Encode the masked init_image
-            try:
-                init_latents = _retrieve_latents(vae.encode(init_image_masked), sample_mode="argmax")
-            except Exception as e:
-                raise IArtisanZNodeError(f"Failed encoding masked init image: {e}", self.__class__.__name__) from e
+                mask_5d = mask_tensor.unsqueeze(2)
 
-            init_latents = (init_latents - vae.config.shift_factor) * vae.config.scaling_factor
-            init_latents_5d = init_latents.unsqueeze(2)
+                # Build 33-channel context: [control_latents, mask, init_latents]
+                control_latents_5d = torch.cat([control_latents_5d, mask_5d, init_latents_5d], dim=1)
 
-            # Downsample mask to latent resolution
-            mask_tensor = torch.nn.functional.interpolate(
-                mask_pixel,
-                size=(int(control_latents.shape[-2]), int(control_latents.shape[-1])),
-                mode="nearest",
-            )
+                # Also apply spatially (optional - for stronger boundary enforcement)
+                spatial_mask = mask_image
 
-            # Broadcast mask batch if needed
-            if mask_tensor.shape[0] != control_latents.shape[0] and mask_tensor.shape[0] == 1:
-                mask_tensor = mask_tensor.expand(control_latents.shape[0], -1, -1, -1)
+            elif has_mask and not has_init:
+                # Scenario 2: Spatial ControlNet only (no source_image)
+                if not has_control:
+                    raise IArtisanZNodeError(
+                        "Spatial mask requires control_image",
+                        self.__class__.__name__
+                    )
+                base_image = control_image
+                control_latents = _encode_image_latents(base_image)
+                control_latents_5d = control_latents.unsqueeze(2)  # 16 channels
+                spatial_mask = mask_image  # Spatial restriction
+                control_mode = "spatial_controlnet"
 
-            mask_5d = mask_tensor.unsqueeze(2)
+            elif has_control:
+                # Scenario 1 or 3: Standard ControlNet
+                base_image = control_image
+                control_latents = _encode_image_latents(base_image)
+                control_latents_5d = control_latents.unsqueeze(2)  # 16 channels
+                spatial_mask = None
+                control_mode = "standard_controlnet"
 
-            # Concatenate: [control_latents, mask_condition, init_image_latents]
-            # This matches the official VideoX-Fun implementation
-            control_latents_5d = torch.cat([control_latents_5d, mask_5d, init_latents_5d], dim=1)
+            else:
+                raise IArtisanZNodeError(
+                    "Invalid ControlNet configuration",
+                    self.__class__.__name__
+                )
 
         # Return CPU tensor for downstream nodes (matches PromptEncoderNode/DenoiseNode conventions).
         self.values["control_image_latents"] = control_latents_5d.detach().to("cpu")
+
+        # Output spatial mask for DenoiseNode (may be None)
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if spatial_mask is not None:
+            # Convert to tensor if needed
+            if not isinstance(spatial_mask, torch.Tensor):
+                spatial_mask_tensor = self._process_mask_to_pixel(spatial_mask, width, height, vae)
+            else:
+                spatial_mask_tensor = spatial_mask
+            self.values["spatial_mask"] = spatial_mask_tensor.detach().to("cpu")
+        else:
+            self.values["spatial_mask"] = None
+
+        # Output control mode for debugging/logging
+        self.values["control_mode"] = control_mode
 
         # Best-effort size reporting.
         try:

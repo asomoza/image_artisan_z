@@ -73,8 +73,6 @@ class GenerationModule(BaseModule):
         self.controlnet_mask_path = None
         self.controlnet_mask_final_path = None
         self.controlnet_mask_thumb_path = None
-        self.controlnet_init_image_path = None
-        self.controlnet_init_image_layers = None
 
         # ControlNet denoise behavior controls
         self.controlnet_control_mode = "balanced"
@@ -589,8 +587,6 @@ class GenerationModule(BaseModule):
                     self.gen_settings.image_width,
                     self.gen_settings.image_height,
                     controlnet_mask_path=self.controlnet_mask_path,
-                    controlnet_init_image_path=self.controlnet_init_image_path,
-                    controlnet_init_image_layers=self.controlnet_init_image_layers,
                 ),
             },
         }
@@ -787,9 +783,11 @@ class GenerationModule(BaseModule):
                 self.generation_thread.enable_controlnet(True)
 
                 # If a ControlNet inpaint mask already exists, ensure it is wired.
-                if self.controlnet_mask_final_path:
-                    self.generation_thread.add_controlnet_mask_image(self.controlnet_mask_final_path)
-                    self.generation_thread.update_controlnet_mask_image(self.controlnet_mask_final_path)
+                if self.controlnet_mask_path:
+                    self.generation_thread.add_controlnet_mask_image(
+                        self.controlnet_mask_path, controlnet_path=self.controlnet_model_path
+                    )
+                    self.generation_thread.update_controlnet_mask_image(self.controlnet_mask_path)
 
         elif action == "update_conditioning_scale":
             conditioning_scale = data.get("conditioning_scale")
@@ -818,50 +816,23 @@ class GenerationModule(BaseModule):
             self.controlnet_mask_path = data.get("controlnet_mask_path")
             self.controlnet_mask_final_path = data.get("controlnet_mask_final_path")
             self.controlnet_mask_thumb_path = data.get("controlnet_mask_thumb_path")
-            if self.controlnet_mask_final_path:
-                self.generation_thread.add_controlnet_mask_image(self.controlnet_mask_final_path)
+            if self.controlnet_mask_path:
+                self.generation_thread.add_controlnet_mask_image(
+                    self.controlnet_mask_path, controlnet_path=self.controlnet_model_path
+                )
 
         elif action == "update_mask":
             self.controlnet_mask_path = data.get("controlnet_mask_path")
             self.controlnet_mask_final_path = data.get("controlnet_mask_final_path")
             self.controlnet_mask_thumb_path = data.get("controlnet_mask_thumb_path")
-            if self.controlnet_mask_final_path:
-                self.generation_thread.update_controlnet_mask_image(self.controlnet_mask_final_path)
+            if self.controlnet_mask_path:
+                self.generation_thread.update_controlnet_mask_image(self.controlnet_mask_path)
 
         elif action == "remove_mask":
             self.generation_thread.remove_controlnet_mask_image()
             self.controlnet_mask_path = None
             self.controlnet_mask_final_path = None
             self.controlnet_mask_thumb_path = None
-
-        elif action == "add_init_image":
-            self.controlnet_init_image_path = data.get("controlnet_init_image_path")
-            self.controlnet_init_image_layers = data.get("controlnet_init_image_layers")
-            init_image_final_path = data.get("controlnet_init_image_final_path")
-            if init_image_final_path:
-                self.generation_thread.add_controlnet_init_image(
-                    init_image_final_path, controlnet_model_path=self.controlnet_model_path
-                )
-                # Apply current UI parameter values to the graph
-                self.generation_thread.update_node("controlnet_control_mode", self.controlnet_control_mode)
-                self.generation_thread.update_node("controlnet_prompt_decay", self.controlnet_prompt_decay)
-                # Enable ControlNet after nodes are created
-                self.generation_thread.enable_controlnet(True)
-
-        elif action == "update_init_image":
-            self.controlnet_init_image_path = data.get("controlnet_init_image_path")
-            self.controlnet_init_image_layers = data.get("controlnet_init_image_layers")
-            init_image_final_path = data.get("controlnet_init_image_final_path")
-            if init_image_final_path:
-                self.generation_thread.update_controlnet_init_image(init_image_final_path)
-
-        elif action == "update_init_image_layers":
-            self.controlnet_init_image_layers = data.get("controlnet_init_image_layers")
-
-        elif action == "remove_init_image":
-            self.generation_thread.remove_controlnet_init_image()
-            self.controlnet_init_image_path = None
-            self.controlnet_init_image_layers = None
 
         elif action == "enable":
             self.generation_thread.enable_controlnet(True)
@@ -883,8 +854,6 @@ class GenerationModule(BaseModule):
             self.controlnet_mask_path = None
             self.controlnet_mask_final_path = None
             self.controlnet_mask_thumb_path = None
-            self.controlnet_init_image_path = None
-            self.controlnet_init_image_layers = None
             self.controlnet_condition_thumb_path = None
 
             # Reset behavior controls to defaults.

@@ -87,7 +87,7 @@ def source_image_dialog_module(monkeypatch, qapp, fake_superqt, tmp_path: Path):
         def get_all_layers(self):
             return list(self._layers)
 
-        def set_layers(self, layers):
+        def restore_layers(self, layers):
             self._layers = list(layers)
 
     class FakeImageWidget(QObject):
@@ -110,7 +110,7 @@ def source_image_dialog_module(monkeypatch, qapp, fake_superqt, tmp_path: Path):
             self._mask_image_path = mask_image_path
             self._existing_mask_buttons_set = 0
             if layers is not None:
-                self.image_widget.image_editor.set_layers(layers)
+                self.image_widget.image_editor.restore_layers(layers)
 
             # Match the real ImageSectionWidget API used by the dialog/tests.
             self.add_button = QPushButton()
@@ -142,7 +142,7 @@ def source_image_dialog_module(monkeypatch, qapp, fake_superqt, tmp_path: Path):
             self.image_widget = FakeImageWidget(FakeImageEditor())
             self._mask_image_path = mask_image_path
 
-    image_section_mod = ModuleType("iartisanz.modules.generation.source_image.image_section_widget")
+    image_section_mod = ModuleType("iartisanz.modules.generation.common.mask.image_section_widget")
     image_section_mod.ImageSectionWidget = FakeSectionWidget
 
     mask_section_mod = ModuleType("iartisanz.modules.generation.source_image.mask_section_widget")
@@ -197,7 +197,7 @@ def source_image_dialog_module(monkeypatch, qapp, fake_superqt, tmp_path: Path):
         ("iartisanz.buttons.brush_erase_button", buttons_brush_mod),
         ("iartisanz.buttons.color_button", buttons_color_mod),
         ("iartisanz.buttons.eyedropper_button", buttons_eye_mod),
-        ("iartisanz.modules.generation.source_image.image_section_widget", image_section_mod),
+        ("iartisanz.modules.generation.common.mask.image_section_widget", image_section_mod),
         ("iartisanz.modules.generation.source_image.mask_section_widget", mask_section_mod),
         ("iartisanz.modules.generation.threads.pixmap_save_thread", pixmap_thread_mod),
         ("iartisanz.modules.generation.threads.save_layers_thread", layers_thread_mod),
@@ -217,6 +217,7 @@ def _make_dirs(tmp_path: Path):
         models_diffusers=str(base / "models_diffusers"),
         models_singlefile=str(base / "models_singlefile"),
         models_loras=str(base / "models_loras"),
+        models_controlnets=str(base / "models_controlnets"),
         outputs_images=str(base / "outputs_images"),
         outputs_source_images=str(base / "outputs_source_images"),
         outputs_source_masks=str(base / "outputs_source_masks"),
@@ -247,10 +248,11 @@ def test_init_connects_editor_and_sets_defaults(source_image_dialog_module, tmp_
 
     editor = dialog.image_section_widget.image_widget.image_editor
     assert dialog.active_editor is editor
-    assert dialog.brush_size_slider.value() == 42
-    assert dialog.brush_hardness_slider.value() == pytest.approx(0.33)
-    assert dialog.brush_steps_slider.value() == pytest.approx(2.5)
-    assert dialog.color_button.color() == (10, 20, 30)
+    # The dialog now sets the sliders to the editor's actual values via _connect_editor
+    assert dialog.brush_size_slider.value() == editor.brush_size  # 42 from FakeImageEditor
+    assert dialog.brush_hardness_slider.value() == pytest.approx(editor.hardness)  # 0.33
+    assert dialog.brush_steps_slider.value() == pytest.approx(editor.steps)  # 2.5
+    assert dialog.color_button.color() == (editor.brush_color.red(), editor.brush_color.green(), editor.brush_color.blue())  # (10, 20, 30)
 
     # If a source image path is provided and no layers are provided, the editor is instructed to load it.
     assert editor.changed_image_path == str(tmp_path / "some.png")
@@ -320,7 +322,7 @@ def test_on_source_image_added_publishes_update_and_update_layers(source_image_d
     # Provide layers so `update_layers` payload can be validated.
     layer = ImageEditorLayer(layer_id=0, layer_name="L0", order=0)
     layer.pixmap_item = object()
-    dialog.image_section_widget.image_widget.image_editor.set_layers([layer])
+    dialog.image_section_widget.image_widget.image_editor.restore_layers([layer])
 
     published: list[tuple[str, dict]] = []
     dialog.event_bus.unsubscribe_all()
@@ -399,7 +401,7 @@ def test_dialog_full_complex_cycle(source_image_dialog_module, tmp_path: Path):
         source_image_path=None,
         source_image_layers=None,
     )
-    dialog1.image_section_widget.image_widget.image_editor.set_layers(one_layer)
+    dialog1.image_section_widget.image_widget.image_editor.restore_layers(one_layer)
     assert dialog1.image_section_widget.add_button.text() == "Add source image"
 
     dialog1.event_bus.unsubscribe_all()
@@ -418,7 +420,7 @@ def test_dialog_full_complex_cycle(source_image_dialog_module, tmp_path: Path):
         source_image_path=str(p1),
         source_image_layers=one_layer,
     )
-    dialog2.image_section_widget.image_widget.image_editor.set_layers(one_layer)
+    dialog2.image_section_widget.image_widget.image_editor.restore_layers(one_layer)
     assert dialog2.image_section_widget.add_button.text() == "Update source image"
 
     dialog2.event_bus.unsubscribe_all()
@@ -438,7 +440,7 @@ def test_dialog_full_complex_cycle(source_image_dialog_module, tmp_path: Path):
         source_image_path=str(p2),
         source_image_layers=one_layer,
     )
-    dialog3.image_section_widget.image_widget.image_editor.set_layers(one_layer)
+    dialog3.image_section_widget.image_widget.image_editor.restore_layers(one_layer)
     assert dialog3.image_section_widget.add_button.text() == "Update source image"
 
     dialog3.event_bus.unsubscribe_all()
@@ -465,7 +467,7 @@ def test_dialog_full_complex_cycle(source_image_dialog_module, tmp_path: Path):
         source_image_path=None,
         source_image_layers=None,
     )
-    dialog4.image_section_widget.image_widget.image_editor.set_layers(one_layer)
+    dialog4.image_section_widget.image_widget.image_editor.restore_layers(one_layer)
     assert dialog4.image_section_widget.add_button.text() == "Add source image"
 
     # 5) Add a new source image after deletion.
