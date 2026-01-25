@@ -86,10 +86,14 @@ class ControlNetPanel(BasePanel):
         header_layout.addStretch(1)
 
         add_control_btn = QPushButton("Add")
+        add_control_btn.setFixedWidth(80)
+        add_control_btn.setObjectName("green_button")
         add_control_btn.clicked.connect(self.open_controlnet_dialog)
         header_layout.addWidget(add_control_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         self.remove_control_btn = QPushButton("Remove")
+        self.remove_control_btn.setFixedWidth(80)
+        self.remove_control_btn.setObjectName("red_button")
         self.remove_control_btn.clicked.connect(self.on_remove_control_clicked)
         self.remove_control_btn.setVisible(False)
         header_layout.addWidget(self.remove_control_btn, alignment=Qt.AlignmentFlag.AlignRight)
@@ -179,20 +183,22 @@ class ControlNetPanel(BasePanel):
         header_layout.addWidget(header_label, alignment=Qt.AlignmentFlag.AlignLeft)
         header_layout.addStretch(1)
 
-        self.add_inpaint_btn = QPushButton("Add Mask")
+        self.add_inpaint_btn = QPushButton("Add")
+        self.add_inpaint_btn.setFixedWidth(80)
+        self.add_inpaint_btn.setObjectName("green_button")
         self.add_inpaint_btn.clicked.connect(self.open_controlnet_mask_dialog)
         header_layout.addWidget(self.add_inpaint_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         self.remove_inpaint_btn = QPushButton("Remove")
+        self.remove_inpaint_btn.setFixedWidth(80)
+        self.remove_inpaint_btn.setObjectName("red_button")
         self.remove_inpaint_btn.clicked.connect(self.on_remove_inpaint_clicked)
         self.remove_inpaint_btn.setVisible(False)
         header_layout.addWidget(self.remove_inpaint_btn, alignment=Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header_layout)
 
-        # Info label explaining mask purpose and source image usage
         self.mask_info_label = QLabel(
-            "Uses Source Image as base.\n"
-            "Mask controls where ControlNet applies."
+            "Inpainting when source image is set(no diff-diff).\nMask condition when is not inpainting."
         )
         self.mask_info_label.setWordWrap(True)
         self.mask_info_label.setStyleSheet("QLabel { color: gray; font-style: italic; font-size: 9pt; padding: 4px; }")
@@ -213,7 +219,7 @@ class ControlNetPanel(BasePanel):
 
     def open_controlnet_dialog(self):
         model_index = self.model_combo.currentIndex()
-        is_tile = model_index > 2
+        is_tile = model_index > 1
         self.event_bus.publish(
             "manage_dialog",
             {
@@ -226,7 +232,7 @@ class ControlNetPanel(BasePanel):
     def open_controlnet_mask_dialog(self):
         model_index = self.model_combo.currentIndex()
 
-        if model_index > 2:
+        if model_index > 1:
             self.event_bus.publish(
                 "show_snackbar", {"action": "show", "message": "Inpainting is not available for Tile controlnets"}
             )
@@ -239,7 +245,7 @@ class ControlNetPanel(BasePanel):
         model_name = self.model_combo.itemData(index)
 
         # Update inpainting availability based on model
-        is_tile = index > 2
+        is_tile = index > 1
         self.add_inpaint_btn.setEnabled(not is_tile)
 
         # Always publish model change to store the model name
