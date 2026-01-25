@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-import numpy as np
-from PIL import Image
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
-    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -19,35 +17,63 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
+    QWidget,
 )
-from superqt import QLabeledDoubleSlider
+from superqt import QLabeledDoubleSlider, QLabeledSlider
 
 from iartisanz.app.base_simple_dialog import BaseSimpleDialog
 from iartisanz.app.event_bus import EventBus
+from iartisanz.buttons.brush_erase_button import BrushEraseButton
+from iartisanz.buttons.color_button import ColorButton
+from iartisanz.buttons.eyedropper_button import EyeDropperButton
 from iartisanz.buttons.linked_button import LinkedButton
+from iartisanz.modules.generation.image.mask_widget import MaskWidget
+from iartisanz.modules.generation.threads.mask_pixmap_save_thread import MaskPixmapSaveThread
 
 
 if TYPE_CHECKING:
+    from iartisanz.app.directories import Directories
     from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
+    from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 
 
 logger = logging.getLogger(__name__)
 
 
 class LoraAdvancedDialog(BaseSimpleDialog):
-    def __init__(self, dialog_key: str, lora: LoraDataObject):
-        super().__init__("LoRA Advanced Dialog", minWidth=1100, minHeight=550)
+    # Dialog sizes
+    COLLAPSED_MIN_HEIGHT = 550
+    EXPANDED_MIN_HEIGHT = 900
+
+    def __init__(
+        self,
+        dialog_key: str,
+        lora: "LoraDataObject",
+        image_viewer: "ImageViewerSimpleWidget" = None,
+        image_width: int = 1024,
+        image_height: int = 1024,
+        directories: "Directories" = None,
+    ):
+        super().__init__("LoRA Advanced Dialog", minWidth=1100, minHeight=self.COLLAPSED_MIN_HEIGHT)
 
         self.event_bus = EventBus()
 
         self.dialog_key = dialog_key
-
         self.lora = lora
+        self.image_viewer = image_viewer
+        self.image_width = image_width
+        self.image_height = image_height
+        self.directories = directories
+
         self.low_range = 0.0
         self.high_range = 1.0
 
         self.layer_sliders: dict[str, QLabeledDoubleSlider] = {}
-        self.mask_preview_pixmap: Optional[QPixmap] = None
+
+        # Mask editor state
+        self.mask_widget: MaskWidget = None
+        self.pixmap_save_thread: MaskPixmapSaveThread = None
+        self.dialog_busy = False
 
         self.init_ui()
 
@@ -109,7 +135,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         self.setLayout(self.dialog_layout)
 
     def _build_spatial_mask_section(self):
-        """Build the spatial masking UI section."""
+        """Build the spatial masking UI section with embedded mask editor."""
         # Separator
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
@@ -131,65 +157,123 @@ class LoraAdvancedDialog(BaseSimpleDialog):
 
         self.main_layout.addLayout(mask_checkbox_layout)
 
-        # Mask frame (collapsible content)
-        self.mask_frame = QFrame()
-        self.mask_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        self.mask_frame.setEnabled(self.lora.spatial_mask_enabled)
+        # Mask editor frame (expandable content)
+        self.mask_editor_frame = QWidget()
+        mask_editor_layout = QVBoxLayout()
+        mask_editor_layout.setContentsMargins(5, 5, 5, 5)
+        mask_editor_layout.setSpacing(8)
 
-        mask_content_layout = QHBoxLayout()
-        mask_content_layout.setContentsMargins(10, 10, 10, 10)
-        mask_content_layout.setSpacing(15)
-
-        # Left side: Preview
-        preview_layout = QVBoxLayout()
-
-        self.mask_preview_label = QLabel()
-        self.mask_preview_label.setMinimumSize(120, 120)
-        self.mask_preview_label.setMaximumSize(120, 120)
-        self.mask_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mask_preview_label.setStyleSheet(
-            "QLabel { border: 1px solid #555; background-color: #2b2b2b; color: #888; font-size: 10px; }"
+        # Info label explaining mask purpose
+        lora_name = self.lora.name if self.lora else "LoRA"
+        info_label = QLabel(
+            f"Define where '{lora_name}' applies its effect. "
+            "White = full LoRA effect, Black = no LoRA (base model only), Gray = partial effect."
         )
-        self.mask_preview_label.setScaledContents(False)
-        preview_layout.addWidget(self.mask_preview_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("QLabel { color: gray; font-style: italic; padding: 3px; }")
+        mask_editor_layout.addWidget(info_label)
 
-        # Mask stats
-        self.mask_stats_label = QLabel("No mask")
-        self.mask_stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mask_stats_label.setStyleSheet("QLabel { color: gray; font-size: 10px; }")
-        preview_layout.addWidget(self.mask_stats_label)
+        # Brush controls row
+        brush_layout = QHBoxLayout()
+        brush_layout.setContentsMargins(0, 0, 0, 0)
+        brush_layout.setSpacing(8)
 
-        mask_content_layout.addLayout(preview_layout)
+        brush_size_label = QLabel("Brush size:")
+        brush_layout.addWidget(brush_size_label)
+        self.brush_size_slider = QLabeledSlider(Qt.Orientation.Horizontal)
+        self.brush_size_slider.setRange(3, 300)
+        self.brush_size_slider.setValue(150)
+        self.brush_size_slider.setMaximumWidth(150)
+        brush_layout.addWidget(self.brush_size_slider)
 
-        # Right side: Buttons
-        buttons_layout = QVBoxLayout()
-        buttons_layout.setSpacing(8)
+        brush_hardness_label = QLabel("Hardness:")
+        brush_layout.addWidget(brush_hardness_label)
+        self.brush_hardness_slider = QLabeledDoubleSlider(Qt.Orientation.Horizontal)
+        self.brush_hardness_slider.setRange(0.0, 0.99)
+        self.brush_hardness_slider.setValue(0.0)
+        self.brush_hardness_slider.setMaximumWidth(120)
+        brush_layout.addWidget(self.brush_hardness_slider)
 
-        self.edit_mask_button = QPushButton("Edit Mask...")
-        self.edit_mask_button.setMinimumWidth(100)
-        self.edit_mask_button.clicked.connect(self.on_edit_mask)
-        buttons_layout.addWidget(self.edit_mask_button)
+        brush_steps_label = QLabel("Steps:")
+        brush_layout.addWidget(brush_steps_label)
+        self.brush_steps_slider = QLabeledDoubleSlider(Qt.Orientation.Horizontal)
+        self.brush_steps_slider.setRange(0.01, 10.00)
+        self.brush_steps_slider.setValue(1.25)
+        self.brush_steps_slider.setMaximumWidth(120)
+        brush_layout.addWidget(self.brush_steps_slider)
 
-        self.load_mask_button = QPushButton("Load Mask...")
-        self.load_mask_button.setMinimumWidth(100)
-        self.load_mask_button.clicked.connect(self.on_load_mask)
-        buttons_layout.addWidget(self.load_mask_button)
+        self.brush_erase_button = BrushEraseButton()
+        brush_layout.addWidget(self.brush_erase_button)
 
-        self.clear_mask_button = QPushButton("Clear Mask")
-        self.clear_mask_button.setMinimumWidth(100)
-        self.clear_mask_button.clicked.connect(self.on_clear_mask)
-        buttons_layout.addWidget(self.clear_mask_button)
+        self.color_button = ColorButton("Color:")
+        brush_layout.addWidget(self.color_button, 0)
 
-        buttons_layout.addStretch()
-        mask_content_layout.addLayout(buttons_layout)
-        mask_content_layout.addStretch()
+        self.eyedropper_button = EyeDropperButton(25, 25)
+        self.eyedropper_button.clicked.connect(self.on_eyedropper_clicked)
+        brush_layout.addWidget(self.eyedropper_button, 0)
 
-        self.mask_frame.setLayout(mask_content_layout)
-        self.main_layout.addWidget(self.mask_frame)
+        brush_layout.addStretch()
+        mask_editor_layout.addLayout(brush_layout)
 
-        # Update preview on init
-        self._update_mask_preview()
-        self._update_mask_stats()
+        # Embedded MaskWidget
+        if self.image_viewer and self.directories:
+            mask_path = self.lora.spatial_mask_path if self.lora.spatial_mask_path else None
+            self.mask_widget = MaskWidget(
+                "LoRA Spatial Mask",
+                "lora_mask",
+                self.image_viewer,
+                self.image_width,
+                self.image_height,
+                self.directories.temp_path,
+            )
+            self.mask_widget.set_layers(mask_path)
+
+            # Connect brush controls to mask editor
+            editor = self.mask_widget.image_editor
+            self.brush_size_slider.valueChanged.connect(editor.set_brush_size)
+            self.brush_hardness_slider.valueChanged.connect(editor.set_brush_hardness)
+            self.brush_steps_slider.valueChanged.connect(editor.set_brush_steps)
+            self.color_button.color_changed.connect(editor.set_brush_color)
+            self.brush_erase_button.brush_selected.connect(self.mask_widget.set_erase_mode)
+
+            mask_editor_layout.addWidget(self.mask_widget)
+        else:
+            # Fallback: show placeholder if no image_viewer/directories
+            placeholder = QLabel("Mask editor unavailable.\nPlease close and reopen this dialog.")
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setStyleSheet("QLabel { color: #888; font-style: italic; padding: 20px; }")
+            mask_editor_layout.addWidget(placeholder)
+
+        # Action buttons row
+        action_buttons_layout = QHBoxLayout()
+        action_buttons_layout.setSpacing(8)
+
+        self.save_mask_button = QPushButton("Save mask")
+        self.save_mask_button.setObjectName("green_button")
+        self.save_mask_button.clicked.connect(self._save_current_mask)
+        action_buttons_layout.addWidget(self.save_mask_button)
+
+        self.delete_mask_button = QPushButton("Delete mask")
+        self.delete_mask_button.setObjectName("red_button")
+        self.delete_mask_button.clicked.connect(self._delete_mask)
+        action_buttons_layout.addWidget(self.delete_mask_button)
+
+        self.cancel_mask_button = QPushButton("Cancel changes")
+        self.cancel_mask_button.clicked.connect(self._cancel_mask_edit)
+        action_buttons_layout.addWidget(self.cancel_mask_button)
+
+        action_buttons_layout.addStretch()
+        mask_editor_layout.addLayout(action_buttons_layout)
+
+        self.mask_editor_frame.setLayout(mask_editor_layout)
+
+        # Initially hide if spatial masking not enabled
+        self.mask_editor_frame.setVisible(self.lora.spatial_mask_enabled)
+        self.main_layout.addWidget(self.mask_editor_frame)
+
+        # Adjust dialog size based on initial state
+        if self.lora.spatial_mask_enabled:
+            self.setMinimumHeight(self.EXPANDED_MIN_HEIGHT)
 
     def _build_granular_layer_sliders(self, sections_layout: QHBoxLayout) -> None:
         self.layer_sliders.clear()
@@ -274,7 +358,13 @@ class LoraAdvancedDialog(BaseSimpleDialog):
     def on_spatial_mask_toggled(self, checked: bool):
         """Handle spatial masking checkbox toggle."""
         self.lora.spatial_mask_enabled = checked
-        self.mask_frame.setEnabled(checked)
+        self.mask_editor_frame.setVisible(checked)
+
+        # Resize dialog
+        if checked:
+            self.setMinimumHeight(self.EXPANDED_MIN_HEIGHT)
+        else:
+            self.setMinimumHeight(self.COLLAPSED_MIN_HEIGHT)
 
         # Publish event
         self.event_bus.publish(
@@ -286,48 +376,160 @@ class LoraAdvancedDialog(BaseSimpleDialog):
             },
         )
 
-    def on_edit_mask(self):
-        """Open mask editing dialog."""
-        # Publish event to open the mask dialog
-        # The GenerationModule will handle opening the dialog with proper context
+    def on_eyedropper_clicked(self):
+        """Activate eyedropper tool for color picking."""
+        QApplication.instance().setOverrideCursor(Qt.CursorShape.CrossCursor)
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """Handle eyedropper color picking."""
+        if (
+            QApplication.instance().overrideCursor() == Qt.CursorShape.CrossCursor
+            and event.type() == QEvent.Type.MouseButtonPress
+        ):
+            QApplication.instance().restoreOverrideCursor()
+            QApplication.instance().removeEventFilter(self)
+
+            global_pos = QCursor.pos()
+            screen = QGuiApplication.screenAt(global_pos) or QGuiApplication.primaryScreen()
+            if screen is None:
+                return super().eventFilter(obj, event)
+
+            screen_pos = global_pos - screen.geometry().topLeft()
+
+            pixmap = screen.grabWindow(0, screen_pos.x(), screen_pos.y(), 1, 1)
+            if pixmap.isNull():
+                return True
+
+            color = QColor(pixmap.toImage().pixel(0, 0))
+            rgb_color = (color.red(), color.green(), color.blue())
+            self.color_button.set_color(rgb_color)
+            return True
+
+        return super().eventFilter(obj, event)
+
+    def _save_current_mask(self):
+        """Save the current mask from the embedded editor."""
+        if self.dialog_busy or not self.mask_widget:
+            return
+
+        self.dialog_busy = True
+
+        # Remove old mask file if it's in temp directory
+        if (
+            self.lora.spatial_mask_path
+            and self.directories
+            and self.directories.temp_path in self.lora.spatial_mask_path
+        ):
+            if os.path.isfile(self.lora.spatial_mask_path):
+                try:
+                    os.remove(self.lora.spatial_mask_path)
+                except Exception:
+                    pass
+
+        # Get mask pixmap from the mask layer
+        mask_pixmap = self.mask_widget.mask_layer.pixmap_item.pixmap()
+        opacity = self.mask_widget.mask_layer.pixmap_item.opacity()
+
+        # Generate unique prefix for this LoRA
+        lora_name_safe = ""
+        if self.lora:
+            lora_name_safe = "".join(c if c.isalnum() or c in "_-" else "_" for c in self.lora.name)
+        prefix = f"lora_mask_{lora_name_safe}" if lora_name_safe else "lora_mask"
+
+        self.pixmap_save_thread = MaskPixmapSaveThread(
+            mask_pixmap,
+            opacity,
+            prefix=prefix,
+            temp_path=self.directories.temp_path if self.directories else "/tmp",
+            thumb_width=150,
+            thumb_height=150,
+        )
+
+        self.pixmap_save_thread.save_finished.connect(self._on_mask_pixmap_saved)
+        self.pixmap_save_thread.finished.connect(self._on_save_thread_finished)
+        self.pixmap_save_thread.error.connect(self._on_save_error)
+        self.pixmap_save_thread.start()
+
+    def _on_mask_pixmap_saved(self, mask_image_path: str, mask_image_final_path: str, mask_thumbnail_path: str):
+        """Handle mask save completion."""
+        previous_path = self.lora.spatial_mask_path
+
+        if previous_path == mask_image_path:
+            return
+
+        self.lora.spatial_mask_path = mask_image_path
+        self.lora.spatial_mask_enabled = True
+
+        # Ensure checkbox is checked
+        if not self.mask_checkbox.isChecked():
+            self.mask_checkbox.setChecked(True)
+
+        # Publish event
+        action = "add_mask" if not previous_path else "update_mask"
         self.event_bus.publish(
             "lora",
             {
-                "action": "open_mask_dialog",
+                "action": action,
                 "lora": self.lora,
+                "lora_mask_path": mask_image_path,
+                "lora_mask_final_path": mask_image_final_path,
+                "lora_mask_thumb_path": mask_thumbnail_path,
             },
         )
 
-    def on_load_mask(self):
-        """Load mask from file dialog."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load Spatial Mask",
-            "",
-            "Image Files (*.png *.jpg *.jpeg *.bmp)",
-        )
+    def _on_save_thread_finished(self):
+        """Clean up after save thread completes."""
+        if self.pixmap_save_thread:
+            self.pixmap_save_thread.save_finished.disconnect(self._on_mask_pixmap_saved)
+            self.pixmap_save_thread.finished.disconnect(self._on_save_thread_finished)
+            self.pixmap_save_thread.error.disconnect(self._on_save_error)
+            self.pixmap_save_thread = None
 
-        if file_path:
-            self.lora.spatial_mask_path = file_path
-            self._calculate_mask_stats()
-            self._update_mask_preview()
-            self._update_mask_stats()
+        self.dialog_busy = False
 
-            # Publish event
-            self.event_bus.publish(
-                "lora",
-                {
-                    "action": "update_mask",
-                    "lora": self.lora,
-                    "lora_mask_path": file_path,
-                },
-            )
+    def _on_save_error(self, message: str):
+        """Handle mask save error."""
+        logger.error(f"Failed to save mask: {message}")
+        self.event_bus.publish("show_snackbar", {"action": "show", "message": f"Failed to save mask: {message}"})
 
-    def on_clear_mask(self):
-        """Clear the spatial mask."""
+    def _cancel_mask_edit(self):
+        """Discard changes and reload last saved mask."""
+        if not self.mask_widget:
+            return
+
+        # Clear the current mask layer
+        mask_pixmap = QPixmap(self.image_width, self.image_height)
+        mask_pixmap.fill(Qt.GlobalColor.transparent)
+        self.mask_widget.image_editor.selected_layer = self.mask_widget.mask_layer
+        self.mask_widget.image_editor.change_layer_image(mask_pixmap)
+
+        # Reload from saved path if exists
+        if self.lora.spatial_mask_path and os.path.exists(self.lora.spatial_mask_path):
+            self.mask_widget.image_editor.change_layer_image(self.lora.spatial_mask_path)
+
+    def _delete_mask(self):
+        """Delete the mask and clear the editor."""
+        # Remove file if in temp directory
+        if (
+            self.lora.spatial_mask_path
+            and self.directories
+            and self.directories.temp_path in self.lora.spatial_mask_path
+        ):
+            if os.path.isfile(self.lora.spatial_mask_path):
+                try:
+                    os.remove(self.lora.spatial_mask_path)
+                except Exception:
+                    pass
+
         self.lora.spatial_mask_path = ""
-        self._update_mask_preview()
-        self._update_mask_stats()
+
+        # Clear the mask layer in the editor
+        if self.mask_widget:
+            mask_pixmap = QPixmap(self.image_width, self.image_height)
+            mask_pixmap.fill(Qt.GlobalColor.transparent)
+            self.mask_widget.image_editor.selected_layer = self.mask_widget.mask_layer
+            self.mask_widget.image_editor.change_layer_image(mask_pixmap)
 
         # Publish event
         self.event_bus.publish(
@@ -337,86 +539,3 @@ class LoraAdvancedDialog(BaseSimpleDialog):
                 "lora": self.lora,
             },
         )
-
-    def on_mask_saved(self, mask_path: str, final_path: str, thumb_path: str):
-        """Handle mask saved from editor.
-
-        Called when LoraMaskDialog saves a mask.
-
-        Args:
-            mask_path: Path to saved mask file (with alpha)
-            final_path: Path to grayscale composite
-            thumb_path: Path to thumbnail
-        """
-        self.lora.spatial_mask_path = mask_path
-        self._calculate_mask_stats()
-        self._update_mask_preview()
-        self._update_mask_stats()
-
-    def _update_mask_preview(self):
-        """Update the mask preview thumbnail."""
-        if self.lora.spatial_mask_path and os.path.exists(self.lora.spatial_mask_path):
-            try:
-                # Load mask image
-                pixmap = QPixmap(self.lora.spatial_mask_path)
-
-                if not pixmap.isNull():
-                    # Scale to fit preview
-                    scaled_pixmap = pixmap.scaled(
-                        118,
-                        118,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-
-                    self.mask_preview_label.setPixmap(scaled_pixmap)
-                    self.mask_preview_pixmap = scaled_pixmap
-                else:
-                    self._show_mask_placeholder()
-
-            except Exception as e:
-                logger.error(f"Failed to load mask preview: {e}")
-                self._show_mask_placeholder("Error loading\nmask")
-        else:
-            self._show_mask_placeholder()
-
-    def _show_mask_placeholder(self, text: str = None):
-        """Show placeholder text in mask preview."""
-        self.mask_preview_label.clear()
-        if text:
-            self.mask_preview_label.setText(text)
-        else:
-            self.mask_preview_label.setText("No mask\n\nClick 'Edit Mask'\nto create")
-        self.mask_preview_pixmap = None
-
-    def _update_mask_stats(self):
-        """Update mask statistics label."""
-        if self.lora.spatial_mask_path and os.path.exists(self.lora.spatial_mask_path):
-            try:
-                # Calculate stats if not cached
-                self._calculate_mask_stats()
-
-                # Get stats from calculation
-                mask_img = Image.open(self.lora.spatial_mask_path)
-                width, height = mask_img.size
-
-                # Extract mask data
-                if mask_img.mode == "RGBA":
-                    mask_array = np.array(mask_img)[:, :, 3]
-                elif mask_img.mode == "L":
-                    mask_array = np.array(mask_img)
-                else:
-                    mask_array = np.array(mask_img.convert("L"))
-
-                painted_percent = (mask_array > 127).sum() / mask_array.size * 100
-
-                self.mask_stats_label.setText(f"{painted_percent:.0f}% painted | {width}x{height}")
-            except Exception:
-                self.mask_stats_label.setText("Mask loaded")
-        else:
-            self.mask_stats_label.setText("No mask")
-
-    def _calculate_mask_stats(self):
-        """Calculate and cache statistics for loaded mask."""
-        # Stats are calculated on-demand in _update_mask_stats
-        pass
