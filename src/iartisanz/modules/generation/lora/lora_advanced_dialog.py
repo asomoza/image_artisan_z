@@ -42,8 +42,9 @@ logger = logging.getLogger(__name__)
 
 class LoraAdvancedDialog(BaseSimpleDialog):
     # Dialog sizes
-    COLLAPSED_MIN_HEIGHT = 550
-    EXPANDED_MIN_HEIGHT = 900
+    COLLAPSED_MIN_HEIGHT = 450
+    EXPANDED_MIN_HEIGHT = 1000
+    GRANULAR_SLIDER_MIN_HEIGHT = 200
 
     def __init__(
         self,
@@ -54,7 +55,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         image_height: int = 1024,
         directories: "Directories" = None,
     ):
-        super().__init__("LoRA Advanced Dialog", minWidth=1100, minHeight=self.COLLAPSED_MIN_HEIGHT)
+        super().__init__("LoRA Advanced Dialog", minWidth=1200, minHeight=self.COLLAPSED_MIN_HEIGHT)
 
         self.event_bus = EventBus()
 
@@ -123,10 +124,12 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         self.granular_frame = QFrame()
         self.granular_frame.setFrameShape(QFrame.Shape.StyledPanel)
         self.granular_frame.setEnabled(self.lora.granular_transformer_weights_enabled)
+        self.granular_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         sections_layout = QHBoxLayout()
         self._build_granular_layer_sliders(sections_layout)
         self.granular_frame.setLayout(sections_layout)
+        self.granular_frame.setMaximumHeight(self.granular_frame.sizeHint().height())
         self.main_layout.addWidget(self.granular_frame)
 
         # ============ Spatial Masking Section ============
@@ -226,6 +229,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
                 self.image_height,
                 self.directories.temp_path,
             )
+            self.mask_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.mask_widget.set_layers(mask_path)
 
             # Connect brush controls to mask editor
@@ -237,6 +241,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
             self.brush_erase_button.brush_selected.connect(self.mask_widget.set_erase_mode)
 
             mask_editor_layout.addWidget(self.mask_widget)
+            self._sync_mask_brush_settings()
         else:
             # Fallback: show placeholder if no image_viewer/directories
             placeholder = QLabel("Mask editor unavailable.\nPlease close and reopen this dialog.")
@@ -266,6 +271,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         mask_editor_layout.addLayout(action_buttons_layout)
 
         self.mask_editor_frame.setLayout(mask_editor_layout)
+        self.mask_editor_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # Initially hide if spatial masking not enabled
         self.mask_editor_frame.setVisible(self.lora.spatial_mask_enabled)
@@ -286,6 +292,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
 
             layer_slider = QLabeledDoubleSlider(Qt.Orientation.Vertical)
             layer_slider.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+            layer_slider.setMinimumHeight(self.GRANULAR_SLIDER_MIN_HEIGHT)
             layer_slider.setRange(self.low_range, self.high_range)
             layer_slider.setValue(weight)
             layer_slider.valueChanged.connect(lambda v, k=layer_key: self.on_granular_layer_weight_changed(k, v))
@@ -360,6 +367,9 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         self.lora.spatial_mask_enabled = checked
         self.mask_editor_frame.setVisible(checked)
 
+        if checked:
+            self._sync_mask_brush_settings()
+
         # Resize dialog
         if checked:
             self.setMinimumHeight(self.EXPANDED_MIN_HEIGHT)
@@ -375,6 +385,17 @@ class LoraAdvancedDialog(BaseSimpleDialog):
                 "enabled": checked,
             },
         )
+
+    def _sync_mask_brush_settings(self) -> None:
+        if not self.mask_widget:
+            return
+
+        editor = self.mask_widget.image_editor
+        editor.set_brush_size(self.brush_size_slider.value())
+        editor.set_brush_hardness(self.brush_hardness_slider.value())
+        editor.set_brush_steps(self.brush_steps_slider.value())
+        editor.set_brush_color(self.color_button.color)
+        self.mask_widget.set_erase_mode(self.brush_erase_button.erase_mode)
 
     def on_eyedropper_clicked(self):
         """Activate eyedropper tool for color picking."""
