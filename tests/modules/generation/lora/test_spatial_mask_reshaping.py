@@ -262,6 +262,134 @@ class TestCheckerboardPattern:
         unpatch_lora_layer(layer)
 
 
+class TestNonSquareLatentDimensions:
+    """Tests for non-square aspect ratios (e.g., 1376x960 → 172x120 latents)."""
+
+    def test_non_square_latent_dims_with_explicit_hint(self):
+        """Test masking works correctly with non-square latent dimensions when hint is provided."""
+        from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import (
+            patch_lora_layer_with_spatial_mask,
+            unpatch_lora_layer,
+        )
+
+        # Arrange: Simulate 1376x960 image → 172x120 latents
+        latent_h, latent_w = 172, 120
+        num_tokens = latent_h * latent_w  # 20640 tokens
+
+        # Create mask at mask resolution (e.g., 256x256 from UI)
+        mask = torch.zeros(1, 1, 256, 256)
+        mask[:, :, :, :128] = 1.0  # Left half
+
+        layer = DummyLoRALayer()
+
+        # Act: Apply with explicit latent_spatial_dims hint
+        patch_lora_layer_with_spatial_mask(
+            layer, mask, spatial_dims=(256, 256), latent_spatial_dims=(latent_h, latent_w)
+        )
+
+        # Forward pass with non-square sequence
+        hidden_states = torch.randn(1, num_tokens, 768)
+        output = layer(hidden_states)
+
+        # Assert: Output shape correct
+        assert output.shape == (1, num_tokens, 768)
+
+        # Reshape to non-square spatial layout
+        spatial_output = output.view(1, latent_h, latent_w, 768)
+
+        # Left half should be active, right half blocked
+        left_half = spatial_output[:, :, : latent_w // 2, :]  # First 60 columns
+        right_half = spatial_output[:, :, latent_w // 2 :, :]  # Last 60 columns
+
+        left_nonzero_ratio = (left_half != 0.0).float().mean()
+        right_nonzero_ratio = (right_half != 0.0).float().mean()
+
+        assert left_nonzero_ratio > 0.8, f"Left half should be mostly active, got {left_nonzero_ratio:.2f}"
+        assert right_nonzero_ratio < 0.2, f"Right half should be mostly blocked, got {right_nonzero_ratio:.2f}"
+
+        # Cleanup
+        unpatch_lora_layer(layer)
+
+    def test_non_square_latent_dims_portrait_orientation(self):
+        """Test masking with portrait aspect ratio (e.g., 960x1376 → 120x172 latents)."""
+        from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import (
+            patch_lora_layer_with_spatial_mask,
+            unpatch_lora_layer,
+        )
+
+        # Arrange: Portrait orientation (height > width in latent space)
+        latent_h, latent_w = 120, 172
+        num_tokens = latent_h * latent_w  # 20640 tokens
+
+        # Top half mask
+        mask = torch.zeros(1, 1, 256, 256)
+        mask[:, :, :128, :] = 1.0  # Top half
+
+        layer = DummyLoRALayer()
+
+        # Act: Apply with explicit latent_spatial_dims hint
+        patch_lora_layer_with_spatial_mask(
+            layer, mask, spatial_dims=(256, 256), latent_spatial_dims=(latent_h, latent_w)
+        )
+
+        # Forward pass
+        hidden_states = torch.randn(1, num_tokens, 768)
+        output = layer(hidden_states)
+
+        # Reshape to portrait spatial layout
+        spatial_output = output.view(1, latent_h, latent_w, 768)
+
+        # Top half should be active, bottom half blocked
+        top_half = spatial_output[:, : latent_h // 2, :, :]
+        bottom_half = spatial_output[:, latent_h // 2 :, :, :]
+
+        top_nonzero_ratio = (top_half != 0.0).float().mean()
+        bottom_nonzero_ratio = (bottom_half != 0.0).float().mean()
+
+        assert top_nonzero_ratio > 0.8, f"Top half should be active, got {top_nonzero_ratio:.2f}"
+        assert bottom_nonzero_ratio < 0.2, f"Bottom half should be blocked, got {bottom_nonzero_ratio:.2f}"
+
+        # Cleanup
+        unpatch_lora_layer(layer)
+
+    def test_non_square_with_joint_attention(self):
+        """Test non-square latents with joint attention (image + text tokens)."""
+        from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import (
+            patch_lora_layer_with_spatial_mask,
+            unpatch_lora_layer,
+        )
+
+        # Arrange: Non-square latents with text tokens
+        latent_h, latent_w = 172, 120
+        num_image_tokens = latent_h * latent_w  # 20640
+        num_text_tokens = 64
+        total_tokens = num_image_tokens + num_text_tokens  # 20704
+
+        # All-zero mask (blocks image, should not block text)
+        mask = create_dummy_spatial_mask(256, 256, "all_zeros")
+
+        layer = DummyLoRALayer()
+
+        # Act: Apply with explicit latent_spatial_dims
+        patch_lora_layer_with_spatial_mask(
+            layer, mask, spatial_dims=(256, 256), latent_spatial_dims=(latent_h, latent_w)
+        )
+
+        # Forward pass with joint attention
+        hidden_states = torch.randn(1, total_tokens, 768)
+        output = layer(hidden_states)
+
+        # Assert: Image tokens blocked, text tokens pass through
+        image_output = output[:, :num_image_tokens, :]
+        text_output = output[:, num_image_tokens:, :]
+
+        assert torch.all(image_output == 0.0), "Image tokens should be blocked"
+        assert torch.any(text_output != 0.0), "Text tokens should pass through"
+
+        # Cleanup
+        unpatch_lora_layer(layer)
+
+
 class TestJointAttention:
     """Tests for joint attention sequences (image + text tokens)."""
 

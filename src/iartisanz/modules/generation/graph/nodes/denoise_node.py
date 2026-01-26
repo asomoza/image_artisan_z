@@ -267,9 +267,13 @@ class DenoiseNode(Node):
                         patch_lora_adapter_with_spatial_mask,
                     )
 
+                    # Get latent spatial dimensions for non-square aspect ratio support
+                    latent_spatial_dims = (self.latents.shape[2], self.latents.shape[3])
+
                     for adapter_name, mask in lora_masks.items():
-                        logger.info(f"[DenoiseNode] Applying spatial mask to LoRA '{adapter_name}'")
-                        patch_lora_adapter_with_spatial_mask(transformer_raw, adapter_name, mask)
+                        patch_lora_adapter_with_spatial_mask(
+                            transformer_raw, adapter_name, mask, latent_spatial_dims=latent_spatial_dims
+                        )
                     lora_masks_applied = True
 
             except RuntimeError as e:

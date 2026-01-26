@@ -29,6 +29,7 @@ def patch_lora_layer_with_spatial_mask(
     layer: nn.Module,
     spatial_mask: torch.Tensor,
     spatial_dims: Tuple[int, int],
+    latent_spatial_dims: Optional[Tuple[int, int]] = None,
 ) -> None:
     """Patch a LoRA layer to apply spatial mask during forward pass.
 
@@ -41,6 +42,10 @@ def patch_lora_layer_with_spatial_mask(
                      Values should be 0.0 (block) or 1.0 (apply)
         spatial_dims: (height, width) - hint for spatial dimensions (may be
                      overridden based on actual hidden_states at runtime)
+        latent_spatial_dims: Optional (height, width) of the actual latent space.
+                            When provided, this is used directly instead of
+                            inferring from sequence length. Essential for
+                            non-square aspect ratios.
 
     Note:
         - Mask is resized dynamically to match actual sequence dimensions
@@ -69,6 +74,8 @@ def patch_lora_layer_with_spatial_mask(
 
     # Store original 4D mask (don't pre-flatten - we'll resize on-the-fly)
     original_mask = spatial_mask.clone()
+    # Store latent spatial dims for non-square aspect ratios
+    stored_latent_dims = latent_spatial_dims
 
     def masked_forward(hidden_states: torch.Tensor) -> torch.Tensor:
         """Modified forward that applies spatial mask to LoRA output.
@@ -92,12 +99,31 @@ def patch_lora_layer_with_spatial_mask(
 
         B, N, D = hidden_states.shape
 
-        # Infer spatial dimensions from sequence length
-        # For joint attention, N might be H*W + text_tokens
-        H, W, num_image_tokens = _infer_spatial_from_sequence_length(N)
+        # Use provided latent dimensions if available (essential for non-square aspect ratios)
+        # Otherwise fall back to inference from sequence length
+        if stored_latent_dims is not None:
+            H, W = stored_latent_dims
+            num_image_tokens = H * W
+
+            # Check if N matches H*W (pure spatial) or H*W + text_tokens (joint attention)
+            # Also check for packed representation (H/2 * W/2)
+            packed_tokens = (H // 2) * (W // 2)
+
+            if N < packed_tokens:
+                # Even packed doesn't fit - fall back to inference
+                H, W, num_image_tokens = _infer_spatial_from_sequence_length(N)
+            elif N < num_image_tokens:
+                # Sequence suggests packed representation (2x2 patches)
+                H, W = H // 2, W // 2
+                num_image_tokens = H * W
+        else:
+            # Infer spatial dimensions from sequence length
+            # For joint attention, N might be H*W + text_tokens
+            H, W, num_image_tokens = _infer_spatial_from_sequence_length(N)
 
         if H is None:
             # Can't determine spatial dims, skip masking for this layer
+            logger.warning(f"[LoRA Mask] Could not determine spatial dims for N={N}, skipping mask")
             return lora_output
 
         # Resize mask to inferred spatial dimensions
@@ -243,6 +269,7 @@ def patch_lora_adapter_with_spatial_mask(
     transformer: nn.Module,
     adapter_name: str,
     spatial_mask: torch.Tensor,
+    latent_spatial_dims: Optional[Tuple[int, int]] = None,
 ) -> int:
     """Patch all LoRA layers for a specific adapter with spatial mask.
 
@@ -254,6 +281,11 @@ def patch_lora_adapter_with_spatial_mask(
         transformer: The transformer model with loaded LoRA adapters
         adapter_name: Name of the LoRA adapter to patch
         spatial_mask: Mask tensor in image space [1, 1, H_img, W_img]
+        latent_spatial_dims: Optional (height, width) of the latent space.
+                            When provided, this is used directly to determine
+                            spatial dimensions instead of inferring from
+                            sequence length. Essential for non-square aspect
+                            ratios like 1376x960 -> 172x120 latents.
 
     Returns:
         Number of layers that were patched
@@ -283,7 +315,9 @@ def patch_lora_adapter_with_spatial_mask(
 
         # Patch this layer
         try:
-            patch_lora_layer_with_spatial_mask(layer, spatial_mask, spatial_dims)
+            patch_lora_layer_with_spatial_mask(
+                layer, spatial_mask, spatial_dims, latent_spatial_dims=latent_spatial_dims
+            )
             patched_count += 1
         except Exception as e:
             logger.error(f"Failed to patch layer {layer_name}: {e}")
