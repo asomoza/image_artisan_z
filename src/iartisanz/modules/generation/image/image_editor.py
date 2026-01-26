@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 from datetime import datetime
 from importlib.resources import files
 from typing import Union
 
-from PyQt6.QtCore import QPoint, QPointF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QBrush, QColor, QCursor, QGuiApplication, QPainter, QPen, QPixmap, QRadialGradient
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QApplication, QFileDialog, QGraphicsEllipseItem, QGraphicsScene, QGraphicsView, QMenu
@@ -532,15 +533,16 @@ class ImageEditor(QGraphicsView):
         pixmap.fill(QColor(0, 0, 0, 0))
         painter = QPainter(pixmap)
         renderer = QSvgRenderer(svg_path)
-        renderer.render(painter)
+        renderer.render(painter, QRectF(0, 0, pixmap_size, pixmap_size))
         painter.end()
-        return QCursor(pixmap)
+        hotspot = pixmap_size // 2
+        return QCursor(pixmap, hotspot, hotspot)
 
     def update_cursor(self):
         if self.selected_layer.pixmap_item is not None:
             zoom_factor = self.transform().m11()
             scale_factor = self.selected_layer.pixmap_item.scale()
-            pixmap_size = int(self.brush_size * 1 * zoom_factor * scale_factor)
+            pixmap_size = max(1, int(math.ceil(self.brush_size * zoom_factor * scale_factor)))
 
             use_crosshair = pixmap_size < 6
 
@@ -560,17 +562,16 @@ class ImageEditor(QGraphicsView):
             self.setCursor(self.create_cursor(str(cursor_type), use_crosshair, pixmap_size))
 
     def get_color_under_cursor(self):
-        screen = QGuiApplication.primaryScreen()
+        cursor_pos = QCursor.pos()
+        view_pos = self.viewport().mapFromGlobal(cursor_pos)
 
-        if screen is None:
-            self.logger.error("No screen found!")
+        if not self.viewport().rect().contains(view_pos):
             return None
 
-        cursor_pos = QCursor.pos()
-        pixmap = screen.grabWindow(0, cursor_pos.x(), cursor_pos.y(), 1, 1)
+        pixmap = self.viewport().grab(QRect(view_pos.x(), view_pos.y(), 1, 1))
 
         if pixmap.isNull():
-            self.logger.error("Failed to grab pixmap from screen.")
+            self.logger.error("Failed to grab pixmap from viewport.")
             return None
 
         image = pixmap.toImage()
@@ -579,9 +580,7 @@ class ImageEditor(QGraphicsView):
             self.logger.error("Failed to convert pixmap to image.")
             return None
 
-        color = QColor(image.pixelColor(0, 0))
-
-        return color
+        return QColor(image.pixelColor(0, 0))
 
     def get_color_under_point(self, point):
         # Convert the point from scene coordinates to global coordinates
