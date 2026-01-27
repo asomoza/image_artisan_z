@@ -85,7 +85,7 @@ class MaskWidget(QWidget):
         editor_layout = AspectRatioLayout(image_widget, self.aspect_ratio)
         editor_layout.addWidget(self.image_editor)
         image_widget.setLayout(editor_layout)
-        middle_layout.addWidget(image_widget)
+        middle_layout.addWidget(image_widget, 4)
 
         main_layout.addLayout(middle_layout)
 

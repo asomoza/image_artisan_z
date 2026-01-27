@@ -4,7 +4,7 @@ import os
 
 from PyQt6.QtCore import QEvent, QSettings, Qt
 from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QPixmap
-from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QVBoxLayout
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QStackedWidget, QVBoxLayout
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 
 from iartisanz.app.base_dialog import BaseDialog
@@ -101,6 +101,10 @@ class SourceImageDialog(BaseDialog):
 
         content_layout.addLayout(brush_layout)
 
+        # Use QStackedWidget to switch between image and mask editing
+        # This prevents layout oscillation that occurs when hiding/showing widgets in the same layout
+        self.section_stack = QStackedWidget()
+
         self.image_section_widget = ImageSectionWidget(
             self.image_viewer,
             self.image_width,
@@ -115,7 +119,7 @@ class SourceImageDialog(BaseDialog):
         self.image_section_widget.delete_mask_clicked.connect(self.on_delete_mask)
         if self.source_image_mask_path is not None:
             self.image_section_widget.set_existing_mask_buttons()
-        content_layout.addWidget(self.image_section_widget)
+        self.section_stack.addWidget(self.image_section_widget)
 
         self.mask_section_widget = MaskSectionWidget(
             self.image_viewer,
@@ -134,8 +138,11 @@ class SourceImageDialog(BaseDialog):
         self.mask_section_widget.save_mask_clicked.connect(self.on_mask_saved)
         self.mask_section_widget.mask_canceled.connect(self.on_cancel_mask)
         self.mask_section_widget.mask_deleted.connect(self.on_delete_mask)
-        content_layout.addWidget(self.mask_section_widget)
-        self.mask_section_widget.setVisible(False)
+        self.section_stack.addWidget(self.mask_section_widget)
+
+        # Start with image section visible
+        self.section_stack.setCurrentWidget(self.image_section_widget)
+        content_layout.addWidget(self.section_stack)
 
         self.main_layout.addLayout(content_layout)
 
@@ -306,18 +313,15 @@ class SourceImageDialog(BaseDialog):
         )
 
         self._connect_editor(self.mask_section_widget, self.mask_section_widget.image_widget.image_editor)
-        self.image_section_widget.hide()
-        self.mask_section_widget.show()
+        self.section_stack.setCurrentWidget(self.mask_section_widget)
 
     def on_cancel_mask(self):
         self._connect_editor(self.image_section_widget, self.image_section_widget.image_widget.image_editor)
-        self.mask_section_widget.hide()
-        self.image_section_widget.show()
+        self.section_stack.setCurrentWidget(self.image_section_widget)
 
     def on_mask_saved(self, mask_pixmap: QPixmap, opacity: float):
         self._connect_editor(self.image_section_widget, self.image_section_widget.image_widget.image_editor)
-        self.mask_section_widget.hide()
-        self.image_section_widget.show()
+        self.section_stack.setCurrentWidget(self.image_section_widget)
         self.image_section_widget.add_mask_button.setText("Edit mask")
 
         self.pixmap_save_thread = MaskPixmapSaveThread(
@@ -360,8 +364,7 @@ class SourceImageDialog(BaseDialog):
 
     def on_delete_mask(self):
         self._connect_editor(self.image_section_widget, self.image_section_widget.image_widget.image_editor)
-        self.mask_section_widget.hide()
-        self.image_section_widget.show()
+        self.section_stack.setCurrentWidget(self.image_section_widget)
         self.image_section_widget.add_mask_button.setText("Add mask")
 
         if self.source_image_mask_path is not None and self.directories.temp_path in self.source_image_mask_path:

@@ -86,6 +86,13 @@ class ImageEditor(QGraphicsView):
         self.enable_copy = True
         self.enable_save = True
 
+        # Cached zoom factor to prevent cursor size fluctuations from spurious resize events
+        self._cached_zoom_factor = None
+        self._cached_viewport_size = None
+        self._oscillation_sizes = set()  # Track sizes involved in oscillation pattern
+        self._stable_viewport_size = None  # The preferred stable viewport size
+        self._editor_id = id(self)  # Unique identifier for debugging
+
         self.drop_lightbox = DropLightBox(self)
         self.drop_lightbox.setText("Drop file here")
 
@@ -100,9 +107,40 @@ class ImageEditor(QGraphicsView):
         return QSize(self.target_width, self.target_height)
 
     def resizeEvent(self, event):
+        # Skip transform recalculation if widget is not visible to avoid interference
+        # from hidden widgets in the same dialog
+        if not self.isVisible():
+            super().resizeEvent(event)
+            return
+
+        current_viewport = (self.viewport().width(), self.viewport().height())
+
+        # Detect layout oscillation pattern
+        if self._cached_viewport_size is not None and current_viewport != self._cached_viewport_size:
+            # We're seeing a different size - track it for oscillation detection
+            self._oscillation_sizes.add(current_viewport)
+            self._oscillation_sizes.add(self._cached_viewport_size)
+
+            # If we have exactly 2 sizes oscillating, prefer the larger one
+            if len(self._oscillation_sizes) == 2:
+                larger_size = max(self._oscillation_sizes, key=lambda s: s[0] * s[1])
+
+                # If current is the smaller size, skip this resize
+                if current_viewport != larger_size:
+                    super().resizeEvent(event)
+                    return
+
+                # Current is the larger size - use it as stable
+                self._stable_viewport_size = larger_size
+
+        old_m11 = self.transform().m11()
         rect = self.sceneRect()
         self.resetTransform()
         self.scale(self.viewport().width() / rect.width(), self.viewport().height() / rect.height())
+
+        self._cached_zoom_factor = self.transform().m11()
+        self._cached_viewport_size = current_viewport
+
         super().resizeEvent(event)
 
     def enterEvent(self, event):
@@ -540,7 +578,15 @@ class ImageEditor(QGraphicsView):
 
     def update_cursor(self):
         if self.selected_layer.pixmap_item is not None:
-            zoom_factor = self.transform().m11()
+            # Use cached zoom factor if viewport hasn't changed to prevent cursor size fluctuations
+            current_viewport = (self.viewport().width(), self.viewport().height())
+            if self._cached_zoom_factor is not None and self._cached_viewport_size == current_viewport:
+                zoom_factor = self._cached_zoom_factor
+            else:
+                zoom_factor = self.transform().m11()
+                self._cached_zoom_factor = zoom_factor
+                self._cached_viewport_size = current_viewport
+
             scale_factor = self.selected_layer.pixmap_item.scale()
             pixmap_size = max(1, int(math.ceil(self.brush_size * zoom_factor * scale_factor)))
 
