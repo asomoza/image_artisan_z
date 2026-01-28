@@ -43,6 +43,7 @@ class GenerationPanel(BasePanel):
             self.gen_settings.scheduler,
             self.gen_settings.model,
             bool(getattr(self.gen_settings, "use_torch_compile", False)),
+            str(getattr(self.gen_settings, "attention_backend", "native")),
         )
 
         self.event_bus.subscribe("model", self.on_model_event)
@@ -136,6 +137,17 @@ class GenerationPanel(BasePanel):
         self.use_torch_compile_checkbox.toggled.connect(self.on_use_torch_compile_toggled)
         main_layout.addWidget(self.use_torch_compile_checkbox)
 
+        # Attention backend dropdown
+        attention_layout = QHBoxLayout()
+        attention_label = QLabel("Attention:")
+        attention_layout.addWidget(attention_label)
+
+        self.attention_backend_combobox = QComboBox()
+        self._populate_attention_backends()
+        self.attention_backend_combobox.currentIndexChanged.connect(self.on_attention_backend_changed)
+        attention_layout.addWidget(self.attention_backend_combobox, 1)
+        main_layout.addLayout(attention_layout)
+
         main_layout.addStretch()
 
         clear_graph_button = QPushButton("Clear Graph")
@@ -218,6 +230,7 @@ class GenerationPanel(BasePanel):
         scheduler: SchedulerDataObject,
         model: ModelDataObject,
         use_torch_compile: bool = False,
+        attention_backend: str = "native",
     ):
         # Block signals so we don't emit generation_change while initializing
         blockers = [
@@ -226,6 +239,7 @@ class GenerationPanel(BasePanel):
             QSignalBlocker(self.steps_slider),
             QSignalBlocker(self.guidance_slider),
             QSignalBlocker(self.use_torch_compile_checkbox),
+            QSignalBlocker(self.attention_backend_combobox),
         ]
         try:
             self.image_dimensions.width_slider.setValue(int(width))
@@ -248,12 +262,46 @@ class GenerationPanel(BasePanel):
 
         self._set_guidance_start_end_ui(start, end)
         self._set_scheduler_ui(scheduler)
+        self._set_attention_backend_ui(attention_backend)
 
     def open_model_manager_dialog(self):
         self.event_bus.publish("manage_dialog", {"dialog_type": "model_manager", "action": "open"})
 
     def on_use_torch_compile_toggled(self, checked: bool):
         self.event_bus.publish("generation_change", {"attr": "use_torch_compile", "value": bool(checked)})
+
+    def _populate_attention_backends(self):
+        """Populate the attention backend dropdown with available backends."""
+        from iartisanz.app.model_manager import get_model_manager
+
+        mm = get_model_manager()
+        available_backends = mm.get_available_attention_backends()
+
+        self.attention_backend_combobox.clear()
+        for backend_id, display_name in available_backends:
+            self.attention_backend_combobox.addItem(display_name, backend_id)
+
+    def _set_attention_backend_ui(self, backend: str):
+        """Set the attention backend dropdown to the given backend."""
+        for i in range(self.attention_backend_combobox.count()):
+            if self.attention_backend_combobox.itemData(i) == backend:
+                blocker = QSignalBlocker(self.attention_backend_combobox)
+                try:
+                    self.attention_backend_combobox.setCurrentIndex(i)
+                finally:
+                    del blocker
+                return
+        # If backend not found (e.g., not available on this system), default to native
+        blocker = QSignalBlocker(self.attention_backend_combobox)
+        try:
+            self.attention_backend_combobox.setCurrentIndex(0)
+        finally:
+            del blocker
+
+    def on_attention_backend_changed(self, index: int):
+        backend = self.attention_backend_combobox.itemData(index)
+        if backend:
+            self.event_bus.publish("generation_change", {"attr": "attention_backend", "value": backend})
 
     def _confirm_destructive_action(self, title: str, text: str) -> bool:
         res = QMessageBox.question(
@@ -305,9 +353,10 @@ class GenerationPanel(BasePanel):
             guidance_start_end = data.get("guidance_start_end", self.gen_settings.guidance_start_end)
             scheduler = data.get("scheduler", self.gen_settings.scheduler)
             model = data.get("model", self.gen_settings.model)
-            # use_torch_compile is NOT loaded from graphs - it's a runtime config
-            # Always use the user's persisted setting from gen_settings
+            # use_torch_compile and attention_backend are NOT loaded from graphs -
+            # they are runtime configs. Always use the user's persisted settings.
             use_torch_compile = self.gen_settings.use_torch_compile
+            attention_backend = self.gen_settings.attention_backend
 
             self.update_panel(
                 width,
@@ -318,4 +367,5 @@ class GenerationPanel(BasePanel):
                 scheduler,
                 model,
                 use_torch_compile,
+                attention_backend,
             )

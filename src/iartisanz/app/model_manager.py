@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import logging
 import threading
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
@@ -11,6 +12,9 @@ import torch
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 
 
+logger = logging.getLogger(__name__)
+
+
 ModelComponent = Literal[
     "tokenizer",
     "text_encoder",
@@ -18,6 +22,19 @@ ModelComponent = Literal[
     "vae",
     "controlnet",
     "preprocessor",
+]
+
+# Attention backend options. The display names are for UI presentation.
+# Backend IDs must match what diffusers' set_attention_backend() expects.
+# Note: get_available_attention_backends() dynamically detects which are actually usable.
+ATTENTION_BACKEND_OPTIONS: list[tuple[str, str]] = [
+    ("native", "Auto (PyTorch SDPA)"),
+    ("flash", "Flash Attention 2"),
+    ("flash_hub", "Flash Attention 2 (Hub)"),
+    ("_flash_3_hub", "Flash Attention 3 (Hub)"),
+    ("sage", "Sage Attention"),
+    ("sage_hub", "Sage Attention (Hub)"),
+    ("xformers", "xFormers"),
 ]
 
 
@@ -73,6 +90,136 @@ class ModelManager:
         # Runtime setting for torch.compile. This is NOT saved in the graph JSON,
         # allowing users to toggle compilation without affecting shareable outputs.
         self._use_torch_compile: bool = False
+
+        # Runtime setting for attention backend. This is NOT saved in the graph JSON,
+        # allowing users to select the backend without affecting shareable outputs.
+        # None means use default ("native" / PyTorch SDPA).
+        self._attention_backend: str | None = None
+
+    @property
+    def attention_backend(self) -> str:
+        """Return the current attention backend. Defaults to 'native' (PyTorch SDPA)."""
+        with self._lock:
+            return self._attention_backend or "native"
+
+    @attention_backend.setter
+    def attention_backend(self, value: str | None) -> None:
+        """Set the attention backend for transformer inference."""
+        with self._lock:
+            self._attention_backend = value if value and value != "native" else None
+
+    def get_available_attention_backends(self) -> list[tuple[str, str]]:
+        """Return list of (backend_id, display_name) tuples for available backends.
+
+        Only returns backends that are actually usable on this system.
+        Detects both locally installed packages and HuggingFace Hub kernels.
+        """
+        available: list[tuple[str, str]] = [("native", "Auto (PyTorch SDPA)")]
+
+        if not torch.cuda.is_available():
+            return available
+
+        # Check for HuggingFace kernels package (provides hub variants)
+        has_kernels = False
+        try:
+            import kernels  # noqa: F401
+
+            has_kernels = True
+        except ImportError:
+            pass
+
+        # Check GPU compute capability for Hopper detection
+        is_hopper_gpu = False
+        try:
+            is_hopper_gpu = torch.cuda.get_device_capability()[0] >= 9
+        except Exception:
+            pass
+
+        # Check for Flash Attention 2 (local)
+        has_flash_local = False
+        try:
+            import flash_attn  # noqa: F401
+
+            has_flash_local = True
+            available.append(("flash", "Flash Attention 2"))
+        except ImportError:
+            pass
+
+        # Flash Attention 2 from Hub (if kernels installed)
+        if has_kernels:
+            available.append(("flash_hub", "Flash Attention 2 (Hub)"))
+
+        # Flash Attention 3 - only for Hopper GPUs (SM 9.0+)
+        if is_hopper_gpu:
+            # Local FA3 requires building from source, so we only check for hub variant
+            if has_kernels:
+                available.append(("_flash_3_hub", "Flash Attention 3 (Hub)"))
+
+        # Check for Sage Attention (local)
+        has_sage_local = False
+        try:
+            import sageattention  # noqa: F401
+
+            has_sage_local = True
+            available.append(("sage", "Sage Attention"))
+        except ImportError:
+            pass
+
+        # Sage Attention from Hub (if kernels installed)
+        if has_kernels:
+            available.append(("sage_hub", "Sage Attention (Hub)"))
+
+        # Check for xFormers (local only, no hub variant)
+        try:
+            import xformers  # noqa: F401
+
+            available.append(("xformers", "xFormers"))
+        except ImportError:
+            pass
+
+        return available
+
+    def apply_attention_backend(self, transformer: Any) -> bool:
+        """Apply the current attention backend to a transformer model.
+
+        Args:
+            transformer: The transformer model to configure.
+
+        Returns:
+            True if backend was applied successfully, False otherwise.
+        """
+        backend = self.attention_backend
+
+        # Skip if using default - just ensure any previous setting is reset
+        if backend == "native":
+            if hasattr(transformer, "reset_attention_backend"):
+                try:
+                    transformer.reset_attention_backend()
+                except Exception:
+                    pass
+            return True
+
+        # Try to apply the selected backend using the new dispatcher API
+        if hasattr(transformer, "set_attention_backend"):
+            try:
+                transformer.set_attention_backend(backend)
+                logger.debug(f"Applied attention backend '{backend}' to transformer")
+                return True
+            except Exception as e:
+                logger.warning(
+                    f"Failed to set attention backend '{backend}': {e}. Falling back to native."
+                )
+                try:
+                    transformer.reset_attention_backend()
+                except Exception:
+                    pass
+                return False
+
+        # Transformer doesn't support the new API - this is fine, native will be used
+        logger.debug(
+            f"Transformer does not support set_attention_backend; using native attention"
+        )
+        return True
 
     @property
     def use_torch_compile(self) -> bool:

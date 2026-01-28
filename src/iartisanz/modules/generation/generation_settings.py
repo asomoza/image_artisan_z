@@ -62,6 +62,17 @@ def _coerce_json(value: Any) -> Any:
     return value
 
 
+def _coerce_str(value: Any, default: str) -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    try:
+        return str(value)
+    except Exception:
+        return default
+
+
 @dataclass(slots=True)
 class GenerationSettings:
     right_menu_expanded: bool = True
@@ -75,11 +86,13 @@ class GenerationSettings:
     strength: float = 0.5
     model: ModelDataObject = field(default_factory=ModelDataObject)
     use_torch_compile: bool = False
+    attention_backend: str = "native"
 
     GROUP: str = "generation"
 
     # Keys that should be forwarded to the graph on initialization / change
-    # Note: use_torch_compile is intentionally NOT here - it's a runtime config on ModelManager
+    # Note: use_torch_compile and attention_backend are intentionally NOT here -
+    # they are runtime configs on ModelManager, not saved in graph JSON
     GRAPH_KEYS: tuple[str, ...] = (
         "image_width",
         "image_height",
@@ -135,6 +148,11 @@ class GenerationSettings:
                 settings.use_torch_compile,
             )
 
+            settings.attention_backend = _coerce_str(
+                qsettings.value("attention_backend", settings.attention_backend),
+                settings.attention_backend,
+            )
+
             return settings
         finally:
             qsettings.endGroup()
@@ -152,6 +170,7 @@ class GenerationSettings:
             qsettings.setValue("strength", float(self.strength))
             qsettings.setValue("model", self.model.to_dict())
             qsettings.setValue("use_torch_compile", bool(self.use_torch_compile))
+            qsettings.setValue("attention_backend", str(self.attention_backend))
         finally:
             qsettings.endGroup()
 
@@ -223,6 +242,11 @@ class GenerationSettings:
             # Return None for graph_value - this is handled by ModelManager, not the graph
             return (True, None)
 
+        if attr == "attention_backend":
+            self.attention_backend = _coerce_str(value, self.attention_backend)
+            # Return None for graph_value - this is handled by ModelManager, not the graph
+            return (True, None)
+
         # Fallback: handled but not forwarded
         setattr(self, attr, value)
         return (True, None)
@@ -247,6 +271,7 @@ class GenerationSettings:
         self.scheduler = defaults.scheduler
         self.strength = defaults.strength
         self.use_torch_compile = defaults.use_torch_compile
+        self.attention_backend = defaults.attention_backend
 
         if preserve_model:
             self.model = current_model

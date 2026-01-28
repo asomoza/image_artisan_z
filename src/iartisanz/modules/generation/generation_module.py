@@ -153,7 +153,9 @@ class GenerationModule(BaseModule):
         # Initialize ModelManager runtime config from settings
         from iartisanz.app.model_manager import get_model_manager
 
-        get_model_manager().use_torch_compile = self.gen_settings.use_torch_compile
+        mm = get_model_manager()
+        mm.use_torch_compile = self.gen_settings.use_torch_compile
+        mm.attention_backend = self.gen_settings.attention_backend
 
     def on_generate(
         self,
@@ -510,6 +512,14 @@ class GenerationModule(BaseModule):
                     mm.disable_compiled("transformer")
                 except Exception:
                     pass
+            return
+
+        # Special handling for attention_backend: update ModelManager runtime config
+        if attr == "attention_backend":
+            from iartisanz.app.model_manager import get_model_manager
+
+            mm = get_model_manager()
+            mm.attention_backend = str(value) if value else "native"
             return
 
         # Forward to the graph:

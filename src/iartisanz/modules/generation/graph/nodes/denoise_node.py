@@ -195,6 +195,11 @@ class DenoiseNode(Node):
         use_torch_compile = mm.use_torch_compile
         transformer = transformer_raw
 
+        # Apply attention backend (runtime config, not saved in graph).
+        # This should be done BEFORE torch.compile to ensure the backend is set
+        # on the raw module (compilation will preserve the backend setting).
+        mm.apply_attention_backend(transformer_raw)
+
         # If the transformer was previously region-compiled in-place (Diffusers) and the
         # user toggled compilation off, restore eager behavior.
         if (
