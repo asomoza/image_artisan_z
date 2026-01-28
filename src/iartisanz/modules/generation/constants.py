@@ -31,7 +31,7 @@ LATENT_RGB_FACTORS = [
     [-0.1262, -0.0982, -0.0778],
 ]
 
-MODEL_TYPES = {1: "Z-Image Turbo"}
+MODEL_TYPES = {1: "Z-Image Turbo", 2: "Z-Image"}
 
 SCHEDULER_CLASS_MAPPING = {
     "DEISMultistepScheduler": DEISMultistepScheduler,
