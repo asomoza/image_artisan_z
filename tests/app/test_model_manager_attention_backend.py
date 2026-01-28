@@ -7,6 +7,7 @@ import torch
 
 from iartisanz.app.model_manager import (
     ATTENTION_BACKEND_OPTIONS,
+    COMPILE_INCOMPATIBLE_BACKENDS,
     VARLEN_BACKEND_MAPPING,
     ModelManager,
     get_model_manager,
@@ -651,3 +652,91 @@ class TestAttentionBackendSwitching:
 
         # Native should be explicitly set, not a varlen variant
         mock_transformer.set_attention_backend.assert_called_once_with("native")
+
+
+class TestAttentionBackendCompileCompatibility:
+    """Tests for attention backend torch.compile compatibility checking."""
+
+    def test_compile_incompatible_backends_constant_exists(self):
+        """COMPILE_INCOMPATIBLE_BACKENDS should be defined."""
+        assert isinstance(COMPILE_INCOMPATIBLE_BACKENDS, frozenset)
+        assert len(COMPILE_INCOMPATIBLE_BACKENDS) > 0
+
+    def test_sage_backends_are_compile_incompatible(self):
+        """Sage backends should be marked as compile-incompatible."""
+        assert "sage" in COMPILE_INCOMPATIBLE_BACKENDS
+        assert "sage_hub" in COMPILE_INCOMPATIBLE_BACKENDS
+        assert "sage_varlen" in COMPILE_INCOMPATIBLE_BACKENDS
+
+    def test_native_is_compile_compatible(self):
+        """Native backend should be compile-compatible."""
+        mm = ModelManager()
+        mm.attention_backend = "native"
+        assert mm.is_attention_backend_compile_compatible() is True
+
+    def test_flash_is_compile_compatible(self):
+        """Flash backend should be compile-compatible."""
+        mm = ModelManager()
+        mm.attention_backend = "flash"
+        assert mm.is_attention_backend_compile_compatible() is True
+
+    def test_flash_varlen_is_compile_compatible(self):
+        """Flash varlen backend should be compile-compatible."""
+        mm = ModelManager()
+        mm.attention_backend = "flash"
+
+        # For Z-Image, flash maps to flash_varlen which should still be compatible
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+
+        assert mm.is_attention_backend_compile_compatible(mock_transformer) is True
+
+    def test_sage_is_compile_incompatible(self):
+        """Sage backend should be compile-incompatible."""
+        mm = ModelManager()
+        mm.attention_backend = "sage"
+        assert mm.is_attention_backend_compile_compatible() is False
+
+    def test_sage_hub_is_compile_incompatible(self):
+        """Sage hub backend should be compile-incompatible."""
+        mm = ModelManager()
+        mm.attention_backend = "sage_hub"
+        assert mm.is_attention_backend_compile_compatible() is False
+
+    def test_sage_varlen_for_zimage_is_compile_incompatible(self):
+        """Sage mapped to sage_varlen for Z-Image should be compile-incompatible."""
+        mm = ModelManager()
+        mm.attention_backend = "sage"
+
+        # For Z-Image, sage maps to sage_varlen which is incompatible
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+
+        assert mm.is_attention_backend_compile_compatible(mock_transformer) is False
+
+    def test_xformers_is_compile_compatible(self):
+        """xFormers backend should be compile-compatible."""
+        mm = ModelManager()
+        mm.attention_backend = "xformers"
+        assert mm.is_attention_backend_compile_compatible() is True
+
+    def test_compile_compatibility_without_transformer(self):
+        """Should check base backend when no transformer is provided."""
+        mm = ModelManager()
+
+        mm.attention_backend = "flash"
+        assert mm.is_attention_backend_compile_compatible() is True
+
+        mm.attention_backend = "sage"
+        assert mm.is_attention_backend_compile_compatible() is False
+
+    def test_compile_compatibility_with_non_zimage_transformer(self):
+        """Non-Z-Image transformers should use base backend (no varlen mapping)."""
+        mm = ModelManager()
+        mm.attention_backend = "sage"
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "FluxTransformer2DModel"
+
+        # Sage (not sage_varlen) is used for Flux, still incompatible
+        assert mm.is_attention_backend_compile_compatible(mock_transformer) is False

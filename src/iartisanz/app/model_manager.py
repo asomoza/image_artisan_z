@@ -48,6 +48,14 @@ VARLEN_BACKEND_MAPPING: dict[str, str] = {
     "sage_hub": "sage_varlen",  # No hub variant for sage_varlen
 }
 
+# Backends that are NOT compatible with torch.compile due to graph breaks.
+# sage_varlen calls torch.cuda.set_device() which is marked as non-traceable by dynamo.
+COMPILE_INCOMPATIBLE_BACKENDS: frozenset[str] = frozenset({
+    "sage",
+    "sage_hub",
+    "sage_varlen",
+})
+
 
 @dataclass(frozen=True)
 class ModelHandle:
@@ -207,6 +215,30 @@ class ModelManager:
         # and always passes attn_mask to dispatch_attention_fn
         transformer_class_name = type(transformer).__name__
         return transformer_class_name == "ZImageTransformer2DModel"
+
+    def is_attention_backend_compile_compatible(self, transformer: Any = None) -> bool:
+        """Check if the current attention backend is compatible with torch.compile.
+
+        Some backends (e.g., sage_varlen) use operations like torch.cuda.set_device()
+        that are not traceable by torch.compile/dynamo, causing graph breaks.
+
+        Args:
+            transformer: Optional transformer to check for varlen mapping.
+                        If provided and model requires varlen, checks the mapped backend.
+
+        Returns:
+            True if the backend is compatible with torch.compile, False otherwise.
+        """
+        backend = self.attention_backend
+
+        # Check if varlen mapping applies
+        if transformer is not None and backend != "native":
+            if self._requires_varlen_backend(transformer):
+                varlen_backend = VARLEN_BACKEND_MAPPING.get(backend)
+                if varlen_backend:
+                    backend = varlen_backend
+
+        return backend not in COMPILE_INCOMPATIBLE_BACKENDS
 
     def apply_attention_backend(self, transformer: Any) -> bool:
         """Apply the current attention backend to a transformer model.

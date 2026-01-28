@@ -200,6 +200,15 @@ class DenoiseNode(Node):
         # on the raw module (compilation will preserve the backend setting).
         mm.apply_attention_backend(transformer_raw)
 
+        # Some attention backends (e.g., sage_varlen) are not compatible with torch.compile
+        # due to using operations like torch.cuda.set_device() that cause graph breaks.
+        if use_torch_compile and not mm.is_attention_backend_compile_compatible(transformer_raw):
+            logger.warning(
+                f"Attention backend '{mm.attention_backend}' is not compatible with torch.compile. "
+                "Disabling compilation for this generation."
+            )
+            use_torch_compile = False
+
         # If the transformer was previously region-compiled in-place (Diffusers) and the
         # user toggled compilation off, restore eager behavior.
         if (
