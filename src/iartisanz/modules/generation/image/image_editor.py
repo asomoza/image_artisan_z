@@ -4,12 +4,20 @@ import logging
 import math
 import os
 from datetime import datetime
-from importlib.resources import files
 from typing import Union
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QBrush, QColor, QCursor, QGuiApplication, QPainter, QPen, QPixmap, QRadialGradient
-from PyQt6.QtSvg import QSvgRenderer
+from PyQt6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import (
+    QAction,
+    QBrush,
+    QColor,
+    QCursor,
+    QGuiApplication,
+    QPainter,
+    QPen,
+    QPixmap,
+    QRadialGradient,
+)
 from PyQt6.QtWidgets import QApplication, QFileDialog, QGraphicsEllipseItem, QGraphicsScene, QGraphicsView, QMenu
 
 from iartisanz.modules.generation.image.image_editor_layer import ImageEditorLayer
@@ -19,11 +27,6 @@ from iartisanz.modules.generation.widgets.drop_lightbox_widget import DropLightB
 
 
 class ImageEditor(QGraphicsView):
-    BRUSH_BLACK = files("iartisanz.theme.cursors").joinpath("brush_black.svg")
-    BRUSH_WHITE = files("iartisanz.theme.cursors").joinpath("brush_white.svg")
-    CROSSHAIR_BLACK = files("iartisanz.theme.cursors").joinpath("crosshair_black.svg")
-    CROSSHAIR_WHITE = files("iartisanz.theme.cursors").joinpath("crosshair_white.svg")
-
     image_changed = pyqtSignal()
     image_moved = pyqtSignal(float, float)
     image_scaled = pyqtSignal(float)
@@ -93,6 +96,10 @@ class ImageEditor(QGraphicsView):
         self._stable_viewport_size = None  # The preferred stable viewport size
         self._editor_id = id(self)  # Unique identifier for debugging
 
+        # Scene-based brush outline (circle that follows the mouse)
+        self._brush_outline = None
+        self._last_outline_color_is_light = None  # Track outline color to avoid unnecessary updates
+
         self.drop_lightbox = DropLightBox(self)
         self.drop_lightbox.setText("Drop file here")
 
@@ -148,6 +155,21 @@ class ImageEditor(QGraphicsView):
         self.moving = False
         self.timer.start(100)
         super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.timer.stop()
+        self._hide_brush_outline()
+        super().leaveEvent(event)
+
+    def showEvent(self, event):
+        # Invalidate cached zoom factor when widget becomes visible (e.g., after QStackedWidget switch)
+        # This ensures the brush outline is recalculated with the fresh transform
+        self._cached_zoom_factor = None
+        self._cached_viewport_size = None
+        self._oscillation_sizes.clear()
+        self._stable_viewport_size = None
+        self._hide_brush_outline()
+        super().showEvent(event)
 
     def add_layer(self, image_path: str = None, save_temp: bool = False) -> ImageEditorLayer:
         # setting the base path means we're storing a copy of the image in the temp directory
@@ -452,6 +474,19 @@ class ImageEditor(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        # Update brush outline position
+        if self._brush_outline is not None and self.selected_layer and self.selected_layer.pixmap_item:
+            scene_pos = self.mapToScene(event.pos())
+            scale_factor = self.selected_layer.pixmap_item.scale()
+            brush_size_in_scene = self.brush_size * scale_factor
+            radius = brush_size_in_scene / 2
+            self._brush_outline.setRect(
+                scene_pos.x() - radius,
+                scene_pos.y() - radius,
+                brush_size_in_scene,
+                brush_size_in_scene
+            )
+
         if event.buttons() & Qt.MouseButton.LeftButton:
             if self.moving:
                 self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
@@ -493,6 +528,9 @@ class ImageEditor(QGraphicsView):
             zoomFactor = zoomOutFactor
         self.scale(zoomFactor, zoomFactor)
         self.current_scale_factor *= zoomFactor
+
+        # Invalidate cached zoom factor so cursor updates to reflect the new zoom level
+        self._cached_zoom_factor = None
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
@@ -562,49 +600,66 @@ class ImageEditor(QGraphicsView):
     def copy_image(self):
         self.image_copy.emit()
 
-    def create_cursor(self, svg_path, use_crosshair, pixmap_size):
-        if use_crosshair:
-            pixmap_size *= 10
+    def _update_brush_outline(self, scene_pos: QPointF, brush_size_in_scene: float, use_light_color: bool):
+        """Update or create the scene-based brush outline."""
+        radius = brush_size_in_scene / 2
 
-        pixmap = QPixmap(pixmap_size, pixmap_size)
-        pixmap.fill(QColor(0, 0, 0, 0))
-        painter = QPainter(pixmap)
-        renderer = QSvgRenderer(svg_path)
-        renderer.render(painter, QRectF(0, 0, pixmap_size, pixmap_size))
-        painter.end()
-        hotspot = pixmap_size // 2
-        return QCursor(pixmap, hotspot, hotspot)
+        if self._brush_outline is None:
+            self._brush_outline = QGraphicsEllipseItem()
+            self._brush_outline.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            # High z-value to draw on top of everything
+            self._brush_outline.setZValue(10000)
+            self.scene.addItem(self._brush_outline)
+
+        # Only update pen color if it changed
+        if self._last_outline_color_is_light != use_light_color:
+            if use_light_color:
+                outline_color = QColor(255, 255, 255, 200)
+            else:
+                outline_color = QColor(0, 0, 0, 200)
+            self._brush_outline.setPen(QPen(outline_color, 1.5))
+            self._last_outline_color_is_light = use_light_color
+
+        # Update position and size
+        self._brush_outline.setRect(
+            scene_pos.x() - radius,
+            scene_pos.y() - radius,
+            brush_size_in_scene,
+            brush_size_in_scene
+        )
+        self._brush_outline.setVisible(True)
+
+    def _hide_brush_outline(self):
+        """Hide the scene-based brush outline."""
+        if self._brush_outline is not None:
+            self._brush_outline.setVisible(False)
 
     def update_cursor(self):
-        if self.selected_layer.pixmap_item is not None:
-            # Use cached zoom factor if viewport hasn't changed to prevent cursor size fluctuations
-            current_viewport = (self.viewport().width(), self.viewport().height())
-            if self._cached_zoom_factor is not None and self._cached_viewport_size == current_viewport:
-                zoom_factor = self._cached_zoom_factor
-            else:
-                zoom_factor = self.transform().m11()
-                self._cached_zoom_factor = zoom_factor
-                self._cached_viewport_size = current_viewport
+        if self.selected_layer is None or self.selected_layer.pixmap_item is None:
+            return
 
-            scale_factor = self.selected_layer.pixmap_item.scale()
-            pixmap_size = max(1, int(math.ceil(self.brush_size * zoom_factor * scale_factor)))
+        # Get cursor position and convert to scene coordinates
+        cursor_pos = QCursor.pos()
+        view_pos = self.viewport().mapFromGlobal(cursor_pos)
+        scene_pos = self.mapToScene(view_pos)
 
-            use_crosshair = pixmap_size < 6
+        # Calculate brush size in scene coordinates
+        scale_factor = self.selected_layer.pixmap_item.scale()
+        brush_size_in_scene = self.brush_size * scale_factor
 
-            # Determine the color of the cursor
-            brightness = 0
-            bg_color = self.get_color_under_cursor()
+        # Sample background color to determine outline color (light or dark)
+        bg_color = self.get_color_under_cursor()
+        if bg_color is not None:
+            brightness = (bg_color.red() * 299 + bg_color.green() * 587 + bg_color.blue() * 114) / 1000
+            use_light_color = brightness < 128
+        else:
+            use_light_color = True
 
-            if bg_color is not None:
-                brightness = (bg_color.red() * 299 + bg_color.green() * 587 + bg_color.blue() * 114) / 1000
+        # Update the brush outline
+        self._update_brush_outline(scene_pos, brush_size_in_scene, use_light_color)
 
-            # Determine the cursor type based on the brightness and whether we should use the crosshair
-            if brightness < 128:
-                cursor_type = self.CROSSHAIR_WHITE if use_crosshair else self.BRUSH_WHITE
-            else:
-                cursor_type = self.CROSSHAIR_BLACK if use_crosshair else self.BRUSH_BLACK
-
-            self.setCursor(self.create_cursor(str(cursor_type), use_crosshair, pixmap_size))
+        # Use a simple crosshair cursor
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
     def get_color_under_cursor(self):
         cursor_pos = QCursor.pos()
