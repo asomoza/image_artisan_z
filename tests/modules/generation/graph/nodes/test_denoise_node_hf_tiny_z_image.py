@@ -78,7 +78,6 @@ def _run_tiny_random_z_image(
 
     from iartisanz.app.model_manager import get_model_manager
     from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
-    from iartisanz.modules.generation.graph.nodes.boolean_node import BooleanNode
     from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
     from iartisanz.modules.generation.graph.nodes.latents_node import LatentsNode
     from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
@@ -89,6 +88,9 @@ def _run_tiny_random_z_image(
     mm = get_model_manager()
     if clear_mm:
         mm.clear()
+
+    # Set torch compile via ModelManager (runtime config, not a graph node)
+    mm.use_torch_compile = use_torch_compile
 
     # Keep text encoder on CPU for the CUDA test too, so prompt embeddings match CPU.
     if device.type == "cuda":
@@ -134,7 +136,6 @@ def _run_tiny_random_z_image(
 
     steps_node = NumberNode(number=STEPS)
     guidance_node = NumberNode(number=GUIDANCE_SCALE)
-    compile_node = BooleanNode(value=bool(use_torch_compile))
     denoise_node = DenoiseNode()
 
     prompt_node.connect("tokenizer", model_node, "tokenizer")
@@ -149,7 +150,6 @@ def _run_tiny_random_z_image(
     denoise_node.connect("prompt_embeds", prompt_node, "prompt_embeds")
     denoise_node.connect("negative_prompt_embeds", prompt_node, "negative_prompt_embeds")
     denoise_node.connect("guidance_scale", guidance_node, "value")
-    denoise_node.connect("use_torch_compile", compile_node, "value")
 
     for node in (
         model_node,
@@ -158,7 +158,6 @@ def _run_tiny_random_z_image(
         scheduler_node,
         steps_node,
         guidance_node,
-        compile_node,
         denoise_node,
     ):
         node.device = device
@@ -176,7 +175,6 @@ def _run_tiny_random_z_image(
         scheduler_node()
         steps_node()
         guidance_node()
-        compile_node()
         denoise_node()
 
     out = denoise_node.values.get("latents")

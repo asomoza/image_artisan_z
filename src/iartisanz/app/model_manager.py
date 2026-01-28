@@ -70,6 +70,22 @@ class ModelManager:
         # Key includes model_id + component + device + dtype + compile options.
         self._compiled_components: dict[tuple[str | None, ModelComponent, str, str, str], Any] = {}
 
+        # Runtime setting for torch.compile. This is NOT saved in the graph JSON,
+        # allowing users to toggle compilation without affecting shareable outputs.
+        self._use_torch_compile: bool = False
+
+    @property
+    def use_torch_compile(self) -> bool:
+        """Whether to use torch.compile for the transformer during inference."""
+        with self._lock:
+            return self._use_torch_compile
+
+    @use_torch_compile.setter
+    def use_torch_compile(self, value: bool) -> None:
+        """Set whether to use torch.compile for the transformer during inference."""
+        with self._lock:
+            self._use_torch_compile = bool(value)
+
     def active_model_id(self) -> str | None:
         with self._lock:
             return self._model_id

@@ -305,7 +305,9 @@ class GenerationPanel(BasePanel):
             guidance_start_end = data.get("guidance_start_end", self.gen_settings.guidance_start_end)
             scheduler = data.get("scheduler", self.gen_settings.scheduler)
             model = data.get("model", self.gen_settings.model)
-            use_torch_compile = data.get("use_torch_compile", getattr(self.gen_settings, "use_torch_compile", False))
+            # use_torch_compile is NOT loaded from graphs - it's a runtime config
+            # Always use the user's persisted setting from gen_settings
+            use_torch_compile = self.gen_settings.use_torch_compile
 
             self.update_panel(
                 width,

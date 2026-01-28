@@ -28,7 +28,6 @@ class DenoiseNode(Node):
         "sigmas",
         "lora",
         "guidance_start_end",
-        "use_torch_compile",
         "noise",
         "strength",
         "image_mask",
@@ -192,7 +191,8 @@ class DenoiseNode(Node):
         transformer_input = self.transformer
         transformer_raw = mm.resolve(transformer_input)
 
-        use_torch_compile = bool(getattr(self, "use_torch_compile", False) or False)
+        # Read use_torch_compile from ModelManager (runtime config, not saved in graph)
+        use_torch_compile = mm.use_torch_compile
         transformer = transformer_raw
 
         # If the transformer was previously region-compiled in-place (Diffusers) and the

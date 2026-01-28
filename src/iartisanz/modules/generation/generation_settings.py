@@ -79,6 +79,7 @@ class GenerationSettings:
     GROUP: str = "generation"
 
     # Keys that should be forwarded to the graph on initialization / change
+    # Note: use_torch_compile is intentionally NOT here - it's a runtime config on ModelManager
     GRAPH_KEYS: tuple[str, ...] = (
         "image_width",
         "image_height",
@@ -87,7 +88,6 @@ class GenerationSettings:
         "guidance_start_end",
         "scheduler",
         "strength",
-        "use_torch_compile",
     )
 
     @classmethod
@@ -157,6 +157,7 @@ class GenerationSettings:
 
     def to_graph_nodes(self) -> dict[str, Any]:
         # What NodeGraphThread expects
+        # Note: use_torch_compile is NOT included - it's a runtime config on ModelManager
         return {
             "image_width": int(self.image_width),
             "image_height": int(self.image_height),
@@ -164,7 +165,6 @@ class GenerationSettings:
             "guidance_scale": float(self.guidance_scale),
             "guidance_start_end": cast_number_range(self.guidance_start_end),
             "scheduler": cast_scheduler(self.scheduler),
-            "use_torch_compile": bool(self.use_torch_compile),
         }
 
     def apply_change(self, attr: str, value: Any) -> tuple[bool, Any | None]:
@@ -220,7 +220,8 @@ class GenerationSettings:
 
         if attr == "use_torch_compile":
             self.use_torch_compile = _coerce_bool(value, self.use_torch_compile)
-            return (True, bool(self.use_torch_compile))
+            # Return None for graph_value - this is handled by ModelManager, not the graph
+            return (True, None)
 
         # Fallback: handled but not forwarded
         setattr(self, attr, value)

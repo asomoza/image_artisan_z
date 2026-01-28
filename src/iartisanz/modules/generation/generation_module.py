@@ -150,6 +150,11 @@ class GenerationModule(BaseModule):
         # model is a special case
         self.generation_thread.update_model(self.selected_model)
 
+        # Initialize ModelManager runtime config from settings
+        from iartisanz.app.model_manager import get_model_manager
+
+        get_model_manager().use_torch_compile = self.gen_settings.use_torch_compile
+
     def on_generate(
         self,
         seed: int,
@@ -302,7 +307,8 @@ class GenerationModule(BaseModule):
                     "source_image",
                     "strength",
                     "source_image_mask",
-                    "use_torch_compile",
+                    # Note: use_torch_compile is intentionally NOT extracted from graphs
+                    # as it's a runtime config on ModelManager, not a shareable setting
                 ]
                 subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
 
@@ -455,6 +461,8 @@ class GenerationModule(BaseModule):
             self.prompts_widget.use_random_seed = True
 
             # Update panels that depend on extracted JSON graph state.
+            # Note: use_torch_compile is NOT included here as it's a runtime config
+            # on ModelManager, not saved in/loaded from graphs.
             self.event_bus.publish(
                 "json_graph",
                 {
@@ -468,7 +476,6 @@ class GenerationModule(BaseModule):
                         "scheduler": self.gen_settings.scheduler,
                         "model": self.gen_settings.model,
                         "strength": self.gen_settings.strength,
-                        "use_torch_compile": self.gen_settings.use_torch_compile,
                         "positive_prompt": "",
                         "negative_prompt": "",
                         "seed": "",
@@ -490,21 +497,26 @@ class GenerationModule(BaseModule):
         # Update the settings object if this is a known settings key
         handled, graph_value = self.gen_settings.apply_change(attr, value)
 
+        # Special handling for use_torch_compile: update ModelManager runtime config
+        if attr == "use_torch_compile":
+            from iartisanz.app.model_manager import get_model_manager
+
+            mm = get_model_manager()
+            mm.use_torch_compile = bool(value)
+            # If compilation was turned off, actively disable any already-compiled
+            # model submodules so toggling behaves as expected.
+            if not bool(value):
+                try:
+                    mm.disable_compiled("transformer")
+                except Exception:
+                    pass
+            return
+
         # Forward to the graph:
         if handled and attr in self.gen_settings.GRAPH_KEYS:
             if graph_value is None:
                 return
             self.generation_thread.update_node(attr, graph_value)
-
-            # Special-case: if compilation was turned off, actively disable any already-compiled
-            # model submodules so toggling behaves as expected.
-            if attr == "use_torch_compile" and bool(graph_value) is False:
-                try:
-                    from iartisanz.app.model_manager import get_model_manager
-
-                    get_model_manager().disable_compiled("transformer")
-                except Exception:
-                    pass
         else:
             self.generation_thread.update_node(attr, value)
 
@@ -680,7 +692,8 @@ class GenerationModule(BaseModule):
                 "strength",
                 "source_image_mask",
                 "loras",
-                "use_torch_compile",
+                # Note: use_torch_compile is intentionally NOT extracted from graphs
+                # as it's a runtime config on ModelManager, not a shareable setting
             ]
             subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
             self.generation_thread.load_json_graph(json_graph)
