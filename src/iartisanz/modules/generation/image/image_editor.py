@@ -133,7 +133,6 @@ class ImageEditor(QGraphicsView):
                 # Current is the larger size - use it as stable
                 self._stable_viewport_size = larger_size
 
-        old_m11 = self.transform().m11()
         rect = self.sceneRect()
         self.resetTransform()
         self.scale(self.viewport().width() / rect.width(), self.viewport().height() / rect.height())
