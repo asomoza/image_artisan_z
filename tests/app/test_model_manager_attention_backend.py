@@ -7,6 +7,7 @@ import torch
 
 from iartisanz.app.model_manager import (
     ATTENTION_BACKEND_OPTIONS,
+    VARLEN_BACKEND_MAPPING,
     ModelManager,
     get_model_manager,
 )
@@ -195,21 +196,21 @@ class TestGetAvailableAttentionBackends:
 class TestApplyAttentionBackend:
     """Tests for apply_attention_backend method."""
 
-    def test_native_backend_calls_reset_if_available(self):
-        """Native backend should call reset_attention_backend if available."""
+    def test_native_backend_calls_set_attention_backend(self):
+        """Native backend should explicitly call set_attention_backend('native')."""
         mm = ModelManager()
         mm.attention_backend = "native"
 
         mock_transformer = MagicMock()
-        mock_transformer.reset_attention_backend = MagicMock()
+        mock_transformer.set_attention_backend = MagicMock()
 
         result = mm.apply_attention_backend(mock_transformer)
 
-        mock_transformer.reset_attention_backend.assert_called_once()
+        mock_transformer.set_attention_backend.assert_called_once_with("native")
         assert result is True
 
-    def test_native_backend_succeeds_without_reset_method(self):
-        """Native backend should succeed even without reset_attention_backend."""
+    def test_native_backend_succeeds_without_set_method(self):
+        """Native backend should succeed even without set_attention_backend."""
         mm = ModelManager()
         mm.attention_backend = "native"
 
@@ -249,29 +250,35 @@ class TestApplyAttentionBackend:
         mm = ModelManager()
         mm.attention_backend = "flash"
 
+        # Track calls to set_attention_backend
+        call_count = [0]
+        def mock_set_backend(backend):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call with "flash" fails
+                raise RuntimeError("Backend not available")
+            # Second call with "native" succeeds
+
         mock_transformer = MagicMock()
-        mock_transformer.set_attention_backend = MagicMock(
-            side_effect=RuntimeError("Backend not available")
-        )
-        mock_transformer.reset_attention_backend = MagicMock()
+        mock_transformer.set_attention_backend = MagicMock(side_effect=mock_set_backend)
 
         result = mm.apply_attention_backend(mock_transformer)
 
         assert result is False
-        # Should try to reset to native after failure
-        mock_transformer.reset_attention_backend.assert_called_once()
+        # Should try to set native after failure
+        assert mock_transformer.set_attention_backend.call_count == 2
+        mock_transformer.set_attention_backend.assert_any_call("flash")
+        mock_transformer.set_attention_backend.assert_any_call("native")
 
-    def test_handles_exception_in_reset_after_failure(self):
-        """Should handle exceptions from reset_attention_backend after set fails."""
+    def test_handles_exception_in_native_fallback_after_failure(self):
+        """Should handle exceptions from native fallback after set fails."""
         mm = ModelManager()
         mm.attention_backend = "flash"
 
         mock_transformer = MagicMock()
+        # Both calls fail
         mock_transformer.set_attention_backend = MagicMock(
             side_effect=RuntimeError("Backend not available")
-        )
-        mock_transformer.reset_attention_backend = MagicMock(
-            side_effect=RuntimeError("Reset also failed")
         )
 
         result = mm.apply_attention_backend(mock_transformer)
@@ -382,3 +389,265 @@ class TestAttentionBackendWithTorchCompile:
         mm.clear()
         # attention_backend should persist (it's a runtime setting)
         assert mm.attention_backend == "flash"
+
+
+class TestVarlenBackendMapping:
+    """Tests for automatic varlen backend mapping for Z-Image models."""
+
+    def test_varlen_mapping_constant_exists(self):
+        """VARLEN_BACKEND_MAPPING should be defined."""
+        assert isinstance(VARLEN_BACKEND_MAPPING, dict)
+        assert len(VARLEN_BACKEND_MAPPING) > 0
+
+    def test_varlen_mapping_contains_expected_backends(self):
+        """VARLEN_BACKEND_MAPPING should contain all expected mappings."""
+        assert "flash" in VARLEN_BACKEND_MAPPING
+        assert "flash_hub" in VARLEN_BACKEND_MAPPING
+        assert "_flash_3_hub" in VARLEN_BACKEND_MAPPING
+        assert "sage" in VARLEN_BACKEND_MAPPING
+        assert "sage_hub" in VARLEN_BACKEND_MAPPING
+
+    def test_varlen_mapping_values(self):
+        """VARLEN_BACKEND_MAPPING should map to correct varlen backends."""
+        assert VARLEN_BACKEND_MAPPING["flash"] == "flash_varlen"
+        assert VARLEN_BACKEND_MAPPING["flash_hub"] == "flash_varlen_hub"
+        assert VARLEN_BACKEND_MAPPING["_flash_3_hub"] == "_flash_3_varlen_hub"
+        assert VARLEN_BACKEND_MAPPING["sage"] == "sage_varlen"
+        assert VARLEN_BACKEND_MAPPING["sage_hub"] == "sage_varlen"
+
+    def test_requires_varlen_backend_for_zimage(self):
+        """ZImageTransformer2DModel should require varlen backend."""
+        mm = ModelManager()
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+
+        assert mm._requires_varlen_backend(mock_transformer) is True
+
+    def test_does_not_require_varlen_for_flux(self):
+        """FluxTransformer2DModel should not require varlen backend."""
+        mm = ModelManager()
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "FluxTransformer2DModel"
+
+        assert mm._requires_varlen_backend(mock_transformer) is False
+
+    def test_does_not_require_varlen_for_other_models(self):
+        """Other transformer models should not require varlen backend."""
+        mm = ModelManager()
+
+        for class_name in ["SD3Transformer2DModel", "DiTTransformer2DModel", "PixArtTransformer2DModel"]:
+            mock_transformer = MagicMock()
+            mock_transformer.__class__.__name__ = class_name
+            assert mm._requires_varlen_backend(mock_transformer) is False
+
+    def test_flash_mapped_to_varlen_for_zimage(self):
+        """Flash backend should be mapped to flash_varlen for Z-Image."""
+        mm = ModelManager()
+        mm.attention_backend = "flash"
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+        mock_transformer.set_attention_backend = MagicMock()
+
+        mm.apply_attention_backend(mock_transformer)
+
+        mock_transformer.set_attention_backend.assert_called_once_with("flash_varlen")
+
+    def test_sage_mapped_to_varlen_for_zimage(self):
+        """Sage backend should be mapped to sage_varlen for Z-Image."""
+        mm = ModelManager()
+        mm.attention_backend = "sage"
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+        mock_transformer.set_attention_backend = MagicMock()
+
+        mm.apply_attention_backend(mock_transformer)
+
+        mock_transformer.set_attention_backend.assert_called_once_with("sage_varlen")
+
+    def test_flash_hub_mapped_to_varlen_hub_for_zimage(self):
+        """flash_hub should be mapped to flash_varlen_hub for Z-Image."""
+        mm = ModelManager()
+        mm.attention_backend = "flash_hub"
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+        mock_transformer.set_attention_backend = MagicMock()
+
+        mm.apply_attention_backend(mock_transformer)
+
+        mock_transformer.set_attention_backend.assert_called_once_with("flash_varlen_hub")
+
+    def test_flash_3_hub_mapped_to_varlen_for_zimage(self):
+        """_flash_3_hub should be mapped to _flash_3_varlen_hub for Z-Image."""
+        mm = ModelManager()
+        mm.attention_backend = "_flash_3_hub"
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+        mock_transformer.set_attention_backend = MagicMock()
+
+        mm.apply_attention_backend(mock_transformer)
+
+        mock_transformer.set_attention_backend.assert_called_once_with("_flash_3_varlen_hub")
+
+    def test_sage_hub_mapped_to_sage_varlen_for_zimage(self):
+        """sage_hub should be mapped to sage_varlen for Z-Image (no hub variant exists)."""
+        mm = ModelManager()
+        mm.attention_backend = "sage_hub"
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+        mock_transformer.set_attention_backend = MagicMock()
+
+        mm.apply_attention_backend(mock_transformer)
+
+        # sage_varlen is used because there's no sage_varlen_hub
+        mock_transformer.set_attention_backend.assert_called_once_with("sage_varlen")
+
+    def test_xformers_not_mapped_for_zimage(self):
+        """xformers should NOT be mapped (it supports masks natively)."""
+        mm = ModelManager()
+        mm.attention_backend = "xformers"
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+        mock_transformer.set_attention_backend = MagicMock()
+
+        mm.apply_attention_backend(mock_transformer)
+
+        # xformers supports masks, so no mapping
+        mock_transformer.set_attention_backend.assert_called_once_with("xformers")
+
+    def test_native_not_mapped_for_zimage(self):
+        """native backend should be set explicitly, not mapped to varlen."""
+        mm = ModelManager()
+        mm.attention_backend = "native"
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+        mock_transformer.set_attention_backend = MagicMock()
+
+        result = mm.apply_attention_backend(mock_transformer)
+
+        assert result is True
+        # Should explicitly set "native", not a varlen variant
+        mock_transformer.set_attention_backend.assert_called_once_with("native")
+
+    def test_no_mapping_for_flux_model(self):
+        """Flux models should use the backend as-is (no varlen mapping)."""
+        mm = ModelManager()
+        mm.attention_backend = "flash"
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "FluxTransformer2DModel"
+        mock_transformer.set_attention_backend = MagicMock()
+
+        mm.apply_attention_backend(mock_transformer)
+
+        mock_transformer.set_attention_backend.assert_called_once_with("flash")
+
+    def test_no_mapping_for_non_zimage_models(self):
+        """Non-Z-Image models should use the backend as-is."""
+        mm = ModelManager()
+
+        for class_name in ["FluxTransformer2DModel", "SD3Transformer2DModel"]:
+            mm.attention_backend = "sage"
+
+            mock_transformer = MagicMock()
+            mock_transformer.__class__.__name__ = class_name
+            mock_transformer.set_attention_backend = MagicMock()
+
+            mm.apply_attention_backend(mock_transformer)
+
+            mock_transformer.set_attention_backend.assert_called_once_with("sage")
+
+
+class TestAttentionBackendSwitching:
+    """Regression tests for switching between attention backends."""
+
+    def test_switch_from_sage_to_native_explicitly_sets_native(self):
+        """Regression test: switching from sage to native should explicitly set 'native'.
+
+        Previously, switching to native would call reset_attention_backend() which only
+        set _attention_backend=None on processors. This could cause the previous backend
+        to persist in some cases. Now we explicitly call set_attention_backend('native').
+        """
+        mm = ModelManager()
+
+        mock_transformer = MagicMock()
+        mock_transformer.set_attention_backend = MagicMock()
+
+        # Step 1: Set to sage
+        mm.attention_backend = "sage"
+        mm.apply_attention_backend(mock_transformer)
+        assert mock_transformer.set_attention_backend.call_args[0][0] == "sage"
+
+        # Step 2: Switch back to native
+        mock_transformer.set_attention_backend.reset_mock()
+        mm.attention_backend = "native"
+        mm.apply_attention_backend(mock_transformer)
+
+        # Verify native was EXPLICITLY set, not just reset to None
+        mock_transformer.set_attention_backend.assert_called_once_with("native")
+
+    def test_switch_from_flash_to_native_explicitly_sets_native(self):
+        """Regression test: switching from flash to native should explicitly set 'native'."""
+        mm = ModelManager()
+
+        mock_transformer = MagicMock()
+        mock_transformer.set_attention_backend = MagicMock()
+
+        # Step 1: Set to flash
+        mm.attention_backend = "flash"
+        mm.apply_attention_backend(mock_transformer)
+        assert mock_transformer.set_attention_backend.call_args[0][0] == "flash"
+
+        # Step 2: Switch back to native
+        mock_transformer.set_attention_backend.reset_mock()
+        mm.attention_backend = "native"
+        mm.apply_attention_backend(mock_transformer)
+
+        # Verify native was EXPLICITLY set
+        mock_transformer.set_attention_backend.assert_called_once_with("native")
+
+    def test_multiple_backend_switches(self):
+        """Test switching between multiple backends in sequence."""
+        mm = ModelManager()
+
+        mock_transformer = MagicMock()
+        mock_transformer.set_attention_backend = MagicMock()
+
+        backends_sequence = ["flash", "sage", "native", "xformers", "native"]
+
+        for backend in backends_sequence:
+            mock_transformer.set_attention_backend.reset_mock()
+            mm.attention_backend = backend
+            mm.apply_attention_backend(mock_transformer)
+
+            # Each backend should be explicitly set
+            mock_transformer.set_attention_backend.assert_called_once_with(backend)
+
+    def test_zimage_switch_from_varlen_to_native(self):
+        """Regression test: Z-Image switching from flash (varlen) to native."""
+        mm = ModelManager()
+
+        mock_transformer = MagicMock()
+        mock_transformer.__class__.__name__ = "ZImageTransformer2DModel"
+        mock_transformer.set_attention_backend = MagicMock()
+
+        # Step 1: Set to flash (should map to flash_varlen for Z-Image)
+        mm.attention_backend = "flash"
+        mm.apply_attention_backend(mock_transformer)
+        assert mock_transformer.set_attention_backend.call_args[0][0] == "flash_varlen"
+
+        # Step 2: Switch back to native (should NOT map to varlen)
+        mock_transformer.set_attention_backend.reset_mock()
+        mm.attention_backend = "native"
+        mm.apply_attention_backend(mock_transformer)
+
+        # Native should be explicitly set, not a varlen variant
+        mock_transformer.set_attention_backend.assert_called_once_with("native")

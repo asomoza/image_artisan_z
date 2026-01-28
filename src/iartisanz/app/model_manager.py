@@ -37,6 +37,17 @@ ATTENTION_BACKEND_OPTIONS: list[tuple[str, str]] = [
     ("xformers", "xFormers"),
 ]
 
+# Mapping from user-facing backends to varlen variants for models that require attention masks.
+# Some models (e.g., Z-Image) use variable-length sequences with padding and pass attention
+# masks to the attention dispatcher. These need varlen backends that convert masks to cu_seqlens.
+VARLEN_BACKEND_MAPPING: dict[str, str] = {
+    "flash": "flash_varlen",
+    "flash_hub": "flash_varlen_hub",
+    "_flash_3_hub": "_flash_3_varlen_hub",
+    "sage": "sage_varlen",
+    "sage_hub": "sage_varlen",  # No hub variant for sage_varlen
+}
+
 
 @dataclass(frozen=True)
 class ModelHandle:
@@ -179,6 +190,24 @@ class ModelManager:
 
         return available
 
+    def _requires_varlen_backend(self, transformer: Any) -> bool:
+        """Check if a transformer model requires varlen attention backends.
+
+        Some models (like Z-Image) use variable-length sequences with padding and
+        pass attention masks to the attention dispatcher. These models need varlen
+        variants of attention backends that support masks.
+
+        Args:
+            transformer: The transformer model to check.
+
+        Returns:
+            True if the model requires varlen backends, False otherwise.
+        """
+        # Z-Image transformer uses variable-length sequences with padding
+        # and always passes attn_mask to dispatch_attention_fn
+        transformer_class_name = type(transformer).__name__
+        return transformer_class_name == "ZImageTransformer2DModel"
+
     def apply_attention_backend(self, transformer: Any) -> bool:
         """Apply the current attention backend to a transformer model.
 
@@ -190,34 +219,40 @@ class ModelManager:
         """
         backend = self.attention_backend
 
-        # Skip if using default - just ensure any previous setting is reset
-        if backend == "native":
-            if hasattr(transformer, "reset_attention_backend"):
-                try:
-                    transformer.reset_attention_backend()
-                except Exception:
-                    pass
-            return True
+        # Map to varlen variant if the model requires it (e.g., Z-Image uses attention masks)
+        # This mapping applies even for "native" check below, but native doesn't need mapping
+        effective_backend = backend
+        if backend != "native" and self._requires_varlen_backend(transformer):
+            varlen_backend = VARLEN_BACKEND_MAPPING.get(backend)
+            if varlen_backend:
+                effective_backend = varlen_backend
+                logger.debug(
+                    f"Model requires varlen backend: mapping '{backend}' -> '{effective_backend}'"
+                )
 
         # Try to apply the selected backend using the new dispatcher API
+        # Always call set_attention_backend explicitly, including for "native",
+        # to ensure the backend is properly set/reset on the transformer processors.
         if hasattr(transformer, "set_attention_backend"):
             try:
-                transformer.set_attention_backend(backend)
-                logger.debug(f"Applied attention backend '{backend}' to transformer")
+                transformer.set_attention_backend(effective_backend)
+                logger.debug(f"Applied attention backend '{effective_backend}' to transformer")
                 return True
             except Exception as e:
                 logger.warning(
-                    f"Failed to set attention backend '{backend}': {e}. Falling back to native."
+                    f"Failed to set attention backend '{effective_backend}': {e}. Falling back to native."
                 )
-                try:
-                    transformer.reset_attention_backend()
-                except Exception:
-                    pass
+                # Try to reset to native as fallback
+                if effective_backend != "native":
+                    try:
+                        transformer.set_attention_backend("native")
+                    except Exception:
+                        pass
                 return False
 
         # Transformer doesn't support the new API - this is fine, native will be used
         logger.debug(
-            f"Transformer does not support set_attention_backend; using native attention"
+            "Transformer does not support set_attention_backend; using native attention"
         )
         return True
 
