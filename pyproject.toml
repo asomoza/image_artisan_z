@@ -10,6 +10,7 @@ dependencies = [
     "image-gen-aux>=0.1.0.dev0",
     "opencv-python-headless>=4.12.0.88",
     "peft>=0.18.0",
+    "pillow>=12.1.0",
     "protobuf>=5.29.0",
     "pyqt6>=6.10.0",
     "superqt==0.7.4",
