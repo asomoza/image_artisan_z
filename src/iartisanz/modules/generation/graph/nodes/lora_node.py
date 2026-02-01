@@ -4,10 +4,9 @@ from typing import Optional
 
 import numpy as np
 import torch
-from PIL import Image
-
 from diffusers.loaders.lora_conversion_utils import _convert_non_diffusers_z_image_lora_to_diffusers
 from diffusers.models.model_loading_utils import load_state_dict
+from PIL import Image
 
 from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
@@ -123,9 +122,7 @@ class LoraNode(Node):
 
         if not self.spatial_mask_path or not os.path.exists(self.spatial_mask_path):
             if not self._mask_load_failed:  # Log once
-                logger.warning(
-                    f"[LoraNode] Spatial mask file not found: {self.spatial_mask_path}"
-                )
+                logger.warning(f"[LoraNode] Spatial mask file not found: {self.spatial_mask_path}")
                 self._mask_load_failed = True
             return None
 
@@ -152,10 +149,7 @@ class LoraNode(Node):
             # Convert to tensor: [H, W] -> [1, 1, H, W]
             mask_tensor = torch.from_numpy(mask_array).unsqueeze(0).unsqueeze(0)
 
-            logger.info(
-                f"[LoraNode] Loaded spatial mask from {self.spatial_mask_path} "
-                f"(shape={mask_tensor.shape})"
-            )
+            logger.info(f"[LoraNode] Loaded spatial mask from {self.spatial_mask_path} (shape={mask_tensor.shape})")
 
             return mask_tensor
 
@@ -211,15 +205,18 @@ class LoraNode(Node):
             if not is_correct_format:
                 raise IArtisanZNodeError("Invalid LoRA checkpoint.", self.name)
 
-            transformer.load_lora_adapter(
-                state_dict,
-                network_alphas=None,
-                adapter_name=self.adapter_name,
-                metadata=None,
-                _pipeline=None,
-                low_cpu_mem_usage=False,
-                hotswap=False,
-            )
+            try:
+                transformer.load_lora_adapter(
+                    state_dict,
+                    network_alphas=None,
+                    adapter_name=self.adapter_name,
+                    metadata=None,
+                    _pipeline=None,
+                    low_cpu_mem_usage=False,
+                    hotswap=False,
+                )
+            except Exception as e:
+                raise IArtisanZNodeError(f"Failed to load LoRA adapter: {e}", self.name)
 
             mm.set_lora_source(self.adapter_name, self.path)
 

@@ -101,8 +101,6 @@ class SourceImageDialog(BaseDialog):
 
         content_layout.addLayout(brush_layout)
 
-        # Use QStackedWidget to switch between image and mask editing
-        # This prevents layout oscillation that occurs when hiding/showing widgets in the same layout
         self.section_stack = QStackedWidget()
 
         self.image_section_widget = ImageSectionWidget(
