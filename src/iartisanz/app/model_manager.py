@@ -50,11 +50,13 @@ VARLEN_BACKEND_MAPPING: dict[str, str] = {
 
 # Backends that are NOT compatible with torch.compile due to graph breaks.
 # sage_varlen calls torch.cuda.set_device() which is marked as non-traceable by dynamo.
-COMPILE_INCOMPATIBLE_BACKENDS: frozenset[str] = frozenset({
-    "sage",
-    "sage_hub",
-    "sage_varlen",
-})
+COMPILE_INCOMPATIBLE_BACKENDS: frozenset[str] = frozenset(
+    {
+        "sage",
+        "sage_hub",
+        "sage_varlen",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -258,9 +260,7 @@ class ModelManager:
             varlen_backend = VARLEN_BACKEND_MAPPING.get(backend)
             if varlen_backend:
                 effective_backend = varlen_backend
-                logger.debug(
-                    f"Model requires varlen backend: mapping '{backend}' -> '{effective_backend}'"
-                )
+                logger.debug(f"Model requires varlen backend: mapping '{backend}' -> '{effective_backend}'")
 
         # Try to apply the selected backend using the new dispatcher API
         # Always call set_attention_backend explicitly, including for "native",
@@ -271,9 +271,7 @@ class ModelManager:
                 logger.debug(f"Applied attention backend '{effective_backend}' to transformer")
                 return True
             except Exception as e:
-                logger.warning(
-                    f"Failed to set attention backend '{effective_backend}': {e}. Falling back to native."
-                )
+                logger.warning(f"Failed to set attention backend '{effective_backend}': {e}. Falling back to native.")
                 # Try to reset to native as fallback
                 if effective_backend != "native":
                     try:
@@ -283,9 +281,7 @@ class ModelManager:
                 return False
 
         # Transformer doesn't support the new API - this is fine, native will be used
-        logger.debug(
-            "Transformer does not support set_attention_backend; using native attention"
-        )
+        logger.debug("Transformer does not support set_attention_backend; using native attention")
         return True
 
     @property
@@ -765,6 +761,80 @@ class ModelManager:
         except Exception:
             # If the module can't be moved (e.g., sharded device_map), keep as-is for now.
             return
+
+    def is_cuda_oom(self, exc: BaseException) -> bool:
+        """Check if an exception is a CUDA out-of-memory error.
+
+        This is the public version of `_is_cuda_oom` for use by nodes and other
+        code that needs to detect OOM conditions.
+
+        Args:
+            exc: The exception to check.
+
+        Returns:
+            True if the exception indicates CUDA OOM, False otherwise.
+        """
+        return self._is_cuda_oom(exc)
+
+    def free_vram_for_forward_pass(
+        self,
+        *,
+        preserve: tuple[ModelComponent, ...] = (),
+    ) -> int:
+        """Best-effort VRAM cleanup for retrying a forward pass after OOM.
+
+        Offloads components to CPU (respecting `preserve`) and clears CUDA cache.
+        This method is intended for reactive OOM recovery during model forward
+        passes (not model loading, which is handled by `get()`).
+
+        Args:
+            preserve: Components that should NOT be offloaded (e.g., the ones
+                      currently needed for the forward pass).
+
+        Returns:
+            Number of components offloaded.
+        """
+        if not self.offload_on_cuda_oom:
+            return 0
+
+        offloaded = 0
+        # Offload order: preprocessor, text_encoder, then larger models if needed
+        offload_candidates: tuple[ModelComponent, ...] = (
+            "preprocessor",
+            "text_encoder",
+            "controlnet",
+            "vae",
+            "transformer",
+        )
+
+        with self._lock:
+            for component in offload_candidates:
+                if component in preserve:
+                    continue
+                if component not in self._components:
+                    continue
+                obj = self._components.get(component)
+                if obj is None or not _is_torch_module(obj):
+                    continue
+
+                # Check if already on CPU
+                current_device = _module_device(obj)
+                if current_device is not None and current_device.type == "cpu":
+                    continue
+
+                self._offload_to_cpu_unlocked(component)
+                offloaded += 1
+                logger.debug(f"[OOM recovery] Offloaded '{component}' to CPU")
+
+        # Clear CUDA cache after offloading
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
+
+        return offloaded
 
 
 _MODEL_MANAGER_SINGLETON: ModelManager | None = None

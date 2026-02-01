@@ -49,6 +49,42 @@ class DenoiseNode(Node):
         self.callback = callback
 
     @staticmethod
+    def _run_with_oom_retry(
+        mm,
+        forward_fn: callable,
+        preserve: tuple = (),
+        description: str = "forward pass",
+    ):
+        """Run a forward pass with single OOM retry after offloading models.
+
+        Args:
+            mm: ModelManager instance.
+            forward_fn: Callable that executes the forward pass.
+            preserve: Model components that should NOT be offloaded on retry.
+            description: Description for logging purposes.
+
+        Returns:
+            Result of forward_fn().
+
+        Raises:
+            Original exception if not OOM or if retry also fails.
+        """
+        try:
+            return forward_fn()
+        except Exception as e:
+            if not mm.offload_on_cuda_oom or not mm.is_cuda_oom(e):
+                raise
+
+            logger.warning(f"[DenoiseNode] CUDA OOM during {description}. Offloading models and retrying...")
+            offloaded = mm.free_vram_for_forward_pass(preserve=preserve)
+            if offloaded == 0:
+                logger.error("[DenoiseNode] No models available to offload for OOM recovery.")
+                raise
+
+            # Retry once after offloading
+            return forward_fn()
+
+    @staticmethod
     def _apply_prompt_mode_decay(block_samples: dict, decay: float) -> dict:
         # Apply in deterministic order (matches "injection count" concept).
         try:
@@ -495,19 +531,27 @@ class DenoiseNode(Node):
                     # Match the non-CFG prompt input shape. Prompt tensor is already batched.
                     pos_prompt_embeds_model_input = (prompt_embeds_typed,)
 
-                    with mm.default_device_scope(control_image_latents_typed.device):
-                        mm.ensure_module_device(
-                            controlnet,
-                            device=control_image_latents_typed.device,
-                            dtype=transformer_dtype,
-                        )
-                        pos_controlnet_block_samples = controlnet(
-                            pos_latent_model_input_list,
-                            pos_timestep_model_input,
-                            pos_prompt_embeds_model_input,
-                            control_image_latents_typed,
-                            conditioning_scale=cond_scale,
-                        )
+                    def _run_controlnet_guess_mode():
+                        with mm.default_device_scope(control_image_latents_typed.device):
+                            mm.ensure_module_device(
+                                controlnet,
+                                device=control_image_latents_typed.device,
+                                dtype=transformer_dtype,
+                            )
+                            return controlnet(
+                                pos_latent_model_input_list,
+                                pos_timestep_model_input,
+                                pos_prompt_embeds_model_input,
+                                control_image_latents_typed,
+                                conditioning_scale=cond_scale,
+                            )
+
+                    pos_controlnet_block_samples = self._run_with_oom_retry(
+                        mm,
+                        _run_controlnet_guess_mode,
+                        preserve=("controlnet", "transformer"),
+                        description="ControlNet (guess mode)",
+                    )
 
                     # Expand to (pos, neg) batch with zeros for the negative branch.
                     expanded: dict = {}
@@ -526,19 +570,27 @@ class DenoiseNode(Node):
                             control_context_latents_cfg = torch.cat([control_context] * 2, dim=0)
                         control_context = control_context_latents_cfg
 
-                    with mm.default_device_scope(control_context.device):
-                        mm.ensure_module_device(
-                            controlnet,
-                            device=control_context.device,
-                            dtype=transformer_dtype,
-                        )
-                        controlnet_block_samples = controlnet(
-                            latent_model_input_list,
-                            timestep_model_input,
-                            prompt_embeds_model_input,
-                            control_context,
-                            conditioning_scale=cond_scale,
-                        )
+                    def _run_controlnet_balanced():
+                        with mm.default_device_scope(control_context.device):
+                            mm.ensure_module_device(
+                                controlnet,
+                                device=control_context.device,
+                                dtype=transformer_dtype,
+                            )
+                            return controlnet(
+                                latent_model_input_list,
+                                timestep_model_input,
+                                prompt_embeds_model_input,
+                                control_context,
+                                conditioning_scale=cond_scale,
+                            )
+
+                    controlnet_block_samples = self._run_with_oom_retry(
+                        mm,
+                        _run_controlnet_balanced,
+                        preserve=("controlnet", "transformer"),
+                        description="ControlNet (balanced/prompt mode)",
+                    )
 
                     if use_prompt_mode and controlnet_block_samples is not None:
                         controlnet_block_samples = self._apply_prompt_mode_decay(
@@ -553,13 +605,27 @@ class DenoiseNode(Node):
                     controlnet_block_samples, spatial_mask_input, latents.shape
                 )
 
-            model_out_list = transformer(
-                latent_model_input_list,
-                timestep_model_input,
-                prompt_embeds_model_input,
-                controlnet_block_samples=controlnet_block_samples,
-                return_dict=False,
-            )[0]
+            def _run_transformer():
+                return transformer(
+                    latent_model_input_list,
+                    timestep_model_input,
+                    prompt_embeds_model_input,
+                    controlnet_block_samples=controlnet_block_samples,
+                    return_dict=False,
+                )[0]
+
+            # Determine which models to preserve during OOM recovery.
+            # Always preserve transformer; also preserve controlnet if we have block samples.
+            preserve_for_transformer = ("transformer",)
+            if controlnet_block_samples is not None:
+                preserve_for_transformer = ("transformer", "controlnet")
+
+            model_out_list = self._run_with_oom_retry(
+                mm,
+                _run_transformer,
+                preserve=preserve_for_transformer,
+                description="transformer",
+            )
 
             if apply_cfg:
                 # Perform CFG. Graph currently uses batch=1, so keep this fast-path.
