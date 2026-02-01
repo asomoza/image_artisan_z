@@ -654,6 +654,8 @@ class NodeGraphThread(QThread):
                 denoise_node.connect("control_mode", control_mode_node, "value")
             if not self._has_connection(denoise_node, "prompt_mode_decay", prompt_decay_node, "value"):
                 denoise_node.connect("prompt_mode_decay", prompt_decay_node, "value")
+            if not self._has_connection(denoise_node, "controlnet_spatial_mask", conditioning_node, "spatial_mask"):
+                denoise_node.connect("controlnet_spatial_mask", conditioning_node, "spatial_mask")
         else:
             denoise_node.disconnect("controlnet", model_node, "controlnet")
             denoise_node.disconnect("control_image_latents", conditioning_node, "control_image_latents")
@@ -661,6 +663,7 @@ class NodeGraphThread(QThread):
             denoise_node.disconnect("control_guidance_start_end", guidance_node, "value")
             denoise_node.disconnect("control_mode", control_mode_node, "value")
             denoise_node.disconnect("prompt_mode_decay", prompt_decay_node, "value")
+            denoise_node.disconnect("controlnet_spatial_mask", conditioning_node, "spatial_mask")
 
     @staticmethod
     def _has_connection(node, input_name: str, source_node, output_name: str) -> bool:
@@ -682,6 +685,7 @@ class NodeGraphThread(QThread):
             denoise_node.disconnect("controlnet", model_node, "controlnet")
         if denoise_node is not None and conditioning_node is not None:
             denoise_node.disconnect("control_image_latents", conditioning_node, "control_image_latents")
+            denoise_node.disconnect("controlnet_spatial_mask", conditioning_node, "spatial_mask")
         if denoise_node is not None and scale_node is not None:
             denoise_node.disconnect("controlnet_conditioning_scale", scale_node, "value")
         if denoise_node is not None and guidance_node is not None:
