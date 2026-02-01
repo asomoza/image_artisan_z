@@ -70,6 +70,9 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         self.high_range = 1.0
 
         self.layer_sliders: dict[str, QLabeledDoubleSlider] = {}
+        self.layer_linked_buttons: dict[str, LinkedButton] = {}
+        self.layer_previous_values: dict[str, float] = {}
+        self._updating_linked_sliders = False  # Prevent recursive updates
 
         # Mask editor state
         self.mask_widget: MaskWidget = None
@@ -283,6 +286,8 @@ class LoraAdvancedDialog(BaseSimpleDialog):
 
     def _build_granular_layer_sliders(self, sections_layout: QHBoxLayout) -> None:
         self.layer_sliders.clear()
+        self.layer_linked_buttons.clear()
+        self.layer_previous_values.clear()
 
         for idx, (layer_key, weight) in enumerate(self.lora.granular_transformer_weights.items()):
             layer_layout = QVBoxLayout()
@@ -295,7 +300,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
             layer_slider.setMinimumHeight(self.GRANULAR_SLIDER_MIN_HEIGHT)
             layer_slider.setRange(self.low_range, self.high_range)
             layer_slider.setValue(weight)
-            layer_slider.valueChanged.connect(lambda v, k=layer_key: self.on_granular_layer_weight_changed(k, v))
+            layer_slider.valueChanged.connect(lambda v, k=layer_key: self._on_slider_value_changed(k, v))
             layer_layout.addWidget(layer_slider)
 
             layer_label = QLabel(f"L{idx + 1}")
@@ -303,8 +308,51 @@ class LoraAdvancedDialog(BaseSimpleDialog):
 
             sections_layout.addLayout(layer_layout)
             self.layer_sliders[layer_key] = layer_slider
+            self.layer_linked_buttons[layer_key] = linked_button
+            self.layer_previous_values[layer_key] = weight
+
+    def _on_slider_value_changed(self, layer_key: str, value: float) -> None:
+        """Handle slider value change, propagating to linked sliders."""
+        if self._updating_linked_sliders:
+            return
+
+        # Calculate the delta from previous value
+        previous_value = self.layer_previous_values.get(layer_key, value)
+        delta = value - previous_value
+
+        # Update the previous value for this slider
+        self.layer_previous_values[layer_key] = value
+
+        # Check if this slider is linked
+        is_source_linked = self.layer_linked_buttons[layer_key].linked
+
+        if is_source_linked and delta != 0:
+            # Apply delta to all other linked sliders
+            self._updating_linked_sliders = True
+            try:
+                for other_key, linked_button in self.layer_linked_buttons.items():
+                    if other_key != layer_key and linked_button.linked:
+                        other_slider = self.layer_sliders[other_key]
+                        other_previous = self.layer_previous_values[other_key]
+                        new_value = other_previous + delta
+
+                        # Clamp to slider range
+                        new_value = max(self.low_range, min(self.high_range, new_value))
+
+                        # Update previous value and slider
+                        self.layer_previous_values[other_key] = new_value
+                        other_slider.setValue(new_value)
+
+                        # Update the data object for the linked slider
+                        self.lora.granular_transformer_weights[other_key] = new_value
+            finally:
+                self._updating_linked_sliders = False
+
+        # Update the data object for the source slider
+        self.on_granular_layer_weight_changed(layer_key, value)
 
     def on_granular_layer_weight_changed(self, layer_key: str, value: float) -> None:
+        """Update the LoRA data object and publish event."""
         self.lora.granular_transformer_weights[layer_key] = value
         self.event_bus.publish("lora", {"action": "update_weights", "lora": self.lora})
 
@@ -349,14 +397,22 @@ class LoraAdvancedDialog(BaseSimpleDialog):
     def on_layer_template_changed(self, index: int):
         if index == 0:
             return
-        elif index == 1:
-            for layer_key in self.lora.granular_transformer_weights.keys():
-                self.lora.granular_transformer_weights[layer_key] = 0.0
-                self.layer_sliders[layer_key].setValue(0.0)
-        elif index == 2:
-            for layer_key in self.lora.granular_transformer_weights.keys():
-                self.lora.granular_transformer_weights[layer_key] = 1.0
-                self.layer_sliders[layer_key].setValue(1.0)
+
+        # Prevent linked slider propagation during template application
+        self._updating_linked_sliders = True
+        try:
+            if index == 1:
+                for layer_key in self.lora.granular_transformer_weights.keys():
+                    self.lora.granular_transformer_weights[layer_key] = 0.0
+                    self.layer_sliders[layer_key].setValue(0.0)
+                    self.layer_previous_values[layer_key] = 0.0
+            elif index == 2:
+                for layer_key in self.lora.granular_transformer_weights.keys():
+                    self.lora.granular_transformer_weights[layer_key] = 1.0
+                    self.layer_sliders[layer_key].setValue(1.0)
+                    self.layer_previous_values[layer_key] = 1.0
+        finally:
+            self._updating_linked_sliders = False
 
         self.event_bus.publish("lora", {"action": "update_weights", "lora": self.lora})
 
