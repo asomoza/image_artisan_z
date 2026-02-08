@@ -305,6 +305,7 @@ class GenerationModule(BaseModule):
                     "guidance_scale",
                     "guidance_start_end",
                     "scheduler",
+                    "model",
                     "loras",
                     "source_image",
                     "strength",
@@ -313,6 +314,8 @@ class GenerationModule(BaseModule):
                     # as it's a runtime config on ModelManager, not a shareable setting
                 ]
                 subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
+
+                self._apply_loaded_graph_subset(subset)
 
                 # set local values that are not settings-backed
                 if "source_image" in subset:
@@ -378,6 +381,40 @@ class GenerationModule(BaseModule):
                 self.generation_thread.remove_lora(lora_data_object)
 
         database.disconnect()
+
+    def _apply_loaded_graph_subset(self, subset: dict) -> None:
+        if not subset:
+            return
+
+        for key in (
+            "image_width",
+            "image_height",
+            "num_inference_steps",
+            "guidance_scale",
+            "guidance_start_end",
+            "scheduler",
+            "strength",
+            "model",
+        ):
+            if key in subset:
+                self.gen_settings.apply_change(key, subset.get(key))
+
+        if "model" in subset:
+            self.selected_model = self.gen_settings.model
+            try:
+                self.generation_thread.update_model(self.selected_model)
+            except Exception:
+                pass
+
+        if "num_inference_steps" in subset:
+            try:
+                steps = int(subset.get("num_inference_steps", self.gen_settings.num_inference_steps))
+            except Exception:
+                steps = self.gen_settings.num_inference_steps
+            steps = max(1, steps)
+            self.progress_bar.setMaximum(steps)
+            if not self.generating:
+                self.progress_bar.setValue(0)
 
     #########################################################
     ## SUBSCRIBED BUS EVENTS
@@ -698,6 +735,7 @@ class GenerationModule(BaseModule):
                 "guidance_scale",
                 "guidance_start_end",
                 "scheduler",
+                "model",
                 "source_image",
                 "strength",
                 "source_image_mask",
@@ -707,6 +745,8 @@ class GenerationModule(BaseModule):
             ]
             subset = extract_dict_from_json_graph(json_graph, wanted_nodes)
             self.generation_thread.load_json_graph(json_graph)
+
+            self._apply_loaded_graph_subset(subset)
 
             # Keep runtime state in sync so panels/dialogs reflect what was loaded.
             self.source_image_path = subset.get("source_image")

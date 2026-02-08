@@ -92,6 +92,36 @@ def extract_dict_from_json_graph(json_graph: Any, wanted: Iterable[Any], *, incl
             out[out_key] = value
             continue
 
+        # Special case: "model" is stored at the top-level of the node dict
+        if node_name == "model":
+            node = by_name.get(node_name)
+            if not node:
+                if include_missing:
+                    out[out_key] = default
+                continue
+
+            model_name = node.get("model_name")
+            path = node.get("path")
+            version = node.get("version")
+            model_type = node.get("model_type")
+            model_format = node.get("model_format")
+            model_id = node.get("id", 0)
+
+            if model_name is None and path is None and version is None and model_type is None:
+                if include_missing:
+                    out[out_key] = default
+                continue
+
+            out[out_key] = {
+                "name": model_name or "",
+                "version": version or "",
+                "model_format": model_format or "",
+                "filepath": path or "",
+                "model_type": model_type or 0,
+                "id": model_id or 0,
+            }
+            continue
+
         node = by_name.get(node_name)
         if not node:
             if include_missing:

@@ -19,7 +19,7 @@ from iartisanz.modules.generation.constants import SCHEDULER_NAME_CLASS_MAPPING,
 from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 from iartisanz.modules.generation.panels.base_panel import BasePanel
 from iartisanz.modules.generation.widgets.image_dimensions_widget import ImageDimensionsWidget
-from iartisanz.utils.json_utils import cast_number_range, cast_scheduler
+from iartisanz.utils.json_utils import cast_model, cast_number_range, cast_scheduler
 
 
 if TYPE_CHECKING:
@@ -352,7 +352,7 @@ class GenerationPanel(BasePanel):
             guidance_scale = data.get("guidance_scale", self.gen_settings.guidance_scale)
             guidance_start_end = data.get("guidance_start_end", self.gen_settings.guidance_start_end)
             scheduler = data.get("scheduler", self.gen_settings.scheduler)
-            model = data.get("model", self.gen_settings.model)
+            model = cast_model(data.get("model", self.gen_settings.model))
             # use_torch_compile and attention_backend are NOT loaded from graphs -
             # they are runtime configs. Always use the user's persisted settings.
             use_torch_compile = self.gen_settings.use_torch_compile
