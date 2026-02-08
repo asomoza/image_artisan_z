@@ -539,13 +539,22 @@ class NodeGraphThread(QThread):
         if latents_node is not None:
             conditioning.connect("init_image", latents_node, "source_image")
 
-        # NEW: Create differential_diffusion_active flag
+        # NEW: Create or reuse differential_diffusion_active flag
         # This will be set to True when source_image_mask exists
         from iartisanz.modules.generation.graph.nodes.boolean_node import BooleanNode
 
-        diff_diff_flag = BooleanNode(value=False)
-        diff_diff_flag.enabled = True
-        self.node_graph.add_node(diff_diff_flag, "differential_diffusion_active")
+        diff_diff_flag = self.node_graph.get_node_by_name("differential_diffusion_active")
+        if diff_diff_flag is None:
+            diff_diff_flag = BooleanNode(value=False)
+            diff_diff_flag.enabled = True
+            self.node_graph.add_node(diff_diff_flag, "differential_diffusion_active")
+        else:
+            diff_diff_flag.enabled = True
+
+        # Initialize flag based on whether a source image mask is already present.
+        has_source_mask = self.node_graph.get_node_by_name("source_image_mask") is not None
+        diff_diff_flag.update_value(bool(has_source_mask))
+
         conditioning.connect("differential_diffusion_active", diff_diff_flag, "value")
 
         self.node_graph.add_node(conditioning, "controlnet_conditioning")
@@ -720,6 +729,9 @@ class NodeGraphThread(QThread):
         # Optional inpaint inputs for ControlNet.
         self.node_graph.delete_node_by_name("control_init_image")
         self.node_graph.delete_node_by_name("control_mask_image")
+
+        # Cleanup differential diffusion flag created for ControlNet.
+        self.node_graph.delete_node_by_name("differential_diffusion_active")
 
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)
