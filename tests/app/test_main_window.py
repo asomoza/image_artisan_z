@@ -48,7 +48,7 @@ def test_init_initializes_database_and_loads_default_module(monkeypatch):
     # Database initialized and tables created
     assert w.database.path == "/data/app.db"
     created = [name for (name, _) in w.database.tables]
-    assert created == ["lora_model", "model"]
+    assert created == ["lora_model", "model", "component", "model_component", "app_meta"]
 
     # GUI defaults and module loading
     assert w.gui_options["left_menu_expanded"] is True

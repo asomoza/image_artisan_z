@@ -267,6 +267,7 @@ class NodeGraphThread(QThread):
             model_name=model_data_object.name,
             version=model_data_object.version,
             model_type=model_data_object.model_type,
+            db_model_id=model_data_object.id if model_data_object.id else None,
         )
 
     def add_lora(self, lora_data: LoraDataObject):

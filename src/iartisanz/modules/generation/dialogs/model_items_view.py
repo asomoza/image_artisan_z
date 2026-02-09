@@ -268,16 +268,35 @@ class ModelItemsView(QWidget):
 
             self.model_items_loader_thread.start()
 
-    def add_single_item_from_path(self, filepath: str, filename: str, item_format: int):
+    def add_single_item_from_path(
+        self, filepath: str, filename: str, item_format: int, *, component_mapping: dict | None = None
+    ):
         database = Database(os.path.join(self.directories.data_path, "app.db"))
         root_filename, _ = os.path.splitext(filename)
         image_buffer = None
 
         if item_format == 1:
-            transformer_path = os.path.join(
-                filepath, "transformer", "diffusion_pytorch_model-00001-of-00002.safetensors"
-            )
-            hash = calculate_file_hash(transformer_path)
+            # For diffusers models, try to build a composite hash from component hashes
+            if component_mapping:
+                # Use sorted component IDs as a composite hash
+                hash = "comp-" + "-".join(str(component_mapping.get(t, 0)) for t in ("tokenizer", "text_encoder", "transformer", "vae"))
+            else:
+                transformer_path = os.path.join(
+                    filepath, "transformer", "diffusion_pytorch_model-00001-of-00002.safetensors"
+                )
+                if os.path.isfile(transformer_path):
+                    hash = calculate_file_hash(transformer_path)
+                else:
+                    # Try to find any safetensors file in transformer dir
+                    transformer_dir = os.path.join(filepath, "transformer")
+                    if os.path.isdir(transformer_dir):
+                        st_files = sorted(f for f in os.listdir(transformer_dir) if f.endswith(".safetensors"))
+                        if st_files:
+                            hash = calculate_file_hash(os.path.join(transformer_dir, st_files[0]))
+                        else:
+                            hash = calculate_file_hash(filepath)
+                    else:
+                        hash = calculate_file_hash(filepath)
         else:
             hash = calculate_file_hash(filepath)
 
@@ -301,7 +320,6 @@ class ModelItemsView(QWidget):
             else:
                 logger.info(f"Model {filepath} already exists, skipping import and deleting file.")
                 self.error.emit("Model already exists, skipping import.")
-                os.remove(filepath)
                 return
         else:
             model_item = ModelItemDataObject(
@@ -320,6 +338,22 @@ class ModelItemsView(QWidget):
                 model_item.id = database.last_insert_rowid()
             except Exception as e:
                 logger.error(f"Error inserting model item: {e}")
+
+        # Register component mappings if provided
+        if component_mapping and model_item.id:
+            try:
+                from iartisanz.app.app import get_app_database_path
+                from iartisanz.app.component_registry import ComponentRegistry
+
+                db_path = get_app_database_path()
+                if db_path:
+                    registry = ComponentRegistry(
+                        db_path,
+                        os.path.join(self.directories.models_diffusers, "_components"),
+                    )
+                    registry.register_model_components(model_item.id, component_mapping)
+            except Exception as e:
+                logger.error(f"Error registering component mappings: {e}")
 
         database.disconnect()
         self.add_model_item(model_item, image_buffer)

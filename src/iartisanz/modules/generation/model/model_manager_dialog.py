@@ -116,9 +116,115 @@ class ModelManagerDialog(BaseDialog):
 
     def on_model_imported(self, path: str):
         if path.endswith(".safetensors"):
-            self._import_safetensors_model(path)
+            if self._is_transformer_safetensors(path):
+                self._import_transformer_only(path)
+            else:
+                self._import_safetensors_model(path)
         elif os.path.isdir(path) and os.path.exists(os.path.join(path, "model_index.json")):
             self._import_diffusers_model(path)
+
+    def _is_transformer_safetensors(self, path: str) -> bool:
+        """Check if a .safetensors file is a standalone transformer."""
+        try:
+            from safetensors import safe_open
+
+            with safe_open(path, framework="pt", device="cpu") as f:
+                keys = set(f.keys())
+            # ZImageTransformer2DModel signature keys
+            return bool(keys & {"context_refiner.weight", "all_final_layer.adaLN_modulation.1.weight"})
+        except Exception:
+            return False
+
+    def _import_transformer_only(self, path: str):
+        """Import a standalone transformer .safetensors and auto-detect compatible components."""
+        from iartisanz.app.app import get_app_database_path
+        from iartisanz.app.component_registry import ComponentRegistry
+        from iartisanz.modules.generation.component_compatibility import detect_transformer_architecture
+
+        db_path = get_app_database_path()
+        if db_path is None:
+            self.show_error("Database not available for transformer import.")
+            return
+
+        components_base_dir = os.path.join(self.directories.models_diffusers, "_components")
+        registry = ComponentRegistry(db_path, components_base_dir)
+
+        architecture = detect_transformer_architecture(path)
+        if architecture is None:
+            self.show_error("Could not detect transformer architecture from safetensors file.")
+            return
+
+        compatible = registry.find_compatible_components(architecture)
+        if not all(comp_type in compatible for comp_type in ("text_encoder", "vae", "tokenizer")):
+            self.show_error(
+                "Cannot import transformer: no compatible text_encoder, VAE, or tokenizer found. "
+                "Import a full diffusers model first."
+            )
+            return
+
+        # Copy transformer to _components
+        os.makedirs(components_base_dir, exist_ok=True)
+        transformer_dir = os.path.join(components_base_dir, "transformer")
+        os.makedirs(transformer_dir, exist_ok=True)
+
+        from iartisanz.utils.model_utils import calculate_file_hash_xxhash
+
+        content_hash = calculate_file_hash_xxhash(path)
+        dest_dir = os.path.join(transformer_dir, content_hash)
+
+        if not os.path.exists(dest_dir):
+            os.makedirs(dest_dir)
+            file_name = os.path.basename(path)
+            dest_file = os.path.join(dest_dir, file_name)
+            if self.preferences.delete_model_on_import:
+                shutil.move(path, dest_file)
+            else:
+                shutil.copy2(path, dest_file)
+
+            # Copy config.json from an existing compatible transformer
+            existing_transformers = registry.find_compatible_components(architecture).get("text_encoder", [])
+            # Actually, we need a transformer config. Find one from existing transformer components.
+            from iartisanz.utils.database import Database
+
+            db = Database(db_path)
+            rows = db.fetch_all(
+                "SELECT storage_path FROM component WHERE component_type = 'transformer' AND architecture = ?",
+                (architecture,),
+            )
+            config_copied = False
+            for (existing_path,) in rows:
+                existing_config = os.path.join(existing_path, "config.json")
+                if os.path.isfile(existing_config):
+                    shutil.copy2(existing_config, os.path.join(dest_dir, "config.json"))
+                    config_copied = True
+                    break
+
+            if not config_copied:
+                logger.warning("No config.json found for architecture %s", architecture)
+
+        comp_info = registry.register_component(
+            component_type="transformer",
+            source_path=dest_dir,
+            content_hash=content_hash,
+            architecture=architecture,
+        )
+
+        # Create model entry and link components
+        model_name = os.path.splitext(os.path.basename(path))[0]
+        if len(model_name) > 20:
+            display_name = model_name[:20] + "..."
+        else:
+            display_name = model_name
+
+        # Use first compatible component of each type
+        component_mapping = {"transformer": comp_info.id}
+        for comp_type in ("text_encoder", "vae", "tokenizer"):
+            component_mapping[comp_type] = compatible[comp_type][0].id
+
+        # Create the model in the DB and register components
+        self.model_items_view.add_single_item_from_path(
+            dest_dir, display_name, 1, component_mapping=component_mapping
+        )
 
     def _import_safetensors_model(self, path: str):
         file_name = os.path.basename(path)
@@ -133,6 +239,10 @@ class ModelManagerDialog(BaseDialog):
         self.model_items_view.add_single_item_from_path(new_path, os.path.basename(new_path), 0)
 
     def _import_diffusers_model(self, path: str):
+        from iartisanz.app.app import get_app_database_path
+        from iartisanz.app.component_registry import COMPONENT_TYPES, ComponentRegistry
+        from iartisanz.utils.model_utils import calculate_component_hash
+
         model_dir = os.path.basename(path)
         target_dir = self.directories.models_diffusers
         new_path = self._get_unique_path(target_dir, model_dir)
@@ -142,7 +252,34 @@ class ModelManagerDialog(BaseDialog):
         else:
             shutil.copytree(path, new_path)
 
-        self.model_items_view.add_single_item_from_path(new_path, os.path.basename(new_path), 1)
+        # Register components in the registry
+        db_path = get_app_database_path()
+        component_mapping = None
+
+        if db_path is not None:
+            try:
+                components_base_dir = os.path.join(self.directories.models_diffusers, "_components")
+                registry = ComponentRegistry(db_path, components_base_dir)
+                component_mapping = {}
+
+                for comp_type in COMPONENT_TYPES:
+                    comp_dir = os.path.join(new_path, comp_type)
+                    if not os.path.isdir(comp_dir):
+                        continue
+                    content_hash = calculate_component_hash(comp_dir)
+                    comp_info = registry.register_component(
+                        component_type=comp_type,
+                        source_path=comp_dir,
+                        content_hash=content_hash,
+                    )
+                    component_mapping[comp_type] = comp_info.id
+            except Exception as e:
+                logger.error("Failed to register components during import: %s", e)
+                component_mapping = None
+
+        self.model_items_view.add_single_item_from_path(
+            new_path, os.path.basename(new_path), 1, component_mapping=component_mapping
+        )
 
     def _get_unique_path(self, target_dir: str, name: str) -> str:
         new_path = os.path.join(target_dir, name)

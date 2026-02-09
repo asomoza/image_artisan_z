@@ -25,6 +25,7 @@ class ModelItemsScannerThread(QThread):
 
         self.model_directories = model_directories
         self.image_dir = image_dir
+        self.data_path = data_path
         self.database_path = os.path.join(data_path, "app.db")
         self.database_table = database_table
 
@@ -51,8 +52,14 @@ class ModelItemsScannerThread(QThread):
                 continue
 
             for filepath in os.listdir(directory["path"]):
+                # Skip the _components directory used for deduplicated storage
+                if filepath == "_components":
+                    continue
+
                 if directory["format"] == "diffusers":
                     model_directory = os.path.join(directory["path"], filepath)
+                    if not os.path.isdir(model_directory):
+                        continue
                     total_items += 1
                     files_to_check.append(model_directory)
                 elif filepath.endswith(".safetensors"):
@@ -73,6 +80,10 @@ class ModelItemsScannerThread(QThread):
                 if self.stop_requested:
                     break
 
+                # Skip the _components directory
+                if filepath == "_components":
+                    continue
+
                 self.status_changed.emit(f"Scanning {filepath}...")
                 model_format = 0
                 image_buffer = None
@@ -81,6 +92,8 @@ class ModelItemsScannerThread(QThread):
                 if directory["format"] == "diffusers":
                     model_format = 1
                     model_directory = os.path.join(directory["path"], filepath)
+                    if not os.path.isdir(model_directory):
+                        continue
                     full_filepath = os.path.join(model_directory, "unet", "diffusion_pytorch_model.fp16.safetensors")
                     root_filename = filepath
                     filepath = model_directory
@@ -126,6 +139,10 @@ class ModelItemsScannerThread(QThread):
                     self.database.insert(self.database_table, model_item.to_dict())
                     model_item.id = self.database.last_insert_rowid()
 
+                # Populate component registry for diffusers models
+                if model_format == 1 and model_item.id is not None:
+                    self._register_components(model_item.id, filepath)
+
                 self.item_scanned.emit(model_item, image_buffer, replace)
 
                 items_processed += 1
@@ -133,3 +150,35 @@ class ModelItemsScannerThread(QThread):
 
         self.database.disconnect()
         self.finished_scanning.emit()
+
+    def _register_components(self, model_id: int, model_path: str) -> None:
+        """Register component entries for a diffusers model if not already present."""
+        try:
+            from iartisanz.app.component_registry import COMPONENT_TYPES, ComponentRegistry
+            from iartisanz.utils.model_utils import calculate_component_hash
+
+            # Determine diffusers base dir from model path
+            diffusers_dir = os.path.dirname(model_path)
+            components_base_dir = os.path.join(diffusers_dir, "_components")
+            registry = ComponentRegistry(self.database_path, components_base_dir)
+
+            if registry.model_has_components(model_id):
+                return
+
+            component_mapping: dict[str, int] = {}
+            for comp_type in COMPONENT_TYPES:
+                comp_dir = os.path.join(model_path, comp_type)
+                if not os.path.isdir(comp_dir):
+                    continue
+                content_hash = calculate_component_hash(comp_dir)
+                comp_info = registry.register_component(
+                    component_type=comp_type,
+                    source_path=comp_dir,
+                    content_hash=content_hash,
+                )
+                component_mapping[comp_type] = comp_info.id
+
+            if component_mapping:
+                registry.register_model_components(model_id, component_mapping)
+        except Exception as e:
+            logger.debug("Failed to register components for model %d: %s", model_id, e)

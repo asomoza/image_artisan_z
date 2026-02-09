@@ -149,6 +149,17 @@ def install_main_window_deps_fakes(monkeypatch, *, modules: Optional[dict[str, A
     mod_modules.MODULES = modules or {"Generation": ("Generation", FakeModule)}
     monkeypatch.setitem(sys.modules, "iartisanz.app.modules", mod_modules)
 
+    # Fake iartisanz.app.app (global accessors added by component registry)
+    mod_app_app = ModuleType("iartisanz.app.app")
+    mod_app_app.set_app_database_path = lambda path: None
+    mod_app_app.set_app_directories = lambda dirs: None
+    monkeypatch.setitem(sys.modules, "iartisanz.app.app", mod_app_app)
+
+    # Fake iartisanz.app.migration (called lazily inside init_database)
+    mod_migration = ModuleType("iartisanz.app.migration")
+    mod_migration.run_migrations = lambda db, dirs: None
+    monkeypatch.setitem(sys.modules, "iartisanz.app.migration", mod_migration)
+
     # Avoid importing real torch in MainWindow.__init__
     monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
 

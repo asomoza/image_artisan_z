@@ -85,6 +85,10 @@ class ModelManager:
         self._components: dict[ModelComponent, Any] = {}
         self._model_id: str | None = None
 
+        # Content hashes for loaded components, keyed by component type.
+        # Used by smart model switching to skip reloading unchanged components.
+        self._component_hashes: dict[ModelComponent, str] = {}
+
         # Per-thread defaults for where models should live while the graph runs.
         # Nodes should not be responsible for model placement; they run under a scope.
         self._scope_local = threading.local()
@@ -296,6 +300,14 @@ class ModelManager:
         with self._lock:
             self._use_torch_compile = bool(value)
 
+    def get_component_hash(self, component: ModelComponent) -> str | None:
+        with self._lock:
+            return self._component_hashes.get(component)
+
+    def set_component_hash(self, component: ModelComponent, hash_value: str) -> None:
+        with self._lock:
+            self._component_hashes[component] = hash_value
+
     def active_model_id(self) -> str | None:
         with self._lock:
             return self._model_id
@@ -318,6 +330,7 @@ class ModelManager:
         with self._lock:
             self._components.clear()
             self._model_id = None
+            self._component_hashes.clear()
             self._lora_sources.clear()
             self._compiled_components.clear()
             if torch.cuda.is_available():
@@ -445,6 +458,7 @@ class ModelManager:
     def clear_component(self, component: ModelComponent) -> None:
         with self._lock:
             self._components.pop(component, None)
+            self._component_hashes.pop(component, None)
             for key in [k for k in self._compiled_components.keys() if k[1] == component]:
                 self._compiled_components.pop(key, None)
             if torch.cuda.is_available():

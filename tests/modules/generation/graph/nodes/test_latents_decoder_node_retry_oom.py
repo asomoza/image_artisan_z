@@ -16,6 +16,15 @@ class FakeMM:
     def offload_to_cpu(self, component: str) -> None:
         self.offloaded.append(component)
 
+    def is_cuda_oom(self, exc: BaseException) -> bool:
+        return isinstance(exc, torch.cuda.OutOfMemoryError)
+
+    def free_vram_for_forward_pass(self, *, preserve=()):
+        for comp in ("preprocessor", "text_encoder", "controlnet", "vae", "transformer"):
+            if comp not in preserve and self.has(comp):
+                self.offload_to_cpu(comp)
+        return 1
+
 
 class FakeVae:
     def __init__(self):

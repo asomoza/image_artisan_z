@@ -1,0 +1,56 @@
+"""Architecture compatibility mapping for component reuse.
+
+Defines which text_encoder, VAE, and tokenizer architectures are compatible
+with each transformer architecture. Used for transformer-only imports to
+auto-detect usable shared components.
+"""
+from __future__ import annotations
+
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+
+ARCHITECTURE_COMPATIBILITY: dict[str, dict[str, list[str]]] = {
+    "ZImageTransformer2DModel": {
+        "text_encoder": ["Qwen3Model", "Qwen3ForCausalLM"],
+        "vae": ["AutoencoderKL"],
+        "tokenizer": ["Qwen2Tokenizer", "Qwen2TokenizerFast"],
+    },
+}
+
+# Safetensors key patterns used to detect transformer architecture.
+# Each entry maps a frozenset of "signature keys" to an architecture name.
+# A file matches if ALL signature keys are present in its tensor key set.
+_ARCHITECTURE_SIGNATURES: list[tuple[frozenset[str], str]] = [
+    (
+        frozenset({"context_refiner.weight", "all_final_layer.adaLN_modulation.1.weight"}),
+        "ZImageTransformer2DModel",
+    ),
+]
+
+
+def detect_transformer_architecture(safetensors_path: str) -> str | None:
+    """Detect transformer architecture from a .safetensors file's tensor keys.
+
+    Args:
+        safetensors_path: Path to a .safetensors file.
+
+    Returns:
+        Architecture name string if detected, None otherwise.
+    """
+    try:
+        from safetensors import safe_open
+
+        with safe_open(safetensors_path, framework="pt", device="cpu") as f:
+            keys = set(f.keys())
+
+        for signature_keys, architecture in _ARCHITECTURE_SIGNATURES:
+            if signature_keys.issubset(keys):
+                return architecture
+
+    except Exception as e:
+        logger.debug("Failed to detect architecture from %s: %s", safetensors_path, e)
+
+    return None

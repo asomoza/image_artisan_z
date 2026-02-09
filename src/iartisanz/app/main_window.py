@@ -4,6 +4,7 @@ import os
 from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSettings, QTimer
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QMainWindow, QStatusBar, QVBoxLayout, QWidget
 
+from iartisanz.app.app import set_app_database_path, set_app_directories
 from iartisanz.app.directories import DirectoriesObject
 from iartisanz.app.event_bus import EventBus
 from iartisanz.app.modules import MODULES
@@ -74,6 +75,7 @@ class MainWindow(QMainWindow):
         import torch  # noqa: F401
 
         self.database = None
+        set_app_directories(self.directories)
         self.init_database()
 
         self.settings.beginGroup("gui")
@@ -131,7 +133,9 @@ class MainWindow(QMainWindow):
             self.timer_finished = True
 
     def init_database(self):
-        self.database = Database(os.path.join(self.directories.data_path, "app.db"))
+        db_path = os.path.join(self.directories.data_path, "app.db")
+        set_app_database_path(db_path)
+        self.database = Database(db_path)
 
         # even if redundant I think it's cleaner to keep a separate table for
         # loras and full models
@@ -172,6 +176,45 @@ class MainWindow(QMainWindow):
                 "deleted BOOLEAN DEFAULT 0",
             ],
         )
+
+        self.database.create_table(
+            "component",
+            [
+                "id INTEGER PRIMARY KEY AUTOINCREMENT",
+                "component_type TEXT NOT NULL",
+                "content_hash TEXT NOT NULL UNIQUE",
+                "storage_path TEXT NOT NULL",
+                "size_bytes INTEGER DEFAULT 0",
+                "architecture TEXT",
+                "config_json TEXT",
+                "created_at TEXT DEFAULT (datetime('now'))",
+            ],
+        )
+
+        self.database.create_table(
+            "model_component",
+            [
+                "id INTEGER PRIMARY KEY AUTOINCREMENT",
+                "model_id INTEGER NOT NULL",
+                "component_type TEXT NOT NULL",
+                "component_id INTEGER NOT NULL",
+                "UNIQUE(model_id, component_type)",
+                "FOREIGN KEY (model_id) REFERENCES model(id)",
+                "FOREIGN KEY (component_id) REFERENCES component(id)",
+            ],
+        )
+
+        self.database.create_table(
+            "app_meta",
+            [
+                "key TEXT PRIMARY KEY",
+                "value TEXT",
+            ],
+        )
+
+        from iartisanz.app.migration import run_migrations
+
+        run_migrations(self.database, self.directories)
 
     def closeEvent(self, event):
         self.settings.beginGroup("main_window")
