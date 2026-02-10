@@ -5,7 +5,6 @@ import attr
 class DirectoriesObject:
     data_path = attr.ib(type=str)
     models_diffusers = attr.ib(type=str)
-    models_singlefile = attr.ib(type=str)
     models_loras = attr.ib(type=str)
     models_controlnets = attr.ib(type=str)
     outputs_images = attr.ib(type=str)

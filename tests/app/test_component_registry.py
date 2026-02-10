@@ -74,12 +74,11 @@ def _init_db(db_path: str) -> Database:
     return db
 
 
-def _insert_model(db: Database, name: str, filepath: str, model_format: int = 1) -> int:
+def _insert_model(db: Database, name: str, filepath: str) -> int:
     """Insert a model row and return its id."""
     db.insert("model", {
         "name": name,
         "filepath": filepath,
-        "model_format": model_format,
         "deleted": 0,
     })
     return db.last_insert_rowid()

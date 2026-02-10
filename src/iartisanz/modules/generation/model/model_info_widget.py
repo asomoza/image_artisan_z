@@ -146,7 +146,6 @@ class ModelInfoWidget(QWidget):
         model_data_object = ModelDataObject(
             name=self.model_item.model_data.name,
             version=self.model_item.model_data.version,
-            model_format=self.model_item.model_data.model_format,
             filepath=self.model_item.model_data.filepath,
             model_type=self.model_item.model_data.model_type,
             id=self.model_item.model_data.id,

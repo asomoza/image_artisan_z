@@ -10,7 +10,6 @@ class ModelItemDataObject:
     name: str
     version: str
     model_type: int
-    model_format: int
     hash: str
     tags: Optional[str] = None
     thumbnail: Optional[str] = None

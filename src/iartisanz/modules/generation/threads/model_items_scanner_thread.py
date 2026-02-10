@@ -56,16 +56,11 @@ class ModelItemsScannerThread(QThread):
                 if filepath == "_components":
                     continue
 
-                if directory["format"] == "diffusers":
-                    model_directory = os.path.join(directory["path"], filepath)
-                    if not os.path.isdir(model_directory):
-                        continue
-                    total_items += 1
-                    files_to_check.append(model_directory)
-                elif filepath.endswith(".safetensors"):
-                    total_items += 1
-                    full_filepath = os.path.join(directory["path"], filepath)
-                    files_to_check.append(full_filepath)
+                model_directory = os.path.join(directory["path"], filepath)
+                if not os.path.isdir(model_directory):
+                    continue
+                total_items += 1
+                files_to_check.append(model_directory)
 
         self.scan_progress.emit(items_processed, total_items)
 
@@ -85,23 +80,15 @@ class ModelItemsScannerThread(QThread):
                     continue
 
                 self.status_changed.emit(f"Scanning {filepath}...")
-                model_format = 0
                 image_buffer = None
                 replace = False
 
-                if directory["format"] == "diffusers":
-                    model_format = 1
-                    model_directory = os.path.join(directory["path"], filepath)
-                    if not os.path.isdir(model_directory):
-                        continue
-                    full_filepath = os.path.join(model_directory, "unet", "diffusion_pytorch_model.fp16.safetensors")
-                    root_filename = filepath
-                    filepath = model_directory
-                elif filepath.endswith(".safetensors"):
-                    full_filepath = os.path.join(directory["path"], filepath)
-                    filename = os.path.basename(full_filepath)
-                    root_filename, _ = os.path.splitext(filename)
-                    filepath = full_filepath
+                model_directory = os.path.join(directory["path"], filepath)
+                if not os.path.isdir(model_directory):
+                    continue
+                full_filepath = os.path.join(model_directory, "unet", "diffusion_pytorch_model.fp16.safetensors")
+                root_filename = filepath
+                filepath = model_directory
 
                 hash = calculate_file_hash(full_filepath)
                 columns = ModelItemDataObject.get_column_names()
@@ -131,7 +118,6 @@ class ModelItemsScannerThread(QThread):
                         name=(root_filename[:20] + "...") if len(root_filename) > 20 else root_filename,
                         version="1.0",
                         model_type=1,
-                        model_format=model_format,
                         hash=hash,
                         deleted=0,
                     )
@@ -139,8 +125,8 @@ class ModelItemsScannerThread(QThread):
                     self.database.insert(self.database_table, model_item.to_dict())
                     model_item.id = self.database.last_insert_rowid()
 
-                # Populate component registry for diffusers models
-                if model_format == 1 and model_item.id is not None:
+                # Populate component registry
+                if model_item.id is not None:
                     self._register_components(model_item.id, filepath)
 
                 self.item_scanned.emit(model_item, image_buffer, replace)

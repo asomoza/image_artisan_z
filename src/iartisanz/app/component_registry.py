@@ -58,13 +58,16 @@ class ComponentRegistry:
             size_bytes = os.path.getsize(source_path)
 
         if config_json is None:
-            config_path = os.path.join(source_path, "config.json")
-            if os.path.isfile(config_path):
-                try:
-                    with open(config_path, "r") as f:
-                        config_json = f.read()
-                except Exception:
-                    pass
+            # Try config.json first, then tokenizer_config.json for tokenizers
+            for config_name in ("config.json", "tokenizer_config.json"):
+                config_path = os.path.join(source_path, config_name)
+                if os.path.isfile(config_path):
+                    try:
+                        with open(config_path, "r") as f:
+                            config_json = f.read()
+                        break
+                    except Exception:
+                        pass
 
         if architecture is None and config_json is not None:
             try:
@@ -72,6 +75,7 @@ class ComponentRegistry:
                 architecture = (
                     cfg.get("_class_name")
                     or (cfg.get("architectures") or [None])[0]
+                    or cfg.get("tokenizer_class")
                     or cfg.get("model_type")
                 )
             except Exception:

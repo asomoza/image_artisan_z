@@ -5,7 +5,6 @@ import attr
 class ModelDataObject:
     name: str = attr.ib(default="")
     version: str = attr.ib(default="")
-    model_format: str = attr.ib(default="")
     filepath: str = attr.ib(default="")
     model_type: int = attr.ib(default=0)
     id: int = attr.ib(default=0)
@@ -18,7 +17,8 @@ class ModelDataObject:
     @classmethod
     def from_dict(cls, data):
         """Creates a ModelDataObject from a dictionary."""
-        return cls(**data)
+        valid_keys = {field.name for field in attr.fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in valid_keys})
 
     def to_dict(self):
         """Converts the ModelDataObject to a dictionary."""

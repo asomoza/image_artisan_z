@@ -215,7 +215,6 @@ def _make_dirs(tmp_path: Path):
     return DirectoriesObject(
         data_path=str(base / "data"),
         models_diffusers=str(base / "models_diffusers"),
-        models_singlefile=str(base / "models_singlefile"),
         models_loras=str(base / "models_loras"),
         models_controlnets=str(base / "models_controlnets"),
         outputs_images=str(base / "outputs_images"),

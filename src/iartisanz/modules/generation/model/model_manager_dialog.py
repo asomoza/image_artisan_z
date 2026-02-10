@@ -48,12 +48,7 @@ class ModelManagerDialog(BaseDialog):
             "path": self.directories.models_diffusers,
             "format": "diffusers",
         }
-
-        singlefile_directory = {
-            "path": self.directories.models_singlefile,
-            "format": "singlefile",
-        }
-        self.model_directories = (diffusers_directory, singlefile_directory)
+        self.model_directories = (diffusers_directory,)
         self.database_table = "model"
 
         image_dir = os.path.join(self.directories.data_path, "models")
@@ -125,21 +120,20 @@ class ModelManagerDialog(BaseDialog):
 
     def _is_transformer_safetensors(self, path: str) -> bool:
         """Check if a .safetensors file is a standalone transformer."""
-        try:
-            from safetensors import safe_open
+        from iartisanz.modules.generation.component_compatibility import detect_transformer_architecture
 
-            with safe_open(path, framework="pt", device="cpu") as f:
-                keys = set(f.keys())
-            # ZImageTransformer2DModel signature keys
-            return bool(keys & {"context_refiner.weight", "all_final_layer.adaLN_modulation.1.weight"})
-        except Exception:
-            return False
+        architecture = detect_transformer_architecture(path)
+        if architecture is not None:
+            logger.debug("Detected transformer architecture '%s' in %s", architecture, path)
+            return True
+        return False
 
     def _import_transformer_only(self, path: str):
-        """Import a standalone transformer .safetensors and auto-detect compatible components."""
+        """Import a standalone transformer .safetensors into a proper model directory."""
         from iartisanz.app.app import get_app_database_path
         from iartisanz.app.component_registry import ComponentRegistry
         from iartisanz.modules.generation.component_compatibility import detect_transformer_architecture
+        from iartisanz.utils.database import Database
 
         db_path = get_app_database_path()
         if db_path is None:
@@ -162,81 +156,87 @@ class ModelManagerDialog(BaseDialog):
             )
             return
 
-        # Copy transformer to _components
-        os.makedirs(components_base_dir, exist_ok=True)
-        transformer_dir = os.path.join(components_base_dir, "transformer")
+        # Build model directory: models_diffusers/{model_name}/transformer/
+        model_name = os.path.splitext(os.path.basename(path))[0]
+        model_dir = self._get_unique_path(self.directories.models_diffusers, model_name)
+        transformer_dir = os.path.join(model_dir, "transformer")
         os.makedirs(transformer_dir, exist_ok=True)
 
-        from iartisanz.utils.model_utils import calculate_file_hash_xxhash
+        dest_file = os.path.join(transformer_dir, "diffusion_pytorch_model.safetensors")
 
-        content_hash = calculate_file_hash_xxhash(path)
-        dest_dir = os.path.join(transformer_dir, content_hash)
-
-        if not os.path.exists(dest_dir):
-            os.makedirs(dest_dir)
-            file_name = os.path.basename(path)
-            dest_file = os.path.join(dest_dir, file_name)
+        needs_conversion = self._needs_key_conversion(path)
+        if needs_conversion:
+            self._convert_and_save_transformer(path, dest_file)
+            if self.preferences.delete_model_on_import:
+                os.remove(path)
+        else:
             if self.preferences.delete_model_on_import:
                 shutil.move(path, dest_file)
             else:
                 shutil.copy2(path, dest_file)
 
-            # Copy config.json from an existing compatible transformer
-            existing_transformers = registry.find_compatible_components(architecture).get("text_encoder", [])
-            # Actually, we need a transformer config. Find one from existing transformer components.
-            from iartisanz.utils.database import Database
+        # Copy config.json from an existing compatible transformer
+        db = Database(db_path)
+        rows = db.fetch_all(
+            "SELECT storage_path FROM component WHERE component_type = 'transformer' AND architecture = ?",
+            (architecture,),
+        )
+        for (existing_path,) in rows:
+            existing_config = os.path.join(existing_path, "config.json")
+            if os.path.isfile(existing_config):
+                shutil.copy2(existing_config, os.path.join(transformer_dir, "config.json"))
+                break
+        else:
+            logger.warning("No config.json found for architecture %s", architecture)
+        db.disconnect()
 
-            db = Database(db_path)
-            rows = db.fetch_all(
-                "SELECT storage_path FROM component WHERE component_type = 'transformer' AND architecture = ?",
-                (architecture,),
-            )
-            config_copied = False
-            for (existing_path,) in rows:
-                existing_config = os.path.join(existing_path, "config.json")
-                if os.path.isfile(existing_config):
-                    shutil.copy2(existing_config, os.path.join(dest_dir, "config.json"))
-                    config_copied = True
-                    break
+        # Register transformer component
+        from iartisanz.utils.model_utils import calculate_component_hash
 
-            if not config_copied:
-                logger.warning("No config.json found for architecture %s", architecture)
-
+        content_hash = calculate_component_hash(transformer_dir)
         comp_info = registry.register_component(
             component_type="transformer",
-            source_path=dest_dir,
+            source_path=transformer_dir,
             content_hash=content_hash,
             architecture=architecture,
         )
 
-        # Create model entry and link components
-        model_name = os.path.splitext(os.path.basename(path))[0]
-        if len(model_name) > 20:
-            display_name = model_name[:20] + "..."
-        else:
-            display_name = model_name
-
-        # Use first compatible component of each type
+        # Build component mapping: new transformer + existing compatible shared components
+        display_name = model_name if len(model_name) <= 20 else model_name[:20] + "..."
         component_mapping = {"transformer": comp_info.id}
         for comp_type in ("text_encoder", "vae", "tokenizer"):
             component_mapping[comp_type] = compatible[comp_type][0].id
 
-        # Create the model in the DB and register components
         self.model_items_view.add_single_item_from_path(
-            dest_dir, display_name, 1, component_mapping=component_mapping
+            model_dir, display_name, component_mapping=component_mapping
         )
 
+    @staticmethod
+    def _needs_key_conversion(path: str) -> bool:
+        """Check if a safetensors file uses original (non-diffusers) key format."""
+        from safetensors import safe_open
+
+        with safe_open(path, framework="pt", device="cpu") as f:
+            for key in f.keys():
+                return key.startswith("model.diffusion_model.")
+        return False
+
+    @staticmethod
+    def _convert_and_save_transformer(src_path: str, dest_path: str) -> None:
+        """Convert original-format keys to diffusers format and save."""
+        from diffusers.loaders.single_file_utils import convert_z_image_transformer_checkpoint_to_diffusers
+        from safetensors.torch import load_file, save_file
+
+        logger.info("Converting transformer keys from original to diffusers format...")
+        checkpoint = load_file(src_path)
+        converted = convert_z_image_transformer_checkpoint_to_diffusers(checkpoint)
+        save_file(converted, dest_path)
+        logger.info("Conversion complete: %s", dest_path)
+
     def _import_safetensors_model(self, path: str):
-        file_name = os.path.basename(path)
-        target_dir = self.directories.models_singlefile
-        new_path = self._get_unique_path(target_dir, file_name)
-
-        if self.preferences.delete_lora_on_import:
-            shutil.move(path, new_path)
-        else:
-            shutil.copy2(path, new_path)
-
-        self.model_items_view.add_single_item_from_path(new_path, os.path.basename(new_path), 0)
+        self.show_error(
+            "Unsupported single-file format. Import a diffusers model or a transformer-only .safetensors file."
+        )
 
     def _import_diffusers_model(self, path: str):
         from iartisanz.app.app import get_app_database_path
@@ -278,7 +278,7 @@ class ModelManagerDialog(BaseDialog):
                 component_mapping = None
 
         self.model_items_view.add_single_item_from_path(
-            new_path, os.path.basename(new_path), 1, component_mapping=component_mapping
+            new_path, os.path.basename(new_path), component_mapping=component_mapping
         )
 
     def _get_unique_path(self, target_dir: str, name: str) -> str:
@@ -313,7 +313,6 @@ class ModelManagerDialog(BaseDialog):
         self.selected_model = ModelDataObject(
             name=model_item_widget.model_data.name,
             version=model_item_widget.model_data.version,
-            model_format=model_item_widget.model_data.model_format,
             filepath=model_item_widget.model_data.filepath,
             model_type=model_item_widget.model_data.model_type,
             id=model_item_widget.model_data.id,

@@ -128,7 +128,7 @@ class LoraManagerDialog(BaseDialog):
             else:
                 shutil.copy2(path, model_new_path)
 
-            self.lora_items_view.add_single_item_from_path(model_new_path, file_name, 0)
+            self.lora_items_view.add_single_item_from_path(model_new_path, file_name)
 
     def on_finished_loading_loras(self):
         self.loading_loras = False

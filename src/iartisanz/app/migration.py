@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = "3"
+CURRENT_SCHEMA_VERSION = "4"
 
 
 def _get_meta(db: Database, key: str) -> str | None:
@@ -38,7 +38,7 @@ def _populate_component_registry(db: Database, directories: DirectoriesObject) -
     registry = ComponentRegistry(db.db_path, components_base_dir)
 
     rows = db.fetch_all(
-        "SELECT id, filepath, name FROM model WHERE model_format = 1 AND deleted = 0"
+        "SELECT id, filepath, name FROM model WHERE deleted = 0"
     )
 
     if not rows:
@@ -114,6 +114,50 @@ def _compact_storage(db: Database, directories: DirectoriesObject) -> None:
         logger.info("Compact storage: nothing to compact.")
 
 
+def _backfill_component_architectures(db: Database) -> None:
+    """Backfill NULL architecture on components by re-reading their config files."""
+    import json
+
+    rows = db.fetch_all(
+        "SELECT id, storage_path, component_type FROM component WHERE architecture IS NULL"
+    )
+    if not rows:
+        return
+
+    for comp_id, storage_path, comp_type in rows:
+        config_json = None
+        for config_name in ("config.json", "tokenizer_config.json"):
+            config_path = os.path.join(storage_path, config_name)
+            if os.path.isfile(config_path):
+                try:
+                    with open(config_path, "r") as f:
+                        config_json = f.read()
+                    break
+                except Exception:
+                    pass
+
+        if config_json is None:
+            continue
+
+        try:
+            cfg = json.loads(config_json)
+            architecture = (
+                cfg.get("_class_name")
+                or (cfg.get("architectures") or [None])[0]
+                or cfg.get("tokenizer_class")
+                or cfg.get("model_type")
+            )
+        except Exception:
+            continue
+
+        if architecture:
+            db.execute(
+                "UPDATE component SET architecture = ?, config_json = ? WHERE id = ?",
+                (architecture, config_json, comp_id),
+            )
+            logger.info("Backfilled architecture '%s' for component %d (%s).", architecture, comp_id, comp_type)
+
+
 def run_migrations(db: Database, directories: DirectoriesObject) -> None:
     """Run any pending database migrations."""
     version = _get_meta(db, "schema_version")
@@ -131,5 +175,12 @@ def run_migrations(db: Database, directories: DirectoriesObject) -> None:
         except Exception as e:
             logger.error("Storage compaction failed: %s", e, exc_info=True)
 
-        _set_meta(db, "schema_version", CURRENT_SCHEMA_VERSION)
-        logger.info("Migration to schema v%s complete.", CURRENT_SCHEMA_VERSION)
+    if version is None or version < "4":
+        logger.info("Backfilling component architectures...")
+        try:
+            _backfill_component_architectures(db)
+        except Exception as e:
+            logger.error("Architecture backfill failed: %s", e, exc_info=True)
+
+    _set_meta(db, "schema_version", CURRENT_SCHEMA_VERSION)
+    logger.info("Migration to schema v%s complete.", CURRENT_SCHEMA_VERSION)

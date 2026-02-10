@@ -269,36 +269,32 @@ class ModelItemsView(QWidget):
             self.model_items_loader_thread.start()
 
     def add_single_item_from_path(
-        self, filepath: str, filename: str, item_format: int, *, component_mapping: dict | None = None
+        self, filepath: str, filename: str, *, component_mapping: dict | None = None
     ):
         database = Database(os.path.join(self.directories.data_path, "app.db"))
         root_filename, _ = os.path.splitext(filename)
         image_buffer = None
 
-        if item_format == 1:
-            # For diffusers models, try to build a composite hash from component hashes
-            if component_mapping:
-                # Use sorted component IDs as a composite hash
-                hash = "comp-" + "-".join(str(component_mapping.get(t, 0)) for t in ("tokenizer", "text_encoder", "transformer", "vae"))
+        if component_mapping:
+            # Use sorted component IDs as a composite hash
+            hash = "comp-" + "-".join(str(component_mapping.get(t, 0)) for t in ("tokenizer", "text_encoder", "transformer", "vae"))
+        else:
+            transformer_path = os.path.join(
+                filepath, "transformer", "diffusion_pytorch_model-00001-of-00002.safetensors"
+            )
+            if os.path.isfile(transformer_path):
+                hash = calculate_file_hash(transformer_path)
             else:
-                transformer_path = os.path.join(
-                    filepath, "transformer", "diffusion_pytorch_model-00001-of-00002.safetensors"
-                )
-                if os.path.isfile(transformer_path):
-                    hash = calculate_file_hash(transformer_path)
-                else:
-                    # Try to find any safetensors file in transformer dir
-                    transformer_dir = os.path.join(filepath, "transformer")
-                    if os.path.isdir(transformer_dir):
-                        st_files = sorted(f for f in os.listdir(transformer_dir) if f.endswith(".safetensors"))
-                        if st_files:
-                            hash = calculate_file_hash(os.path.join(transformer_dir, st_files[0]))
-                        else:
-                            hash = calculate_file_hash(filepath)
+                # Try to find any safetensors file in transformer dir
+                transformer_dir = os.path.join(filepath, "transformer")
+                if os.path.isdir(transformer_dir):
+                    st_files = sorted(f for f in os.listdir(transformer_dir) if f.endswith(".safetensors"))
+                    if st_files:
+                        hash = calculate_file_hash(os.path.join(transformer_dir, st_files[0]))
                     else:
                         hash = calculate_file_hash(filepath)
-        else:
-            hash = calculate_file_hash(filepath)
+                else:
+                    hash = calculate_file_hash(filepath)
 
         columns = ModelItemDataObject.get_column_names()
         existing_item = database.select_one(self.database_table, columns=columns, where={"hash": hash})
@@ -328,7 +324,6 @@ class ModelItemsView(QWidget):
                 name=(root_filename[:20] + "...") if len(root_filename) > 20 else root_filename,
                 version="1.0",
                 model_type=1,
-                model_format=item_format,
                 hash=hash,
                 deleted=0,
             )
@@ -465,10 +460,7 @@ class ModelItemsView(QWidget):
 
         if model_data is not None:
             try:
-                if model_data.model_format == 1:
-                    shutil.rmtree(model_data.filepath)
-                else:
-                    os.remove(model_data.filepath)
+                shutil.rmtree(model_data.filepath)
             except Exception as e:
                 logger.error(f"Error deleting model item: {e}")
                 self.error.emit("Model files not found.")

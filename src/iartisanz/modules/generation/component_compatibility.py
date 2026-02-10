@@ -24,8 +24,17 @@ ARCHITECTURE_COMPATIBILITY: dict[str, dict[str, list[str]]] = {
 # Each entry maps a frozenset of "signature keys" to an architecture name.
 # A file matches if ALL signature keys are present in its tensor key set.
 _ARCHITECTURE_SIGNATURES: list[tuple[frozenset[str], str]] = [
+    # Diffusers key format (bare keys)
     (
         frozenset({"context_refiner.weight", "all_final_layer.adaLN_modulation.1.weight"}),
+        "ZImageTransformer2DModel",
+    ),
+    # Original key format (model.diffusion_model. prefix)
+    (
+        frozenset({
+            "model.diffusion_model.final_layer.adaLN_modulation.1.weight",
+            "model.diffusion_model.context_refiner.0.attention.out.weight",
+        }),
         "ZImageTransformer2DModel",
     ),
 ]

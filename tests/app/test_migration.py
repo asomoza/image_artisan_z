@@ -172,7 +172,6 @@ class TestPopulateComponentRegistry:
         db.insert("model", {
             "name": "TestModel",
             "filepath": model_dir,
-            "model_format": 1,
             "deleted": 0,
         })
         model_id = db.last_insert_rowid()
@@ -200,9 +199,9 @@ class TestPopulateComponentRegistry:
         _create_diffusers_model(model_a_dir, vae_tensors=shared_vae, te_tensors=shared_te)
         _create_diffusers_model(model_b_dir, vae_tensors=shared_vae, te_tensors=shared_te)
 
-        db.insert("model", {"name": "ModelA", "filepath": model_a_dir, "model_format": 1, "deleted": 0})
+        db.insert("model", {"name": "ModelA", "filepath": model_a_dir, "deleted": 0})
         id_a = db.last_insert_rowid()
-        db.insert("model", {"name": "ModelB", "filepath": model_b_dir, "model_format": 1, "deleted": 0})
+        db.insert("model", {"name": "ModelB", "filepath": model_b_dir, "deleted": 0})
         id_b = db.last_insert_rowid()
 
         _populate_component_registry(db, dirs)
@@ -234,19 +233,18 @@ class TestPopulateComponentRegistry:
 
         model_dir = os.path.join(dirs.models_diffusers, "Deleted")
         _create_diffusers_model(model_dir)
-        db.insert("model", {"name": "Deleted", "filepath": model_dir, "model_format": 1, "deleted": 1})
+        db.insert("model", {"name": "Deleted", "filepath": model_dir, "deleted": 1})
 
         _populate_component_registry(db, dirs)
 
         rows = db.fetch_all("SELECT COUNT(*) FROM component")
         assert rows[0][0] == 0
 
-    def test_skips_non_diffusers_models(self, migration_env):
+    def test_skips_missing_model_dir(self, migration_env):
         db, dirs, tmp_path = migration_env
 
-        model_dir = os.path.join(dirs.models_diffusers, "SingleFile")
-        os.makedirs(model_dir, exist_ok=True)
-        db.insert("model", {"name": "SingleFile", "filepath": model_dir, "model_format": 0, "deleted": 0})
+        missing_dir = os.path.join(dirs.models_diffusers, "MissingModel")
+        db.insert("model", {"name": "MissingModel", "filepath": missing_dir, "deleted": 0})
 
         _populate_component_registry(db, dirs)
 
@@ -258,7 +256,7 @@ class TestPopulateComponentRegistry:
 
         model_dir = os.path.join(dirs.models_diffusers, "M")
         _create_diffusers_model(model_dir)
-        db.insert("model", {"name": "M", "filepath": model_dir, "model_format": 1, "deleted": 0})
+        db.insert("model", {"name": "M", "filepath": model_dir, "deleted": 0})
 
         _populate_component_registry(db, dirs)
         count_before = db.fetch_all("SELECT COUNT(*) FROM component")[0][0]
@@ -286,7 +284,7 @@ class TestRunMigrations:
 
         model_dir = os.path.join(dirs.models_diffusers, "M")
         _create_diffusers_model(model_dir)
-        db.insert("model", {"name": "M", "filepath": model_dir, "model_format": 1, "deleted": 0})
+        db.insert("model", {"name": "M", "filepath": model_dir, "deleted": 0})
 
         run_migrations(db, dirs)
         count_1 = db.fetch_all("SELECT COUNT(*) FROM component")[0][0]
@@ -302,7 +300,7 @@ class TestRunMigrations:
 
         model_dir = os.path.join(dirs.models_diffusers, "M")
         _create_diffusers_model(model_dir)
-        db.insert("model", {"name": "M", "filepath": model_dir, "model_format": 1, "deleted": 0})
+        db.insert("model", {"name": "M", "filepath": model_dir, "deleted": 0})
 
         run_migrations(db, dirs)
 

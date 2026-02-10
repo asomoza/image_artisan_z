@@ -28,7 +28,6 @@ def test_check_initial_setup_returns_false_when_any_required_directory_is_missin
         # directories: missing outputs_source_images
         "data_path": "/data",
         "models_diffusers": "/models/diffusers",
-        "models_singlefile": "/models/singlefile",
         "models_loras": "/models/loras",
         "outputs_images": "/outputs/images",
         "outputs_source_images": None,
@@ -50,7 +49,6 @@ def test_check_initial_setup_returns_false_when_any_required_directory_is_missin
 
     assert app.directories.data_path == "/data"
     assert app.directories.models_diffusers == "/models/diffusers"
-    assert app.directories.models_singlefile == "/models/singlefile"
     assert app.directories.models_loras == "/models/loras"
     assert app.directories.outputs_images == "/outputs/images"
     assert app.directories.outputs_source_images is None
@@ -61,7 +59,6 @@ def test_check_initial_setup_returns_true_when_all_required_directories_are_set(
     settings = {
         "data_path": "/data",
         "models_diffusers": "/models/diffusers",
-        "models_singlefile": "/models/singlefile",
         "models_loras": "/models/loras",
         "models_controlnets": "/models/controlnet",
         "outputs_images": "/outputs/images",
