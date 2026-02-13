@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = "4"
+CURRENT_SCHEMA_VERSION = "5"
 
 
 def _get_meta(db: Database, key: str) -> str | None:
@@ -59,9 +59,20 @@ def _populate_component_registry(db: Database, directories: DirectoriesObject) -
         for comp_type in COMPONENT_TYPES:
             comp_dir = os.path.join(filepath, comp_type)
             if not os.path.isdir(comp_dir):
-                # Follow symlinks — the directory might already be a symlink
-                if os.path.islink(comp_dir) and os.path.isdir(os.path.realpath(comp_dir)):
-                    comp_dir = os.path.realpath(comp_dir)
+                # Directory missing — may already be deduplicated into _components/
+                # or may be a legacy symlink. Try resolving from registry.
+                if os.path.islink(comp_dir):
+                    # Legacy symlink — resolve to real path
+                    real_path = os.path.realpath(comp_dir)
+                    if os.path.isdir(real_path):
+                        comp_dir = real_path
+                    else:
+                        logger.warning(
+                            "Component registry: broken symlink '%s' for model '%s', skipping.",
+                            comp_type,
+                            name,
+                        )
+                        continue
                 else:
                     logger.warning(
                         "Component registry: component '%s' not found for model '%s', skipping.",
@@ -95,7 +106,7 @@ def _populate_component_registry(db: Database, directories: DirectoriesObject) -
 
 
 def _compact_storage(db: Database, directories: DirectoriesObject) -> None:
-    """Consolidate shared components into _components/ and symlink originals."""
+    """Consolidate shared components into _components/ and remove model-local duplicates."""
     from iartisanz.app.component_registry import ComponentRegistry
 
     components_base_dir = os.path.join(directories.models_diffusers, "_components")
@@ -103,11 +114,11 @@ def _compact_storage(db: Database, directories: DirectoriesObject) -> None:
 
     stats = registry.compact_shared_components()
 
-    if stats["moved"] or stats["symlinked"]:
+    if stats["moved"] or stats["deduplicated"]:
         logger.info(
-            "Compact storage: moved %d components, created %d symlinks, saved ~%.1f MB.",
+            "Compact storage: moved %d components, deduplicated %d copies, saved ~%.1f MB.",
             stats["moved"],
-            stats["symlinked"],
+            stats["deduplicated"],
             stats["bytes_saved"] / (1024 * 1024),
         )
     else:
@@ -158,6 +169,38 @@ def _backfill_component_architectures(db: Database) -> None:
             logger.info("Backfilled architecture '%s' for component %d (%s).", architecture, comp_id, comp_type)
 
 
+def _remove_legacy_symlinks(directories: DirectoriesObject) -> None:
+    """Remove any legacy symlinks in model directories.
+
+    Previous versions replaced shared component directories with symlinks to
+    _components/. This migration removes those symlinks — the canonical data
+    is safe in _components/ and the registry resolves paths from the DB.
+    """
+    models_dir = directories.models_diffusers
+    if not os.path.isdir(models_dir):
+        return
+
+    component_subdirs = ("tokenizer", "text_encoder", "transformer", "vae")
+    removed = 0
+
+    for entry in os.listdir(models_dir):
+        if entry == "_components":
+            continue
+        model_dir = os.path.join(models_dir, entry)
+        if not os.path.isdir(model_dir):
+            continue
+
+        for comp_name in component_subdirs:
+            comp_path = os.path.join(model_dir, comp_name)
+            if os.path.islink(comp_path):
+                os.remove(comp_path)
+                removed += 1
+                logger.info("Migration v5: removed legacy symlink %s", comp_path)
+
+    if removed:
+        logger.info("Migration v5: removed %d legacy symlinks.", removed)
+
+
 def run_migrations(db: Database, directories: DirectoriesObject) -> None:
     """Run any pending database migrations."""
     version = _get_meta(db, "schema_version")
@@ -181,6 +224,13 @@ def run_migrations(db: Database, directories: DirectoriesObject) -> None:
             _backfill_component_architectures(db)
         except Exception as e:
             logger.error("Architecture backfill failed: %s", e, exc_info=True)
+
+    if version is None or version < "5":
+        logger.info("Removing legacy symlinks...")
+        try:
+            _remove_legacy_symlinks(directories)
+        except Exception as e:
+            logger.error("Legacy symlink removal failed: %s", e, exc_info=True)
 
     _set_meta(db, "schema_version", CURRENT_SCHEMA_VERSION)
     logger.info("Migration to schema v%s complete.", CURRENT_SCHEMA_VERSION)

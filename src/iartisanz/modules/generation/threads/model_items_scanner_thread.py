@@ -231,5 +231,6 @@ class ModelItemsScannerThread(QThread):
 
             if component_mapping:
                 registry.register_model_components(model_id, component_mapping)
+                registry.cleanup_after_registration(model_id, model_path)
         except Exception as e:
             logger.debug("Failed to register components for model %d: %s", model_id, e)

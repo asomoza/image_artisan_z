@@ -306,8 +306,8 @@ class TestCompactSharedComponents:
         stats = registry.compact_shared_components()
 
         assert stats["moved"] >= 1
-        # Both model dirs should now have symlinks
-        assert os.path.islink(vae_a) or os.path.islink(vae_b)
+        # Both model-local dirs should be removed (not symlinked)
+        assert not os.path.exists(vae_a) or not os.path.exists(vae_b)
 
     def test_no_op_when_no_shared_components(self, registry_env):
         registry, db, tmp_path = registry_env
@@ -322,7 +322,7 @@ class TestCompactSharedComponents:
 
         stats = registry.compact_shared_components()
         assert stats["moved"] == 0
-        assert stats["symlinked"] == 0
+        assert stats["deduplicated"] == 0
 
     def test_compact_creates_canonical_dir(self, registry_env):
         registry, db, tmp_path = registry_env

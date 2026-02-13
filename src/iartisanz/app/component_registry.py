@@ -221,14 +221,14 @@ class ComponentRegistry:
         return row is not None and row[0] >= len(COMPONENT_TYPES)
 
     def compact_shared_components(self) -> dict[str, int]:
-        """Move shared components to _components/ and replace originals with symlinks.
+        """Move shared components to canonical _components/ storage and remove model-local duplicates.
 
-        Returns dict with stats: {"moved": N, "symlinked": N, "bytes_saved": N}
+        Returns dict with stats: {"moved": N, "deduplicated": N, "bytes_saved": N}
         """
         import shutil
 
         db = self._db()
-        stats = {"moved": 0, "symlinked": 0, "bytes_saved": 0}
+        stats = {"moved": 0, "deduplicated": 0, "bytes_saved": 0}
 
         # Find components used by more than one model
         shared_rows = db.fetch_all(
@@ -246,8 +246,8 @@ class ComponentRegistry:
 
             # Already in _components/?
             if os.path.realpath(current_path).startswith(os.path.realpath(self.components_base_dir)):
-                # Still need to symlink any model dirs that point here
-                self._symlink_model_dirs(db, comp_id, comp_type, canonical_dir)
+                # Still need to remove any model-local duplicates
+                self._remove_local_duplicates(db, comp_id, comp_type)
                 continue
 
             # Move the component to _components/
@@ -266,17 +266,22 @@ class ComponentRegistry:
                 (canonical_dir, comp_id),
             )
 
-            # Replace all model-local copies with symlinks
-            link_count = self._symlink_model_dirs(db, comp_id, comp_type, canonical_dir)
-            stats["symlinked"] += link_count
-            stats["bytes_saved"] += (size_bytes or 0) * max(0, link_count)
+            # Remove all model-local duplicates
+            dedup_count = self._remove_local_duplicates(db, comp_id, comp_type)
+            stats["deduplicated"] += dedup_count
+            stats["bytes_saved"] += (size_bytes or 0) * max(0, dedup_count)
 
         return stats
 
-    def _symlink_model_dirs(self, db: Database, comp_id: int, comp_type: str, canonical_dir: str) -> int:
-        """Replace model-local component dirs with symlinks to the canonical dir.
+    def _remove_local_duplicates(self, db: Database, comp_id: int, comp_type: str) -> int:
+        """Remove model-local component directories that are now stored in canonical _components/ storage.
 
-        Returns the number of symlinks created.
+        Handles three cases:
+        - Symlink (legacy): remove the symlink
+        - Real directory (duplicate): delete the directory tree
+        - Missing: no-op
+
+        Returns the number of local copies removed.
         """
         import shutil
 
@@ -290,29 +295,46 @@ class ComponentRegistry:
             (comp_id,),
         )
 
-        link_count = 0
+        removed_count = 0
         for (model_path,) in rows:
             local_dir = os.path.join(model_path, comp_type)
 
-            # Already a symlink pointing to the right place?
             if os.path.islink(local_dir):
-                if os.path.realpath(local_dir) == os.path.realpath(canonical_dir):
-                    continue
-                # Symlink pointing elsewhere — remove and re-create
+                # Legacy symlink — remove it
                 os.remove(local_dir)
+                removed_count += 1
+                logger.info("Compact: removed legacy symlink %s", local_dir)
             elif os.path.isdir(local_dir):
-                # Real directory — verify it's a duplicate, then remove
+                # Real directory — duplicate data, remove it
                 shutil.rmtree(local_dir)
-                link_count += 1
-                logger.info("Compact: removed duplicate %s, symlinking to %s", local_dir, canonical_dir)
-            elif not os.path.exists(local_dir):
-                # Nothing there, just create the symlink
-                pass
-            else:
+                removed_count += 1
+                logger.info("Compact: removed duplicate directory %s", local_dir)
+            # Missing — nothing to do
+
+        return removed_count
+
+    def cleanup_after_registration(self, model_id: int, model_path: str) -> None:
+        """Clean up model-local component copies that already exist in canonical storage.
+
+        Call this after registering a new model's components. For each component,
+        if the canonical storage path is in _components/ (meaning the data already
+        exists there from another model), delete the model-local copy to avoid
+        duplication.
+        """
+        import shutil
+
+        components = self.get_model_components(model_id)
+        components_base_real = os.path.realpath(self.components_base_dir)
+
+        for comp_type, info in components.items():
+            # Only clean up if this component's canonical storage is in _components/
+            if not os.path.realpath(info.storage_path).startswith(components_base_real):
                 continue
 
-            os.symlink(canonical_dir, local_dir)
-            if not link_count:
-                link_count += 1
-
-        return link_count
+            local_dir = os.path.join(model_path, comp_type)
+            if os.path.islink(local_dir):
+                os.remove(local_dir)
+                logger.info("Cleanup: removed legacy symlink %s", local_dir)
+            elif os.path.isdir(local_dir):
+                shutil.rmtree(local_dir)
+                logger.info("Cleanup: removed duplicate %s (canonical copy in _components/)", local_dir)
