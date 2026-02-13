@@ -8,7 +8,7 @@ from iartisanz.modules.generation.graph.nodes.node import Node
 from iartisanz.utils.image_converters import normalize, numpy_to_pt
 
 
-class LatentsNode(Node):
+class ZImageLatentsNode(Node):
     REQUIRED_INPUTS = ["vae_scale_factor", "width", "height", "num_channels_latents", "seed"]
     OPTIONAL_INPUTS = ["image", "vae"]
     OUTPUTS = ["latents", "noise", "source_image", "has_source_image"]

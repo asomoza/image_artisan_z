@@ -31,7 +31,32 @@ LATENT_RGB_FACTORS = [
     [-0.1262, -0.0982, -0.0778],
 ]
 
-MODEL_TYPES = {1: "Z-Image Turbo", 2: "Z-Image"}
+MODEL_TYPES = {
+    1: "Z-Image Turbo",
+    2: "Z-Image",
+    3: "Flux.2 Klein 9B",
+    4: "Flux.2 Klein Base 9B",
+    5: "Flux.2 Klein 4B",
+    6: "Flux.2 Klein Base 4B",
+}
+
+# Model family groupings — used to select the correct graph / pipeline.
+ZIMAGE_MODEL_TYPES = {1, 2}
+FLUX2_MODEL_TYPES = {3, 4, 5, 6}
+
+# Distilled variants use fewer steps and no CFG.
+FLUX2_DISTILLED_MODEL_TYPES = {3, 5}
+FLUX2_BASE_MODEL_TYPES = {4, 6}
+
+# Default generation parameters per model type (num_inference_steps, guidance_scale).
+MODEL_TYPE_DEFAULTS: dict[int, dict[str, int | float]] = {
+    1: {"num_inference_steps": 9, "guidance_scale": 0.0},
+    2: {"num_inference_steps": 50, "guidance_scale": 5.0},
+    3: {"num_inference_steps": 4, "guidance_scale": 1.0},
+    4: {"num_inference_steps": 30, "guidance_scale": 4.0},
+    5: {"num_inference_steps": 4, "guidance_scale": 1.0},
+    6: {"num_inference_steps": 30, "guidance_scale": 4.0},
+}
 
 SCHEDULER_CLASS_MAPPING = {
     "DEISMultistepScheduler": DEISMultistepScheduler,

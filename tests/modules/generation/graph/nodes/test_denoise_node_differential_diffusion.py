@@ -1,9 +1,9 @@
-"""Tests for DenoiseNode differential diffusion functionality."""
+"""Tests for ZImageDenoiseNode differential diffusion functionality."""
 import numpy as np
 import torch
 
 from iartisanz.app.model_manager import ModelHandle, get_model_manager
-from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
 
 class DummyScheduler:
@@ -41,9 +41,9 @@ class DummyTransformer(torch.nn.Module):
         return (outs,)
 
 
-def _make_denoise_node_with_noise(*, device: torch.device, guidance_scale: float = 2.0) -> DenoiseNode:
-    """Create a DenoiseNode configured for differential diffusion testing."""
-    node = DenoiseNode()
+def _make_denoise_node_with_noise(*, device: torch.device, guidance_scale: float = 2.0) -> ZImageDenoiseNode:
+    """Create a ZImageDenoiseNode configured for differential diffusion testing."""
+    node = ZImageDenoiseNode()
     node.device = device
     node.dtype = torch.float32
 

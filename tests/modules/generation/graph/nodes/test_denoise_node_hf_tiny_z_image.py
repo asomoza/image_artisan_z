@@ -78,10 +78,10 @@ def _run_tiny_random_z_image(
 
     from iartisanz.app.model_manager import get_model_manager
     from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
-    from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
-    from iartisanz.modules.generation.graph.nodes.latents_node import LatentsNode
+    from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
+    from iartisanz.modules.generation.graph.nodes.zimage_latents_node import ZImageLatentsNode
     from iartisanz.modules.generation.graph.nodes.number_node import NumberNode
-    from iartisanz.modules.generation.graph.nodes.prompt_encode_node import PromptEncoderNode
+    from iartisanz.modules.generation.graph.nodes.zimage_prompt_encode_node import ZImagePromptEncoderNode
     from iartisanz.modules.generation.graph.nodes.scheduler_node import SchedulerNode
     from iartisanz.modules.generation.graph.nodes.zimage_model_node import ZImageModelNode
 
@@ -103,11 +103,11 @@ def _run_tiny_random_z_image(
         model_type="Z-Image Turbo",
     )
 
-    prompt_node = PromptEncoderNode()
+    prompt_node = ZImagePromptEncoderNode()
     prompt_node.positive_prompt = PROMPT
     prompt_node.negative_prompt = NEG_PROMPT
 
-    latents_node = LatentsNode()
+    latents_node = ZImageLatentsNode()
     latents_node.width = SIZE
     latents_node.height = SIZE
     latents_node.seed = SEED
@@ -136,7 +136,7 @@ def _run_tiny_random_z_image(
 
     steps_node = NumberNode(number=STEPS)
     guidance_node = NumberNode(number=GUIDANCE_SCALE)
-    denoise_node = DenoiseNode()
+    denoise_node = ZImageDenoiseNode()
 
     prompt_node.connect("tokenizer", model_node, "tokenizer")
     prompt_node.connect("text_encoder", model_node, "text_encoder")
@@ -179,7 +179,7 @@ def _run_tiny_random_z_image(
 
     out = denoise_node.values.get("latents")
     assert isinstance(out, torch.Tensor)
-    assert out.device.type == "cpu", "DenoiseNode returns CPU latents for downstream nodes"
+    assert out.device.type == "cpu", "ZImageDenoiseNode returns CPU latents for downstream nodes"
     assert out.ndim == 4
     return out
 

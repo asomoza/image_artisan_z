@@ -5,7 +5,7 @@ from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
-class LatentsDecoderNode(Node):
+class ZImageLatentsDecoderNode(Node):
     REQUIRED_INPUTS = ["vae", "latents"]
     OUTPUTS = ["image"]
 

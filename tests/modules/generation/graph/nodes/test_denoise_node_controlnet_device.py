@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from iartisanz.app.model_manager import ModelHandle, get_model_manager
-from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
 
 class DummyScheduler:
@@ -63,8 +63,8 @@ class LazyControlNet(torch.nn.Module):
         return {0: _out}
 
 
-def _make_denoise_node(*, device: torch.device) -> DenoiseNode:
-    node = DenoiseNode()
+def _make_denoise_node(*, device: torch.device) -> ZImageDenoiseNode:
+    node = ZImageDenoiseNode()
     node.device = device
     node.dtype = torch.float32
 

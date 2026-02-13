@@ -18,6 +18,11 @@ ARCHITECTURE_COMPATIBILITY: dict[str, dict[str, list[str]]] = {
         "vae": ["AutoencoderKL"],
         "tokenizer": ["Qwen2Tokenizer", "Qwen2TokenizerFast"],
     },
+    "Flux2Transformer2DModel": {
+        "text_encoder": ["Qwen3ForCausalLM"],
+        "vae": ["AutoencoderKLFlux2"],
+        "tokenizer": ["Qwen2TokenizerFast"],
+    },
 }
 
 # Safetensors key patterns used to detect transformer architecture.
@@ -36,6 +41,11 @@ _ARCHITECTURE_SIGNATURES: list[tuple[frozenset[str], str]] = [
             "model.diffusion_model.context_refiner.0.attention.out.weight",
         }),
         "ZImageTransformer2DModel",
+    ),
+    # Flux2 Klein diffusers key format
+    (
+        frozenset({"transformer_blocks.0.ff.net.0.proj.weight", "single_transformer_blocks.0.attn.to_q.weight"}),
+        "Flux2Transformer2DModel",
     ),
 ]
 

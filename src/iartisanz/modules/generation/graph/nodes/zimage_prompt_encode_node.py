@@ -4,7 +4,7 @@ from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
-class PromptEncoderNode(Node):
+class ZImagePromptEncoderNode(Node):
     PRIORITY = 0
     REQUIRED_INPUTS = ["tokenizer", "text_encoder", "positive_prompt"]
     OPTIONAL_INPUTS = ["negative_prompt"]

@@ -42,16 +42,16 @@ class FakeVae:
 
 
 def test_latents_decoder_retries_once_on_cuda_oom(monkeypatch):
-    from iartisanz.modules.generation.graph.nodes.latents_decoder_node import LatentsDecoderNode
+    from iartisanz.modules.generation.graph.nodes.zimage_latents_decoder_node import ZImageLatentsDecoderNode
 
     mm = FakeMM()
 
     # Patch the module-level get_model_manager to return our fake manager.
-    import iartisanz.modules.generation.graph.nodes.latents_decoder_node as mod
+    import iartisanz.modules.generation.graph.nodes.zimage_latents_decoder_node as mod
 
     monkeypatch.setattr(mod, "get_model_manager", lambda: mm)
 
-    node = LatentsDecoderNode()
+    node = ZImageLatentsDecoderNode()
     node.device = torch.device("cpu")
     node.vae = FakeVae()
     node.latents = torch.zeros((1, 4, 2, 2), dtype=torch.float32)

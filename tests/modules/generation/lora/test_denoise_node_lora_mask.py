@@ -1,4 +1,4 @@
-"""Test DenoiseNode LoRA spatial mask extraction and application."""
+"""Test ZImageDenoiseNode LoRA spatial mask extraction and application."""
 
 import sys
 from pathlib import Path
@@ -13,15 +13,15 @@ project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 
-class TestDenoiseNodeExtractLoraMasks:
-    """Tests for DenoiseNode._extract_lora_masks method."""
+class TestZImageDenoiseNodeExtractLoraMasks:
+    """Tests for ZImageDenoiseNode._extract_lora_masks method."""
 
     def test_extract_masks_from_single_lora_3tuple(self):
         """Test extracting mask from a single LoRA 3-tuple."""
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         # Arrange
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         mask = create_dummy_spatial_mask(64, 64, "left_half")
         node.lora = ("test_lora", {"transformer": 0.75}, mask)
 
@@ -34,10 +34,10 @@ class TestDenoiseNodeExtractLoraMasks:
 
     def test_extract_masks_from_single_lora_2tuple_legacy(self):
         """Test that 2-tuple (legacy) format returns no masks."""
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         # Arrange
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         node.lora = ("test_lora", {"transformer": 0.75})  # 2-tuple, no mask
 
         # Act
@@ -48,10 +48,10 @@ class TestDenoiseNodeExtractLoraMasks:
 
     def test_extract_masks_from_single_lora_with_none_mask(self):
         """Test that 3-tuple with None mask returns no masks."""
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         # Arrange
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         node.lora = ("test_lora", {"transformer": 0.75}, None)  # 3-tuple with None
 
         # Act
@@ -62,10 +62,10 @@ class TestDenoiseNodeExtractLoraMasks:
 
     def test_extract_masks_from_multiple_loras(self):
         """Test extracting masks from multiple LoRAs."""
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         # Arrange
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         mask1 = create_dummy_spatial_mask(64, 64, "left_half")
         mask2 = create_dummy_spatial_mask(64, 64, "right_half")
 
@@ -88,10 +88,10 @@ class TestDenoiseNodeExtractLoraMasks:
 
     def test_extract_masks_from_mixed_tuple_lengths(self):
         """Test extracting masks from mixed 2-tuple and 3-tuple formats."""
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         # Arrange
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         mask = create_dummy_spatial_mask(64, 64, "center")
 
         node.lora = [
@@ -109,10 +109,10 @@ class TestDenoiseNodeExtractLoraMasks:
 
     def test_extract_masks_returns_empty_when_no_lora(self):
         """Test that empty dict is returned when no LoRA is set."""
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         # Arrange
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         node.lora = None
 
         # Act
@@ -122,8 +122,8 @@ class TestDenoiseNodeExtractLoraMasks:
         assert masks == {}
 
 
-class TestDenoiseNodeLoraPatching:
-    """Tests for LoRA spatial mask patching in DenoiseNode."""
+class TestZImageDenoiseNodeLoraPatching:
+    """Tests for LoRA spatial mask patching in ZImageDenoiseNode."""
 
     def test_patch_lora_adapter_integrates_with_denoise(self):
         """Test that patching works with the denoise node pattern."""
@@ -137,7 +137,7 @@ class TestDenoiseNodeLoraPatching:
         transformer = DummyTransformerWithLoRA(num_layers=4)
         mask = create_dummy_spatial_mask(64, 64, "left_half")
 
-        # Act: Patch (simulating what DenoiseNode does)
+        # Act: Patch (simulating what ZImageDenoiseNode does)
         count = patch_lora_adapter_with_spatial_mask(transformer, "test_lora", mask)
 
         # Assert
@@ -194,15 +194,15 @@ class TestDenoiseNodeLoraPatching:
         unpatch_all_lora_layers()
 
 
-class TestDenoiseNodeBackwardCompatibility:
+class TestZImageDenoiseNodeBackwardCompatibility:
     """Tests for backward compatibility with 2-tuple LoRA format."""
 
     def test_2tuple_lora_still_works(self):
         """Test that the original 2-tuple LoRA format is still supported."""
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         # Arrange
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         node.lora = ("test_lora", {"transformer": 0.75})  # 2-tuple
 
         # Act: Extract masks (should return empty)
@@ -213,10 +213,10 @@ class TestDenoiseNodeBackwardCompatibility:
 
     def test_2tuple_list_still_works(self):
         """Test that list of 2-tuples (original multi-LoRA format) still works."""
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         # Arrange
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         node.lora = [
             ("lora_1", {"transformer": 0.5}),
             ("lora_2", {"transformer": 0.7}),

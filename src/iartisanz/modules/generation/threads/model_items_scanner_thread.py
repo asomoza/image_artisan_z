@@ -86,9 +86,15 @@ class ModelItemsScannerThread(QThread):
                 model_directory = os.path.join(directory["path"], filepath)
                 if not os.path.isdir(model_directory):
                     continue
-                full_filepath = os.path.join(model_directory, "unet", "diffusion_pytorch_model.fp16.safetensors")
+                full_filepath = self._find_hash_file(model_directory)
                 root_filename = filepath
                 filepath = model_directory
+
+                if full_filepath is None:
+                    logger.warning("No hashable file found in %s, skipping", model_directory)
+                    items_processed += 1
+                    self.scan_progress.emit(items_processed, total_items)
+                    continue
 
                 hash = calculate_file_hash(full_filepath)
                 columns = ModelItemDataObject.get_column_names()
@@ -112,12 +118,13 @@ class ModelItemsScannerThread(QThread):
                                 img_bytes = image_file.read()
                             image_buffer = BytesIO(img_bytes)
                 else:
+                    model_type = self._detect_model_type(filepath)
                     model_item = ModelItemDataObject(
                         root_filename=root_filename,
                         filepath=filepath,
                         name=(root_filename[:20] + "...") if len(root_filename) > 20 else root_filename,
                         version="1.0",
-                        model_type=1,
+                        model_type=model_type,
                         hash=hash,
                         deleted=0,
                     )
@@ -136,6 +143,64 @@ class ModelItemsScannerThread(QThread):
 
         self.database.disconnect()
         self.finished_scanning.emit()
+
+    @staticmethod
+    def _find_hash_file(model_directory: str) -> str | None:
+        """Find the first .safetensors file in the transformer (or unet) subdirectory.
+
+        Tries ``transformer/`` first, then ``unet/`` for legacy layouts.
+        Returns the full path, or *None* if nothing is found.
+        """
+        for subdir in ("transformer", "unet"):
+            comp_dir = os.path.join(model_directory, subdir)
+            if not os.path.isdir(comp_dir):
+                continue
+            for fname in sorted(os.listdir(comp_dir)):
+                if fname.endswith(".safetensors"):
+                    return os.path.join(comp_dir, fname)
+        return None
+
+    @staticmethod
+    def _detect_model_type(model_path: str) -> int:
+        """Detect model type from transformer config.json and directory name.
+
+        Uses the transformer class to identify Flux2 models, then the directory
+        name to distinguish 9B/4B and distilled/base variants.
+
+        Returns:
+            Model type int (1=Z-Image Turbo, 3-6=Flux.2 Klein variants).
+        """
+        import json
+
+        config_path = os.path.join(model_path, "transformer", "config.json")
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except Exception:
+            return 1
+
+        class_name = config.get("_class_name", "")
+        if "Flux2" not in class_name:
+            return 1
+
+        # Determine 9B vs 4B from directory name, falling back to config heuristic.
+        dir_name = os.path.basename(model_path).lower()
+        if "4b" in dir_name:
+            is_4b = True
+        elif "9b" in dir_name:
+            is_4b = False
+        else:
+            # Heuristic: 9B default uses 48 attention heads; 4B uses fewer.
+            num_heads = config.get("num_attention_heads", 48)
+            is_4b = num_heads < 48
+
+        # Determine distilled vs base from directory name.
+        is_base = "base" in dir_name
+
+        if is_4b:
+            return 6 if is_base else 5  # Klein 4B Base / Klein 4B
+        else:
+            return 4 if is_base else 3  # Klein 9B Base / Klein 9B
 
     def _register_components(self, model_id: int, model_path: str) -> None:
         """Register component entries for a diffusers model if not already present."""

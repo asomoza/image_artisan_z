@@ -1,0 +1,98 @@
+import logging
+import os
+
+import torch
+from diffusers import AutoencoderKLFlux2, Flux2Transformer2DModel
+from transformers import AutoTokenizer, Qwen2TokenizerFast, Qwen3ForCausalLM
+
+from iartisanz.app.model_manager import ModelHandle, get_model_manager
+from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
+from iartisanz.modules.generation.graph.nodes.zimage_model_node import ZImageModelNode
+
+
+logger = logging.getLogger(__name__)
+
+
+class Flux2ModelNode(ZImageModelNode):
+    """Model node for loading Flux.2 Klein components.
+
+    Inherits smart-load / registry-paths logic from ZImageModelNode.
+    Overrides component loading for Flux2-specific model classes.
+    """
+
+    def _load_tokenizer(self, tokenizer_path: str):
+        mm = get_model_manager()
+        try:
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    tokenizer_path,
+                    local_files_only=True,
+                    use_fast=True,
+                    extra_special_tokens={},
+                )
+            except Exception:
+                tokenizer = Qwen2TokenizerFast.from_pretrained(
+                    tokenizer_path,
+                    local_files_only=True,
+                )
+            if tokenizer is None:
+                raise IArtisanZNodeError(
+                    "Error trying to load the tokenizer.", self.name
+                )
+            mm.register_component("tokenizer", tokenizer)
+        except OSError as e:
+            raise IArtisanZNodeError(f"Error trying to load the tokenizer: {e}", self.name) from e
+
+    def _load_text_encoder(self, text_encoder_path: str):
+        mm = get_model_manager()
+        try:
+            text_encoder = Qwen3ForCausalLM.from_pretrained(
+                text_encoder_path,
+                use_safetensors=True,
+                torch_dtype=self.dtype,
+                local_files_only=True,
+                low_cpu_mem_usage=True,
+            )
+            mm.register_component("text_encoder", text_encoder)
+        except OSError as e:
+            raise IArtisanZNodeError(f"Error trying to load the text encoder: {e}", self.name) from e
+
+    def _load_transformer(self, transformer_path: str):
+        mm = get_model_manager()
+        try:
+            transformer = Flux2Transformer2DModel.from_pretrained(
+                transformer_path,
+                use_safetensors=True,
+                torch_dtype=self.dtype,
+                local_files_only=True,
+                low_cpu_mem_usage=True,
+            )
+            mm.register_component("transformer", transformer)
+        except OSError as e:
+            raise IArtisanZNodeError(f"Error trying to load the transformer: {e}", self.name) from e
+
+    def _load_vae(self, vae_path: str):
+        mm = get_model_manager()
+        try:
+            vae = AutoencoderKLFlux2.from_pretrained(
+                vae_path,
+                use_safetensors=True,
+                torch_dtype=self.dtype,
+                local_files_only=True,
+                low_cpu_mem_usage=True,
+            )
+            mm.register_component("vae", vae)
+        except OSError as e:
+            raise IArtisanZNodeError(f"Error trying to load the VAE: {e}", self.name) from e
+
+    def _set_output_handles(self, mm):
+        self.values["tokenizer"] = ModelHandle("tokenizer")
+        self.values["text_encoder"] = ModelHandle("text_encoder")
+        self.values["transformer"] = ModelHandle("transformer")
+        self.values["vae"] = ModelHandle("vae")
+
+        transformer = mm.get_raw("transformer")
+        vae = mm.get_raw("vae")
+        # Flux2 patchifies 2x2, so real latent channels = in_channels // 4
+        self.values["num_channels_latents"] = transformer.config.in_channels // 4
+        self.values["vae_scale_factor"] = 2 ** (len(vae.config.block_out_channels) - 1)

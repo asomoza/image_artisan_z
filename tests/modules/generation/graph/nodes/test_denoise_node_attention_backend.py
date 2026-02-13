@@ -1,4 +1,4 @@
-"""Tests for DenoiseNode attention backend integration."""
+"""Tests for ZImageDenoiseNode attention backend integration."""
 
 from unittest.mock import MagicMock, patch, call
 
@@ -8,8 +8,8 @@ import torch
 from iartisanz.app.model_manager import ModelHandle, ModelManager, get_model_manager
 
 
-class TestDenoiseNodeAttentionBackend:
-    """Tests for attention backend application in DenoiseNode."""
+class TestZImageDenoiseNodeAttentionBackend:
+    """Tests for attention backend application in ZImageDenoiseNode."""
 
     def _create_mock_transformer(self):
         """Create a mock transformer with attention backend methods."""
@@ -23,10 +23,10 @@ class TestDenoiseNodeAttentionBackend:
         return mock
 
     def _create_minimal_denoise_node(self, mock_transformer):
-        """Create a minimal DenoiseNode for testing."""
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        """Create a minimal ZImageDenoiseNode for testing."""
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         node.device = torch.device("cpu")
         node.dtype = torch.float32
         node.abort = False
@@ -66,9 +66,9 @@ class TestDenoiseNodeAttentionBackend:
 
         return node
 
-    @patch("iartisanz.modules.generation.graph.nodes.denoise_node.get_model_manager")
+    @patch("iartisanz.modules.generation.graph.nodes.zimage_denoise_node.get_model_manager")
     def test_applies_attention_backend_from_model_manager(self, mock_get_mm):
-        """DenoiseNode should apply attention backend from ModelManager."""
+        """ZImageDenoiseNode should apply attention backend from ModelManager."""
         # Setup mock ModelManager
         mock_mm = MagicMock(spec=ModelManager)
         mock_mm.attention_backend = "flash"
@@ -90,7 +90,7 @@ class TestDenoiseNodeAttentionBackend:
         # Verify apply_attention_backend was called with the transformer
         mock_mm.apply_attention_backend.assert_called_once_with(mock_transformer)
 
-    @patch("iartisanz.modules.generation.graph.nodes.denoise_node.get_model_manager")
+    @patch("iartisanz.modules.generation.graph.nodes.zimage_denoise_node.get_model_manager")
     def test_applies_attention_backend_before_torch_compile(self, mock_get_mm):
         """Attention backend should be applied before torch.compile."""
         call_order = []
@@ -127,7 +127,7 @@ class TestDenoiseNodeAttentionBackend:
         assert "apply_attention_backend" in call_order
         # Note: get_compiled may or may not be in call_order depending on conditions
 
-    @patch("iartisanz.modules.generation.graph.nodes.denoise_node.get_model_manager")
+    @patch("iartisanz.modules.generation.graph.nodes.zimage_denoise_node.get_model_manager")
     def test_native_backend_resets_transformer(self, mock_get_mm):
         """Native backend should call reset on transformer."""
         mock_mm = MagicMock(spec=ModelManager)
@@ -154,10 +154,10 @@ class TestDenoiseNodeAttentionBackend:
         mock_mm.apply_attention_backend.assert_called_once()
 
 
-class TestDenoiseNodeAttentionBackendWithControlNet:
+class TestZImageDenoiseNodeAttentionBackendWithControlNet:
     """Tests for attention backend with ControlNet."""
 
-    @patch("iartisanz.modules.generation.graph.nodes.denoise_node.get_model_manager")
+    @patch("iartisanz.modules.generation.graph.nodes.zimage_denoise_node.get_model_manager")
     def test_attention_backend_works_with_controlnet(self, mock_get_mm):
         """Attention backend should work correctly with ControlNet enabled."""
         mock_mm = MagicMock(spec=ModelManager)
@@ -169,14 +169,14 @@ class TestDenoiseNodeAttentionBackendWithControlNet:
         mock_mm.ensure_module_device = MagicMock()
         mock_get_mm.return_value = mock_mm
 
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         mock_transformer = MagicMock()
         mock_transformer.dtype = torch.float32
         mock_transformer.parameters = MagicMock(return_value=iter([]))
         mock_transformer.return_value = ([torch.randn(1, 4, 8, 8)],)
 
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         node.device = torch.device("cpu")
         node.dtype = torch.float32
         node.abort = False
@@ -224,10 +224,10 @@ class TestDenoiseNodeAttentionBackendWithControlNet:
         mock_mm.apply_attention_backend.assert_called_once()
 
 
-class TestDenoiseNodeAttentionBackendWithLoRA:
+class TestZImageDenoiseNodeAttentionBackendWithLoRA:
     """Tests for attention backend with LoRA."""
 
-    @patch("iartisanz.modules.generation.graph.nodes.denoise_node.get_model_manager")
+    @patch("iartisanz.modules.generation.graph.nodes.zimage_denoise_node.get_model_manager")
     def test_attention_backend_applied_before_lora(self, mock_get_mm):
         """Attention backend should be applied (LoRA is set after)."""
         mock_mm = MagicMock(spec=ModelManager)
@@ -237,7 +237,7 @@ class TestDenoiseNodeAttentionBackendWithLoRA:
         mock_mm.resolve = MagicMock(side_effect=lambda x: x)
         mock_get_mm.return_value = mock_mm
 
-        from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+        from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 
         mock_transformer = MagicMock()
         mock_transformer.dtype = torch.float32
@@ -245,7 +245,7 @@ class TestDenoiseNodeAttentionBackendWithLoRA:
         mock_transformer.set_adapters = MagicMock()
         mock_transformer.return_value = ([torch.randn(1, 4, 8, 8)],)
 
-        node = DenoiseNode()
+        node = ZImageDenoiseNode()
         node.device = torch.device("cpu")
         node.dtype = torch.float32
         node.abort = False

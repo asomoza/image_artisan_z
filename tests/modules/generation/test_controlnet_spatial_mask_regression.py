@@ -3,7 +3,7 @@
 This test suite ensures that spatial masks with alpha channel are correctly:
 1. Loaded from files (ImageLoadNode with grayscale=True extracts alpha)
 2. Processed through ControlNetConditioningNode
-3. Applied to ControlNet blocks in DenoiseNode
+3. Applied to ControlNet blocks in ZImageDenoiseNode
 
 These tests prevent regressions where masks become all-zero due to incorrect
 handling of black-over-alpha convention used in the UI.
@@ -19,7 +19,7 @@ import torch
 
 from iartisanz.app.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.nodes.controlnet_conditioning_node import ControlNetConditioningNode
-from iartisanz.modules.generation.graph.nodes.denoise_node import DenoiseNode
+from iartisanz.modules.generation.graph.nodes.zimage_denoise_node import ZImageDenoiseNode
 from iartisanz.modules.generation.graph.nodes.image_load_node import ImageLoadNode
 
 
@@ -199,7 +199,7 @@ class TestControlNetSpatialMaskPipeline:
     """Test spatial mask through ControlNetConditioningNode."""
 
     def test_spatial_mask_passed_to_output(self):
-        """Spatial mask should be passed through to DenoiseNode."""
+        """Spatial mask should be passed through to ZImageDenoiseNode."""
         with tempfile.TemporaryDirectory() as tmpdir:
             mask_path = os.path.join(tmpdir, "test_mask.png")
             create_test_mask_image_with_alpha(mask_path, 32, 32, painted_region="left")
@@ -284,8 +284,8 @@ class TestControlNetSpatialMaskPipeline:
                 )
 
 
-class TestDenoiseNodeSpatialMaskApplication:
-    """Test that DenoiseNode correctly applies spatial masks to ControlNet blocks."""
+class TestZImageDenoiseNodeSpatialMaskApplication:
+    """Test that ZImageDenoiseNode correctly applies spatial masks to ControlNet blocks."""
 
     def test_spatial_mask_zeros_out_masked_regions(self):
         """Spatial mask should zero out ControlNet blocks in unpainted regions.
@@ -305,9 +305,9 @@ class TestDenoiseNodeSpatialMaskApplication:
             1: torch.ones(1, 4, 16, 16),  # 4D block
         }
 
-        # Apply spatial mask using DenoiseNode._apply_spatial_mask
+        # Apply spatial mask using ZImageDenoiseNode._apply_spatial_mask
         latent_shape = (1, 4, 16, 16)
-        masked_blocks = DenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
+        masked_blocks = ZImageDenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
 
         # Verify left half kept values, right half zeroed
         for i, block in masked_blocks.items():
@@ -338,7 +338,7 @@ class TestDenoiseNodeSpatialMaskApplication:
         }
 
         latent_shape = (1, 4, 16, 16)
-        masked_blocks = DenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
+        masked_blocks = ZImageDenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
 
         # All blocks should be masked correctly despite different resolutions
         for i, block in masked_blocks.items():
@@ -366,7 +366,7 @@ class TestDenoiseNodeSpatialMaskApplication:
         }
 
         latent_shape = (1, 4, 16, 16)
-        masked_blocks = DenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
+        masked_blocks = ZImageDenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
 
         for block in masked_blocks.values():
             assert block.max().item() < 0.01, "All blocks should be zeroed with all-zero mask"
@@ -380,7 +380,7 @@ class TestDenoiseNodeSpatialMaskApplication:
         }
 
         latent_shape = (1, 4, 16, 16)
-        masked_blocks = DenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
+        masked_blocks = ZImageDenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
 
         for block in masked_blocks.values():
             assert block.min().item() > 0.99, "All blocks should keep values with all-one mask"
@@ -390,7 +390,7 @@ class TestSpatialMaskEndToEnd:
     """End-to-end tests from file loading through mask application."""
 
     def test_end_to_end_mask_loading_and_application(self):
-        """Test complete pipeline: file -> ImageLoadNode -> ControlNetConditioningNode -> DenoiseNode."""
+        """Test complete pipeline: file -> ImageLoadNode -> ControlNetConditioningNode -> ZImageDenoiseNode."""
         with tempfile.TemporaryDirectory() as tmpdir:
             mask_path = os.path.join(tmpdir, "test_mask.png")
             # Create mask with top half painted
@@ -441,7 +441,7 @@ class TestSpatialMaskEndToEnd:
             }
 
             latent_shape = (1, 4, 32, 32)
-            masked_blocks = DenoiseNode._apply_spatial_mask(block_samples, spatial_mask, latent_shape)
+            masked_blocks = ZImageDenoiseNode._apply_spatial_mask(block_samples, spatial_mask, latent_shape)
 
             # Verify blocks are correctly masked
             for block in masked_blocks.values():
@@ -526,7 +526,7 @@ class TestTileControlNetWithSpatialMask:
 
         # Apply spatial mask
         latent_shape = (1, 4, 32, 32)
-        masked_blocks = DenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
+        masked_blocks = ZImageDenoiseNode._apply_spatial_mask(block_samples, mask, latent_shape)
 
         # Verify: top half should keep enhancement (2.0), bottom should be zeroed
         for i, block in masked_blocks.items():
@@ -593,7 +593,7 @@ class TestTileControlNetWithSpatialMask:
             }
 
             latent_shape = (1, 4, 64, 64)
-            masked_blocks = DenoiseNode._apply_spatial_mask(block_samples, spatial_mask, latent_shape)
+            masked_blocks = ZImageDenoiseNode._apply_spatial_mask(block_samples, spatial_mask, latent_shape)
 
             # Verify center region has enhancement, edges are zeroed
             block = masked_blocks[0]

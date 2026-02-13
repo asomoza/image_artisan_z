@@ -19,7 +19,7 @@ from iartisanz.app.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_graph import ImageArtisanZNodeGraph
 from iartisanz.modules.generation.graph.nodes.controlnet_conditioning_node import ControlNetConditioningNode
 from iartisanz.modules.generation.graph.nodes.image_load_node import ImageLoadNode
-from iartisanz.modules.generation.graph.nodes.latents_node import LatentsNode
+from iartisanz.modules.generation.graph.nodes.zimage_latents_node import ZImageLatentsNode
 
 
 class DummyVAE(torch.nn.Module):
@@ -148,7 +148,7 @@ class TestSourceImageControlNetIntegration:
         source_image_node = ImageLoadNode(path="test.png")
         graph.add_node(source_image_node, "source_image")
 
-        latents_node = LatentsNode()
+        latents_node = ZImageLatentsNode()
         # Connect source image to latents node's "image" input
         # latents_node then outputs it as "source_image" output
         latents_node.connect("image", source_image_node, "image")

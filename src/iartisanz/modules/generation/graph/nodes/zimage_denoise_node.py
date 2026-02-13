@@ -13,7 +13,7 @@ from iartisanz.utils.image_converters import numpy_to_pt
 logger = logging.getLogger(__name__)
 
 
-class DenoiseNode(Node):
+class ZImageDenoiseNode(Node):
     REQUIRED_INPUTS = [
         "transformer",
         "num_inference_steps",

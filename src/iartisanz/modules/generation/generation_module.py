@@ -15,7 +15,8 @@ from iartisanz.modules.generation.controlnet.controlnet_image_dialog import Cont
 from iartisanz.modules.generation.controlnet.controlnet_mask_dialog import ControlNetMaskDialog
 from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.generation_settings import GenerationSettings
-from iartisanz.modules.generation.graph.new_graph import create_default_graph
+from iartisanz.modules.generation.constants import FLUX2_MODEL_TYPES, MODEL_TYPE_DEFAULTS
+from iartisanz.modules.generation.graph.new_graph import create_graph_for_model_type
 from iartisanz.modules.generation.lora.lora_advanced_dialog import LoraAdvancedDialog
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
 from iartisanz.modules.generation.menus.generation_right_menu import GenerationRightMenu
@@ -46,7 +47,7 @@ class GenerationModule(BaseModule):
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.dtype = torch.bfloat16
-        self.node_graph = create_default_graph()
+        self.node_graph = create_graph_for_model_type(self.gen_settings.model.model_type)
         self.generating = False
 
         self._last_generation_json_graph: str | None = None
@@ -426,7 +427,7 @@ class GenerationModule(BaseModule):
                 self.on_abort()
                 self.generation_thread.wait()
 
-            self.node_graph = create_default_graph()
+            self.node_graph = create_graph_for_model_type(self.selected_model.model_type)
             self.generation_thread.clean_up()
             self.generation_thread = None
             self.node_graph = None
@@ -437,7 +438,7 @@ class GenerationModule(BaseModule):
                 torch.cuda.ipc_collect()
                 torch.cuda.empty_cache()
 
-            self.node_graph = create_default_graph()
+            self.node_graph = create_graph_for_model_type(self.selected_model.model_type)
             self.create_generation_thread()
 
             # load loras if any
@@ -480,7 +481,7 @@ class GenerationModule(BaseModule):
             # Recreate staged graph/thread without clearing ModelManager / VRAM.
             old_thread = self.generation_thread
             self.generation_thread = None
-            self.node_graph = create_default_graph()
+            self.node_graph = create_graph_for_model_type(self.selected_model.model_type)
             self.create_generation_thread()
             if old_thread is not None:
                 try:
@@ -677,15 +678,98 @@ class GenerationModule(BaseModule):
                 return
             self._close_dialog(dialog_key)
 
+    @staticmethod
+    def _needs_graph_rebuild(old_type: int, new_type: int) -> bool:
+        """Return True when switching model types requires a graph rebuild.
+
+        This covers both cross-family switches (Z-Image <-> Flux2, different
+        node topology) and within-family variant switches (e.g. Turbo <-> Base,
+        different default steps/guidance).
+        """
+        return old_type != new_type
+
+    def _rebuild_graph_for_model(self, model_data) -> None:
+        """Full teardown and rebuild when switching to a different model architecture.
+
+        Clears LoRAs, ControlNet, source images, inpainting state, resets
+        gen_settings to the new model's defaults, rebuilds the graph/thread,
+        and notifies all UI panels.
+        """
+        # Reset settings to model-specific defaults, preserving non-generation prefs.
+        self.gen_settings.reset_to_defaults(preserve_model=True)
+        defaults = MODEL_TYPE_DEFAULTS.get(model_data.model_type, {})
+        for key, value in defaults.items():
+            self.gen_settings.apply_change(key, value)
+        self.gen_settings.apply_change("model", model_data)
+
+        # Clear all runtime state for optional graph branches.
+        self.loaded_loras = []
+        self.source_image_path = None
+        self.source_image_thumb_path = None
+        self.source_image_layers = None
+        self.source_image_mask_path = None
+        self.source_image_mask_thumb_path = None
+        self.controlnet_source_image_path = None
+        self.controlnet_source_image_layers = None
+        self.controlnet_processed_image_path = None
+        self.controlnet_processed_image_layers = None
+        self.controlnet_model_path = None
+        self.controlnet_condition_thumb_path = None
+        self.controlnet_mask_path = None
+        self.controlnet_mask_final_path = None
+        self.controlnet_mask_thumb_path = None
+        self.controlnet_control_mode = "balanced"
+        self.controlnet_prompt_decay = 0.825
+
+        # Recreate graph and thread.
+        old_thread = self.generation_thread
+        self.generation_thread = None
+        self.node_graph = create_graph_for_model_type(model_data.model_type)
+        self.create_generation_thread()
+        if old_thread is not None:
+            try:
+                old_thread.deleteLater()
+            except Exception:
+                pass
+
+        # Update progress bar for the new step count.
+        self.progress_bar.setMaximum(self.gen_settings.num_inference_steps)
+        if not self.generating:
+            self.progress_bar.setValue(0)
+
+        # Notify all UI panels of the reset state.
+        self.event_bus.publish(
+            "json_graph",
+            {
+                "action": "loaded",
+                "data": {
+                    "image_width": self.gen_settings.image_width,
+                    "image_height": self.gen_settings.image_height,
+                    "num_inference_steps": self.gen_settings.num_inference_steps,
+                    "guidance_scale": self.gen_settings.guidance_scale,
+                    "guidance_start_end": self.gen_settings.guidance_start_end,
+                    "scheduler": self.gen_settings.scheduler,
+                    "model": self.gen_settings.model,
+                    "strength": self.gen_settings.strength,
+                },
+            },
+        )
+        self.event_bus.publish("lora_panel", {"action": "loras_updated", "loaded_loras": []})
+
     def on_model_event(self, data: dict):
         action = data.get("action")
         if action == "update":
             model_data = data.get("model_data_object")
 
             if self.selected_model != model_data:
+                old_type = getattr(self.selected_model, "model_type", 0)
                 self.selected_model = model_data
-                self.generation_thread.update_model(model_data)
                 self.gen_settings.apply_change("model", model_data)
+
+                if self._needs_graph_rebuild(old_type, model_data.model_type):
+                    self._rebuild_graph_for_model(model_data)
+                else:
+                    self.generation_thread.update_model(model_data)
 
     def on_lora_event(self, data: dict):
         action = data.get("action")
