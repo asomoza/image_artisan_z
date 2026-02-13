@@ -16,6 +16,85 @@ from iartisanz.modules.generation.graph.nodes.node import Node
 logger = logging.getLogger(__name__)
 
 
+def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
+    """Convert non-diffusers Flux2 LoRA to diffusers PEFT format.
+
+    Unlike diffusers' built-in converter which hardcodes 48 single blocks (full Flux2),
+    this dynamically detects block counts from the keys — works for Klein 9B (24 single),
+    Klein 4B, or any other variant.
+    """
+    converted = {}
+
+    # Strip diffusion_model. prefix
+    prefix = "diffusion_model."
+    sd = {k[len(prefix) :] if k.startswith(prefix) else k: v for k, v in state_dict.items()}
+
+    # Detect block indices from keys
+    single_indices = set()
+    double_indices = set()
+    for k in sd:
+        if k.startswith("single_blocks."):
+            single_indices.add(int(k.split(".")[1]))
+        elif k.startswith("double_blocks."):
+            double_indices.add(int(k.split(".")[1]))
+
+    lora_keys = ("lora_A", "lora_B")
+
+    for sl in sorted(single_indices):
+        src = f"single_blocks.{sl}"
+        dst = f"single_transformer_blocks.{sl}.attn"
+        for lk in lora_keys:
+            converted[f"{dst}.to_qkv_mlp_proj.{lk}.weight"] = sd.pop(f"{src}.linear1.{lk}.weight")
+            converted[f"{dst}.to_out.{lk}.weight"] = sd.pop(f"{src}.linear2.{lk}.weight")
+
+    for dl in sorted(double_indices):
+        tb = f"transformer_blocks.{dl}"
+        for lk in lora_keys:
+            for attn_type in ("img_attn", "txt_attn"):
+                fused = sd.pop(f"double_blocks.{dl}.{attn_type}.qkv.{lk}.weight")
+                if lk == "lora_A":
+                    proj_keys = (
+                        ["to_q", "to_k", "to_v"]
+                        if attn_type == "img_attn"
+                        else ["add_q_proj", "add_k_proj", "add_v_proj"]
+                    )
+                    for pk in proj_keys:
+                        converted[f"{tb}.attn.{pk}.{lk}.weight"] = torch.cat([fused])
+                else:
+                    q, k_val, v = torch.chunk(fused, 3, dim=0)
+                    if attn_type == "img_attn":
+                        converted[f"{tb}.attn.to_q.{lk}.weight"] = q
+                        converted[f"{tb}.attn.to_k.{lk}.weight"] = k_val
+                        converted[f"{tb}.attn.to_v.{lk}.weight"] = v
+                    else:
+                        converted[f"{tb}.attn.add_q_proj.{lk}.weight"] = q
+                        converted[f"{tb}.attn.add_k_proj.{lk}.weight"] = k_val
+                        converted[f"{tb}.attn.add_v_proj.{lk}.weight"] = v
+
+        proj_mappings = [
+            ("img_attn.proj", "attn.to_out.0"),
+            ("txt_attn.proj", "attn.to_add_out"),
+        ]
+        for org, diff in proj_mappings:
+            for lk in lora_keys:
+                converted[f"{tb}.{diff}.{lk}.weight"] = sd.pop(f"double_blocks.{dl}.{org}.{lk}.weight")
+
+        mlp_mappings = [
+            ("img_mlp.0", "ff.linear_in"),
+            ("img_mlp.2", "ff.linear_out"),
+            ("txt_mlp.0", "ff_context.linear_in"),
+            ("txt_mlp.2", "ff_context.linear_out"),
+        ]
+        for org, diff in mlp_mappings:
+            for lk in lora_keys:
+                converted[f"{tb}.{diff}.{lk}.weight"] = sd.pop(f"double_blocks.{dl}.{org}.{lk}.weight")
+
+    if sd:
+        raise ValueError(f"Unexpected keys remaining after Flux2 LoRA conversion: {list(sd.keys())}")
+
+    return {f"transformer.{k}": v for k, v in converted.items()}
+
+
 class LoraNode(Node):
     PRIORITY = 1
     REQUIRED_INPUTS = ["transformer"]
@@ -194,12 +273,18 @@ class LoraNode(Node):
             if is_dora_scale_present:
                 state_dict = {k: v for k, v in state_dict.items() if "dora_scale" not in k}
 
-            has_alphas_in_sd = any(k.endswith(".alpha") for k in state_dict)
-            has_diffusion_model = any(k.startswith("diffusion_model.") for k in state_dict)
-            has_default = any("default." in k for k in state_dict)
+            # Detect LoRA format: Flux2 vs Z-Image vs already-diffusers
+            is_flux2 = any("single_blocks." in k or "double_blocks." in k for k in state_dict)
 
-            if has_alphas_in_sd or has_diffusion_model or has_default:
-                state_dict = _convert_non_diffusers_z_image_lora_to_diffusers(state_dict)
+            if is_flux2:
+                state_dict = _convert_flux2_lora_to_diffusers(state_dict)
+            else:
+                has_alphas_in_sd = any(k.endswith(".alpha") for k in state_dict)
+                has_diffusion_model = any(k.startswith("diffusion_model.") for k in state_dict)
+                has_default = any("default." in k for k in state_dict)
+
+                if has_alphas_in_sd or has_diffusion_model or has_default:
+                    state_dict = _convert_non_diffusers_z_image_lora_to_diffusers(state_dict)
 
             is_correct_format = all("lora" in key for key in state_dict.keys())
             if not is_correct_format:
