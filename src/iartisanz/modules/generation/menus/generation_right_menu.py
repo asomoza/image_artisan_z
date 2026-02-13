@@ -8,7 +8,9 @@ from iartisanz.app.directories import DirectoriesObject
 from iartisanz.app.preferences import PreferencesObject
 from iartisanz.buttons.expand_contract_button import ExpandContractButton
 from iartisanz.buttons.vertical_button import VerticalButton
+from iartisanz.modules.generation.constants import FLUX2_MODEL_TYPES
 from iartisanz.modules.generation.controlnet.controlnet_panel import ControlNetPanel
+from iartisanz.modules.generation.edit_images.edit_images_panel import EditImagesPanel
 from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.lora.lora_panel import LoraPanel
 from iartisanz.modules.generation.panels.generation_panel import GenerationPanel
@@ -44,6 +46,7 @@ class GenerationRightMenu(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.panels = {}
+        self.panel_buttons: dict[str, VerticalButton] = {}
         self.current_panel = None
         self.current_panel_text = None
 
@@ -55,6 +58,9 @@ class GenerationRightMenu(QFrame):
         self.add_panel("LoRA", LoraPanel)
         self.add_panel("ControlNet", ControlNetPanel)
         self.add_panel("Source Image", SourceImagePanel)
+        self.add_panel("Edit Images", EditImagesPanel)
+
+        self.update_panels_for_model_type(gen_settings.model.model_type)
 
         self.loras = []
 
@@ -80,6 +86,7 @@ class GenerationRightMenu(QFrame):
         button = VerticalButton(text)
         index = self.button_layout.count() - 1
         self.button_layout.insertWidget(index, button)
+        self.panel_buttons[text] = button
 
         self.panels[text] = {
             "class": panel_class,
@@ -155,6 +162,29 @@ class GenerationRightMenu(QFrame):
 
         self.current_panel = panel
         self.current_panel_text = text
+
+    def set_panel_visible(self, name: str, visible: bool):
+        button = self.panel_buttons.get(name)
+        if button is not None:
+            button.setVisible(visible)
+
+        panel = self.panel_instances.get(name)
+        if panel is not None and not visible:
+            panel.setVisible(False)
+
+        if not visible and self.current_panel_text == name:
+            for key, btn in self.panel_buttons.items():
+                if btn.isVisible():
+                    self.current_panel_text = key
+                    if self.expanded:
+                        self.show_panel(key)
+                    break
+
+    def update_panels_for_model_type(self, model_type: int):
+        is_flux2 = model_type in FLUX2_MODEL_TYPES
+        self.set_panel_visible("ControlNet", not is_flux2)
+        self.set_panel_visible("Source Image", not is_flux2)
+        self.set_panel_visible("Edit Images", is_flux2)
 
     def closeEvent(self, event):
         for key, panel in self.panel_instances.items():

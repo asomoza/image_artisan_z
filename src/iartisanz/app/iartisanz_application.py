@@ -78,6 +78,8 @@ class BaseTorchAppApplication(QApplication):
         outputs_source_masks = settings.value("outputs_source_masks", None, type=str)
         outputs_controlnet_source_images = settings.value("outputs_controlnet_source_images", None, type=str)
         outputs_conditioning_images = settings.value("outputs_conditioning_images", None, type=str)
+        outputs_edit_source_images = settings.value("outputs_edit_source_images", None, type=str)
+        outputs_edit_images = settings.value("outputs_edit_images", None, type=str)
 
         self.directories = DirectoriesObject(
             data_path=data_path,
@@ -89,6 +91,8 @@ class BaseTorchAppApplication(QApplication):
             outputs_source_masks=outputs_source_masks,
             outputs_controlnet_source_images=outputs_controlnet_source_images,
             outputs_conditioning_images=outputs_conditioning_images,
+            outputs_edit_source_images=outputs_edit_source_images,
+            outputs_edit_images=outputs_edit_images,
             temp_path=self.temp_path,
         )
 
@@ -104,6 +108,8 @@ class BaseTorchAppApplication(QApplication):
                 outputs_source_masks,
                 outputs_controlnet_source_images,
                 outputs_conditioning_images,
+                outputs_edit_source_images,
+                outputs_edit_images,
             ]
         ):
             return False

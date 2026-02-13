@@ -697,6 +697,75 @@ class NodeGraphThread(QThread):
                 return True
         return False
 
+    # ──────────────────────────────────────────────────────────
+    # Edit images (Flux2 Klein edit/inpaint conditioning)
+    # ──────────────────────────────────────────────────────────
+
+    def add_edit_image(self, image_index: int, image_path: str):
+        """Add an edit image node and wire it to the encode node."""
+        node_name = f"edit_image_{image_index}"
+        if self.node_graph.get_node_by_name(node_name) is not None:
+            return
+
+        image_node = ImageLoadNode(path=image_path)
+        self.node_graph.add_node(image_node, node_name)
+
+        self._ensure_edit_image_encoder()
+
+        encode_node = self.node_graph.get_node_by_name("edit_image_encode")
+        encode_node.connect(f"image_{image_index}", image_node, "image")
+
+    def update_edit_image(self, image_index: int, image_path: str):
+        node_name = f"edit_image_{image_index}"
+        node = self.node_graph.get_node_by_name(node_name)
+        if node is not None:
+            node.update_value(image_path)
+
+    def remove_edit_image(self, image_index: int):
+        node_name = f"edit_image_{image_index}"
+        encode_node = self.node_graph.get_node_by_name("edit_image_encode")
+        image_node = self.node_graph.get_node_by_name(node_name)
+        if encode_node is not None and image_node is not None:
+            encode_node.disconnect(f"image_{image_index}", image_node, "image")
+        self.node_graph.delete_node_by_name(node_name)
+
+        if not self._has_any_edit_images():
+            self._remove_edit_image_encoder()
+
+    def remove_all_edit_images(self):
+        for i in range(4):
+            self.remove_edit_image(i)
+
+    def _ensure_edit_image_encoder(self):
+        if self.node_graph.get_node_by_name("edit_image_encode") is not None:
+            return
+
+        from iartisanz.modules.generation.graph.nodes.flux2_edit_image_encode_node import Flux2EditImageEncodeNode
+
+        encode_node = Flux2EditImageEncodeNode()
+        models_node = self.node_graph.get_node_by_name("model")
+        encode_node.connect("vae", models_node, "vae")
+        encode_node.connect("vae_scale_factor", models_node, "vae_scale_factor")
+        self.node_graph.add_node(encode_node, "edit_image_encode")
+
+        denoise = self.node_graph.get_node_by_name("denoise")
+        denoise.connect("edit_image_latents", encode_node, "image_latents")
+        denoise.connect("edit_image_latent_ids", encode_node, "image_latent_ids")
+
+    def _remove_edit_image_encoder(self):
+        denoise = self.node_graph.get_node_by_name("denoise")
+        encode_node = self.node_graph.get_node_by_name("edit_image_encode")
+        if denoise is not None and encode_node is not None:
+            denoise.disconnect("edit_image_latents", encode_node, "image_latents")
+            denoise.disconnect("edit_image_latent_ids", encode_node, "image_latent_ids")
+        self.node_graph.delete_node_by_name("edit_image_encode")
+
+    def _has_any_edit_images(self) -> bool:
+        return any(
+            self.node_graph.get_node_by_name(f"edit_image_{i}") is not None
+            for i in range(4)
+        )
+
     def remove_controlnet(self):
         denoise_node = self.node_graph.get_node_by_name("denoise")
         model_node = self.node_graph.get_node_by_name("controlnet_model")

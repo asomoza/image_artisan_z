@@ -62,6 +62,8 @@ class Flux2DenoiseNode(Node):
         "negative_text_ids",
         "guidance_start_end",
         "lora",
+        "edit_image_latents",
+        "edit_image_latent_ids",
     ]
     OUTPUTS = ["latents", "latent_ids"]
     SERIALIZE_EXCLUDE = {"callback"}
@@ -199,6 +201,14 @@ class Flux2DenoiseNode(Node):
         latents = self.latents.to(self.device)
         latent_ids = self.latent_ids.to(self.device)
 
+        # Edit images (optional): pre-encoded latents from Flux2EditImageEncodeNode
+        edit_image_latents = getattr(self, "edit_image_latents", None)
+        edit_image_latent_ids = getattr(self, "edit_image_latent_ids", None)
+        has_edit_images = edit_image_latents is not None and edit_image_latent_ids is not None
+        if has_edit_images:
+            edit_image_latents = edit_image_latents.to(self.device, dtype=transformer_dtype)
+            edit_image_latent_ids = edit_image_latent_ids.to(self.device)
+
         # Compute sigmas and empirical mu for Flux2 scheduling
         sigmas = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps).tolist()
         image_seq_len = latents.shape[1]
@@ -239,7 +249,12 @@ class Flux2DenoiseNode(Node):
 
             timestep = t.expand(latents.shape[0]).to(latents.dtype)
 
-            latent_model_input = latents.to(transformer_dtype)
+            if has_edit_images:
+                latent_model_input = torch.cat([latents, edit_image_latents], dim=1).to(transformer_dtype)
+                loop_latent_ids = torch.cat([latent_ids, edit_image_latent_ids], dim=1)
+            else:
+                latent_model_input = latents.to(transformer_dtype)
+                loop_latent_ids = latent_ids
 
             if mark is not None and callable(mark):
                 mark()
@@ -255,7 +270,7 @@ class Flux2DenoiseNode(Node):
                             guidance=None,
                             encoder_hidden_states=prompt_embeds,
                             txt_ids=text_ids,
-                            img_ids=latent_ids,
+                            img_ids=loop_latent_ids,
                             return_dict=False,
                         )[0]
                 return transformer(
@@ -264,7 +279,7 @@ class Flux2DenoiseNode(Node):
                     guidance=None,
                     encoder_hidden_states=prompt_embeds,
                     txt_ids=text_ids,
-                    img_ids=latent_ids,
+                    img_ids=loop_latent_ids,
                     return_dict=False,
                 )[0]
 
@@ -290,7 +305,7 @@ class Flux2DenoiseNode(Node):
                                 guidance=None,
                                 encoder_hidden_states=negative_prompt_embeds,
                                 txt_ids=negative_text_ids,
-                                img_ids=latent_ids,
+                                img_ids=loop_latent_ids,
                                 return_dict=False,
                             )[0]
                     return transformer(
@@ -299,7 +314,7 @@ class Flux2DenoiseNode(Node):
                         guidance=None,
                         encoder_hidden_states=negative_prompt_embeds,
                         txt_ids=negative_text_ids,
-                        img_ids=latent_ids,
+                        img_ids=loop_latent_ids,
                         return_dict=False,
                     )[0]
 

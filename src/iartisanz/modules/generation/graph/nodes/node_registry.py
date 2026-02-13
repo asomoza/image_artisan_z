@@ -5,6 +5,7 @@ from .choice_node import ChoiceNode
 from .controlnet_conditioning_node import ControlNetConditioningNode
 from .controlnet_model_node import ControlNetModelNode
 from .flux2_denoise_node import Flux2DenoiseNode
+from .flux2_edit_image_encode_node import Flux2EditImageEncodeNode
 from .flux2_latents_decoder_node import Flux2LatentsDecoderNode
 from .flux2_latents_node import Flux2LatentsNode
 from .flux2_model_node import Flux2ModelNode
@@ -29,6 +30,7 @@ NODE_CLASSES = {
     "ControlNetConditioningNode": ControlNetConditioningNode,
     "ControlNetModelNode": ControlNetModelNode,
     "Flux2DenoiseNode": Flux2DenoiseNode,
+    "Flux2EditImageEncodeNode": Flux2EditImageEncodeNode,
     "Flux2LatentsDecoderNode": Flux2LatentsDecoderNode,
     "Flux2LatentsNode": Flux2LatentsNode,
     "Flux2ModelNode": Flux2ModelNode,

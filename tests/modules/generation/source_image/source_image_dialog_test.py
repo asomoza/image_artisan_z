@@ -222,6 +222,8 @@ def _make_dirs(tmp_path: Path):
         outputs_source_masks=str(base / "outputs_source_masks"),
         outputs_controlnet_source_images=str(base / "outputs_controlnet_source_images"),
         outputs_conditioning_images=str(base / "outputs_conditioning_images"),
+        outputs_edit_source_images=str(base / "outputs_edit_source_images"),
+        outputs_edit_images=str(base / "outputs_edit_images"),
         temp_path=str(base / "temp"),
     )
 

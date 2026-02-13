@@ -13,6 +13,7 @@ from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import FLUX2_LATENT_RGB_FACTORS, ZIMAGE_LATENT_RGB_FACTORS
 from iartisanz.modules.generation.controlnet.controlnet_image_dialog import ControlNetImageDialog
 from iartisanz.modules.generation.controlnet.controlnet_mask_dialog import ControlNetMaskDialog
+from iartisanz.modules.generation.edit_images.edit_images_dialog import EditImagesDialog
 from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.constants import FLUX2_MODEL_TYPES, MODEL_TYPE_DEFAULTS
@@ -79,6 +80,12 @@ class GenerationModule(BaseModule):
         self.controlnet_control_mode = "balanced"
         self.controlnet_prompt_decay = 0.825
 
+        # Edit images state (4 slots for Flux2 Klein edit/inpaint models)
+        self.edit_image_paths: list[str | None] = [None] * 4
+        self.edit_image_thumb_paths: list[str | None] = [None] * 4
+        self.edit_source_image_layers: list = [None] * 4
+        self.edit_result_image_layers: list = [None] * 4
+
         self.create_generation_thread()
 
         self.event_bus.subscribe("model", self.on_model_event)
@@ -89,6 +96,7 @@ class GenerationModule(BaseModule):
         self.event_bus.subscribe("generate", self.on_generate_event)
         self.event_bus.subscribe("source_image", self.on_source_image_event)
         self.event_bus.subscribe("controlnet", self.on_controlnet_event)
+        self.event_bus.subscribe("edit_images", self.on_edit_images_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -481,6 +489,10 @@ class GenerationModule(BaseModule):
             self.controlnet_processed_image_layers = None
             self.controlnet_model_path = None
             self.controlnet_condition_thumb_path = None
+            self.edit_image_paths = [None] * 4
+            self.edit_image_thumb_paths = [None] * 4
+            self.edit_source_image_layers = [None] * 4
+            self.edit_result_image_layers = [None] * 4
 
             # Recreate staged graph/thread without clearing ModelManager / VRAM.
             old_thread = self.generation_thread
@@ -660,6 +672,21 @@ class GenerationModule(BaseModule):
                     controlnet_mask_path=self.controlnet_mask_path,
                 ),
             },
+            "edit_images": {
+                "key": lambda d: f"edit_images_{d.get('image_index', 0)}",
+                "factory": lambda d: EditImagesDialog(
+                    "edit_images",
+                    self.directories,
+                    self.preferences,
+                    self.image_viewer,
+                    self.gen_settings.image_width,
+                    self.gen_settings.image_height,
+                    image_index=d.get("image_index", 0),
+                    source_image_layers=self.edit_source_image_layers[d.get("image_index", 0)],
+                    result_image_path=self.edit_image_paths[d.get("image_index", 0)],
+                    result_image_layers=self.edit_result_image_layers[d.get("image_index", 0)],
+                ),
+            },
         }
 
     def on_manage_dialog_event(self, data):
@@ -724,6 +751,10 @@ class GenerationModule(BaseModule):
         self.controlnet_mask_thumb_path = None
         self.controlnet_control_mode = "balanced"
         self.controlnet_prompt_decay = 0.825
+        self.edit_image_paths = [None] * 4
+        self.edit_image_thumb_paths = [None] * 4
+        self.edit_source_image_layers = [None] * 4
+        self.edit_result_image_layers = [None] * 4
 
         # Reset prompts widget state so all values get pushed to the new graph.
         self.prompts_widget.previous_seed = None
@@ -764,6 +795,7 @@ class GenerationModule(BaseModule):
             },
         )
         self.event_bus.publish("lora_panel", {"action": "loras_updated", "loaded_loras": []})
+        self.event_bus.publish("edit_images", {"action": "reset"})
 
     def on_model_event(self, data: dict):
         action = data.get("action")
@@ -779,6 +811,8 @@ class GenerationModule(BaseModule):
                     self._rebuild_graph_for_model(model_data)
                 else:
                     self.generation_thread.update_model(model_data)
+
+                self.right_menu.update_panels_for_model_type(model_data.model_type)
 
     def on_lora_event(self, data: dict):
         action = data.get("action")
@@ -1038,3 +1072,41 @@ class GenerationModule(BaseModule):
             # Reset behavior controls to defaults.
             self.controlnet_control_mode = "balanced"
             self.controlnet_prompt_decay = 0.825
+
+    def on_edit_images_event(self, data: dict):
+        action = data.get("action")
+        index = data.get("image_index")
+
+        if action in ("add", "update"):
+            if index is not None and 0 <= index < 4:
+                image_path = data.get("image_path")
+                self.edit_image_paths[index] = image_path
+                self.edit_image_thumb_paths[index] = data.get("image_thumb_path")
+                if image_path:
+                    if action == "add":
+                        self.generation_thread.add_edit_image(index, image_path)
+                    else:
+                        self.generation_thread.update_edit_image(index, image_path)
+
+        elif action == "remove":
+            if index is not None and 0 <= index < 4:
+                self.edit_image_paths[index] = None
+                self.edit_image_thumb_paths[index] = None
+                self.edit_source_image_layers[index] = None
+                self.edit_result_image_layers[index] = None
+                self.generation_thread.remove_edit_image(index)
+
+        elif action == "update_layers":
+            if index is not None and 0 <= index < 4:
+                self.edit_result_image_layers[index] = data.get("layers")
+
+        elif action == "update_source_layers":
+            if index is not None and 0 <= index < 4:
+                self.edit_source_image_layers[index] = data.get("layers")
+
+        elif action == "reset":
+            self.edit_image_paths = [None] * 4
+            self.edit_image_thumb_paths = [None] * 4
+            self.edit_source_image_layers = [None] * 4
+            self.edit_result_image_layers = [None] * 4
+            self.generation_thread.remove_all_edit_images()
