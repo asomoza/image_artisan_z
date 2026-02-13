@@ -347,6 +347,7 @@ class ModelItemsView(QWidget):
                         os.path.join(self.directories.models_diffusers, "_components"),
                     )
                     registry.register_model_components(model_item.id, component_mapping)
+                    registry.cleanup_after_registration(model_item.id, filepath)
             except Exception as e:
                 logger.error(f"Error registering component mappings: {e}")
 

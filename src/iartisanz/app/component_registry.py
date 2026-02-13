@@ -314,27 +314,58 @@ class ComponentRegistry:
         return removed_count
 
     def cleanup_after_registration(self, model_id: int, model_path: str) -> None:
-        """Clean up model-local component copies that already exist in canonical storage.
+        """Clean up model-local component copies that already exist elsewhere.
 
-        Call this after registering a new model's components. For each component,
-        if the canonical storage path is in _components/ (meaning the data already
-        exists there from another model), delete the model-local copy to avoid
-        duplication.
+        Call this after registering a new model's components. For each component:
+        - If canonical storage IS this model's directory, nothing to do (first model).
+        - If canonical storage is in _components/, just remove the local copy.
+        - If canonical storage is in another model's directory, move it to
+          _components/ first, then remove all model-local copies.
         """
         import shutil
 
         components = self.get_model_components(model_id)
         components_base_real = os.path.realpath(self.components_base_dir)
+        db = self._db()
 
         for comp_type, info in components.items():
-            # Only clean up if this component's canonical storage is in _components/
-            if not os.path.realpath(info.storage_path).startswith(components_base_real):
+            local_dir = os.path.join(model_path, comp_type)
+            canonical_real = os.path.realpath(info.storage_path)
+            local_real = os.path.realpath(local_dir)
+
+            # Canonical storage IS this model's directory — first model with this component
+            if canonical_real == local_real:
                 continue
 
-            local_dir = os.path.join(model_path, comp_type)
-            if os.path.islink(local_dir):
-                os.remove(local_dir)
-                logger.info("Cleanup: removed legacy symlink %s", local_dir)
-            elif os.path.isdir(local_dir):
-                shutil.rmtree(local_dir)
-                logger.info("Cleanup: removed duplicate %s (canonical copy in _components/)", local_dir)
+            # Canonical storage is already in _components/ — just remove local copy
+            if canonical_real.startswith(components_base_real):
+                if os.path.islink(local_dir):
+                    os.remove(local_dir)
+                    logger.info("Cleanup: removed legacy symlink %s", local_dir)
+                elif os.path.isdir(local_dir):
+                    shutil.rmtree(local_dir)
+                    logger.info("Cleanup: removed duplicate %s (canonical in _components/)", local_dir)
+                continue
+
+            # Canonical storage is in another model's directory — move to _components/
+            canonical_target = os.path.join(self.components_base_dir, comp_type, info.content_hash)
+            if not os.path.exists(canonical_target):
+                os.makedirs(os.path.dirname(canonical_target), exist_ok=True)
+                if os.path.isdir(info.storage_path):
+                    shutil.copytree(info.storage_path, canonical_target)
+                else:
+                    # Source gone — use local copy as the source instead
+                    if os.path.isdir(local_dir):
+                        shutil.copytree(local_dir, canonical_target)
+                    else:
+                        continue
+
+            # Update DB to point to _components/
+            db.execute(
+                "UPDATE component SET storage_path = ? WHERE id = ?",
+                (canonical_target, info.id),
+            )
+            logger.info("Cleanup: moved %s/%s to _components/", comp_type, info.content_hash[:12])
+
+            # Remove all model-local copies (including the original model's)
+            self._remove_local_duplicates(db, info.id, comp_type)

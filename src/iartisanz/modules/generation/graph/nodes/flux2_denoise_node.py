@@ -60,6 +60,7 @@ class Flux2DenoiseNode(Node):
     OPTIONAL_INPUTS = [
         "negative_prompt_embeds",
         "negative_text_ids",
+        "guidance_start_end",
         "lora",
     ]
     OUTPUTS = ["latents", "latent_ids"]
@@ -133,6 +134,21 @@ class Flux2DenoiseNode(Node):
         guidance_scale = float(self.guidance_scale)
         do_cfg = guidance_scale > 1.0
 
+        guidance_start_end = getattr(self, "guidance_start_end", None)
+        if guidance_start_end is None:
+            guidance_start, guidance_end = 0.0, 1.0
+        else:
+            guidance_start = float(guidance_start_end[0])
+            guidance_end = float(guidance_start_end[1])
+
+        if guidance_start > guidance_end:
+            logger.warning(
+                "guidance_start (%s) > guidance_end (%s); using full range [0.0, 1.0].",
+                guidance_start,
+                guidance_end,
+            )
+            guidance_start, guidance_end = 0.0, 1.0
+
         num_inference_steps = int(self.num_inference_steps)
 
         if self.lora:
@@ -198,6 +214,7 @@ class Flux2DenoiseNode(Node):
 
         order = getattr(self.scheduler, "order", 1)
         num_warmup_steps = max(len(timesteps) - num_inference_steps * order, 0)
+        step_norm_den = float(max(num_inference_steps - 1, 1))
 
         # Mark step boundaries for CUDA graphs
         if use_torch_compile and self.device.type == "cuda" and hasattr(torch, "compiler"):
@@ -210,6 +227,15 @@ class Flux2DenoiseNode(Node):
         for i, t in enumerate(timesteps):
             if self.abort:
                 return
+
+            step_idx = i // order
+            step_norm = float(step_idx) / step_norm_den
+
+            current_guidance_scale = guidance_scale
+            if not (guidance_start <= step_norm <= guidance_end):
+                current_guidance_scale = 1.0
+
+            apply_cfg = do_cfg and negative_prompt_embeds is not None and (abs(current_guidance_scale - 1.0) > 1e-6)
 
             timestep = t.expand(latents.shape[0]).to(latents.dtype)
 
@@ -252,8 +278,8 @@ class Flux2DenoiseNode(Node):
             # Only keep the generated latent tokens
             noise_pred = noise_pred[:, : latents.size(1)]
 
-            # Classifier-free guidance
-            if do_cfg and negative_prompt_embeds is not None:
+            # Classifier-free guidance (gated by guidance window)
+            if apply_cfg:
                 def _run_uncond():
                     ctx = getattr(transformer, "cache_context", None)
                     if ctx is not None:
@@ -284,13 +310,12 @@ class Flux2DenoiseNode(Node):
                     description="transformer (uncond)",
                 )
                 neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
-                noise_pred = neg_noise_pred + guidance_scale * (noise_pred - neg_noise_pred)
+                noise_pred = neg_noise_pred + current_guidance_scale * (noise_pred - neg_noise_pred)
 
             # Scheduler step
             latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
             # Step callback
-            step_idx = i // order
             is_last = i == len(timesteps) - 1
             is_step_boundary = (i + 1) > num_warmup_steps and (i + 1) % order == 0
             if (is_last or is_step_boundary) and self.callback is not None:

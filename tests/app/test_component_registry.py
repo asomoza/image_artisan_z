@@ -374,3 +374,85 @@ class TestCompactSharedComponents:
 
         # Second run should be a no-op
         assert stats2["moved"] == 0
+
+
+# ---------------------------------------------------------------------------
+# cleanup_after_registration
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupAfterRegistration:
+    def test_noop_for_first_model(self, registry_env):
+        """Cleanup should not remove anything for the first model with a component."""
+        registry, db, tmp_path = registry_env
+
+        model_dir = str(tmp_path / "models" / "ModelA")
+        vae_dir = os.path.join(model_dir, "vae")
+        _create_safetensors_component(vae_dir, {"w": torch.randn(2, 2)})
+
+        model_id = _insert_model(db, "ModelA", model_dir)
+        info = registry.register_component("vae", vae_dir, "first_hash")
+        registry.register_model_components(model_id, {"vae": info.id})
+
+        registry.cleanup_after_registration(model_id, model_dir)
+
+        # Local dir should still exist — it IS the canonical copy
+        assert os.path.isdir(vae_dir)
+
+    def test_removes_duplicate_and_moves_to_components(self, registry_env):
+        """When second model shares a component, cleanup should move it to _components/
+        and remove both model-local copies."""
+        registry, db, tmp_path = registry_env
+
+        model_a_dir = str(tmp_path / "models" / "ModelA")
+        model_b_dir = str(tmp_path / "models" / "ModelB")
+        vae_data = {"w": torch.randn(3, 3)}
+
+        vae_a = os.path.join(model_a_dir, "vae")
+        vae_b = os.path.join(model_b_dir, "vae")
+        _create_safetensors_component(vae_a, vae_data)
+        _create_safetensors_component(vae_b, vae_data)
+
+        model_a_id = _insert_model(db, "ModelA", model_a_dir)
+        model_b_id = _insert_model(db, "ModelB", model_b_dir)
+
+        info = registry.register_component("vae", vae_a, "shared_hash_cleanup")
+        registry.register_model_components(model_a_id, {"vae": info.id})
+        registry.register_model_components(model_b_id, {"vae": info.id})
+
+        registry.cleanup_after_registration(model_b_id, model_b_dir)
+
+        # Canonical copy should be in _components/
+        canonical = os.path.join(registry.components_base_dir, "vae", "shared_hash_cleanup")
+        assert os.path.isdir(canonical)
+
+        # Both model-local copies should be removed
+        assert not os.path.exists(vae_a)
+        assert not os.path.exists(vae_b)
+
+        # DB should point to canonical
+        updated = registry.get_component_by_hash("shared_hash_cleanup")
+        assert updated.storage_path == canonical
+
+    def test_cleanup_when_canonical_already_in_components(self, registry_env):
+        """If canonical is already in _components/, just remove the local copy."""
+        registry, db, tmp_path = registry_env
+
+        # Set up canonical in _components/
+        canonical = os.path.join(registry.components_base_dir, "vae", "preexisting_hash")
+        _create_safetensors_component(canonical, {"w": torch.randn(2, 2)})
+
+        info = registry.register_component("vae", canonical, "preexisting_hash")
+
+        model_dir = str(tmp_path / "models" / "ModelC")
+        vae_local = os.path.join(model_dir, "vae")
+        _create_safetensors_component(vae_local, {"w": torch.randn(2, 2)})
+
+        model_id = _insert_model(db, "ModelC", model_dir)
+        registry.register_model_components(model_id, {"vae": info.id})
+
+        registry.cleanup_after_registration(model_id, model_dir)
+
+        # Local copy removed, canonical untouched
+        assert not os.path.exists(vae_local)
+        assert os.path.isdir(canonical)

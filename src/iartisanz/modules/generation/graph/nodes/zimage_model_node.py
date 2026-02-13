@@ -144,6 +144,14 @@ class ZImageModelNode(Node):
 
     def _smart_load(self, mm, model_id, target_hashes, registry_paths):
         """Load model components, skipping any whose hash matches what's already loaded."""
+        # Fast path: model already fully loaded (e.g. consecutive runs, or
+        # transition from _legacy_load which doesn't set component hashes).
+        if mm.is_active_model(model_id) and all(
+            mm.has(c) for c in ("tokenizer", "text_encoder", "transformer", "vae")
+        ):
+            self._set_output_handles(mm)
+            return self.values
+
         components_to_load: list[str] = []
         transformer_changed = False
 

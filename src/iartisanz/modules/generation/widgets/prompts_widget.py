@@ -209,18 +209,21 @@ class PromptsWidget(QFrame):
         action = data.get("action")
         if action == "loaded":
             data = data.get("data", {})
-            positive_prompt = data.get("positive_prompt", "")
-            negative_prompt = data.get("negative_prompt", "")
-            seed = data.get("seed", "")
 
-            self.previous_positive_prompt = positive_prompt
-            self.previous_negative_prompt = negative_prompt
-            self.previous_seed = seed
+            if "positive_prompt" in data:
+                positive_prompt = data["positive_prompt"]
+                self.previous_positive_prompt = positive_prompt
+                self.positive_prompt.setPlainText(positive_prompt)
 
-            self.positive_prompt.setPlainText(positive_prompt)
-            self.negative_prompt.setPlainText(negative_prompt)
-            self.seed_text.setText(str(seed))
+            if "negative_prompt" in data:
+                negative_prompt = data["negative_prompt"]
+                self.previous_negative_prompt = negative_prompt
+                self.negative_prompt.setPlainText(negative_prompt)
 
-            self.random_checkbox.setChecked(False)
-            self.seed_text.setDisabled(False)
-            self.use_random_seed = False
+            if "seed" in data:
+                seed = data["seed"]
+                self.previous_seed = seed
+                self.seed_text.setText(str(seed))
+                self.random_checkbox.setChecked(False)
+                self.seed_text.setDisabled(False)
+                self.use_random_seed = False

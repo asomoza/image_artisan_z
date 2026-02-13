@@ -10,7 +10,7 @@ from PyQt6.QtGui import QImageReader
 from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem, QVBoxLayout
 
 from iartisanz.modules.base_module import BaseModule
-from iartisanz.modules.generation.constants import LATENT_RGB_FACTORS
+from iartisanz.modules.generation.constants import FLUX2_LATENT_RGB_FACTORS, ZIMAGE_LATENT_RGB_FACTORS
 from iartisanz.modules.generation.controlnet.controlnet_image_dialog import ControlNetImageDialog
 from iartisanz.modules.generation.controlnet.controlnet_mask_dialog import ControlNetMaskDialog
 from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
@@ -199,7 +199,11 @@ class GenerationModule(BaseModule):
     def step_progress_update(self, step: int, latents: torch.Tensor):
         self.progress_bar.setValue(step)
 
-        numpy_image = convert_latents_to_rgb(latents, LATENT_RGB_FACTORS)
+        if self.selected_model.model_type in FLUX2_MODEL_TYPES:
+            rgb_factors = FLUX2_LATENT_RGB_FACTORS
+        else:
+            rgb_factors = ZIMAGE_LATENT_RGB_FACTORS
+        numpy_image = convert_latents_to_rgb(latents, rgb_factors)
         high = 50
         low = 3
         denoise_strength = high + (low - high) * step / (9 - 1)
@@ -720,6 +724,11 @@ class GenerationModule(BaseModule):
         self.controlnet_mask_thumb_path = None
         self.controlnet_control_mode = "balanced"
         self.controlnet_prompt_decay = 0.825
+
+        # Reset prompts widget state so all values get pushed to the new graph.
+        self.prompts_widget.previous_seed = None
+        self.prompts_widget.previous_positive_prompt = None
+        self.prompts_widget.previous_negative_prompt = None
 
         # Recreate graph and thread.
         old_thread = self.generation_thread

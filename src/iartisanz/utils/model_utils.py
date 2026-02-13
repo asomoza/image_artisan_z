@@ -60,7 +60,8 @@ def _tensor_to_bytes(tensor) -> bytes:
     import torch
 
     t = tensor.contiguous()
-    # View as raw bytes via uint8 — works for all dtypes including bfloat16
+    if t.dim() == 0:
+        t = t.unsqueeze(0)
     return t.view(torch.uint8).numpy().tobytes()
 
 

@@ -126,6 +126,9 @@ def create_default_flux2_graph(model_type: int = 3):
     guidance_scale = NumberNode(number=defaults["guidance_scale"])
     node_graph.add_node(guidance_scale, "guidance_scale")
 
+    guidance_start_end = NumberRangeNode(value=[0.0, 1.0])
+    node_graph.add_node(guidance_start_end, "guidance_start_end")
+
     positive_prompt = TextNode()
     node_graph.add_node(positive_prompt, "positive_prompt")
 
@@ -164,6 +167,7 @@ def create_default_flux2_graph(model_type: int = 3):
     denoise.connect("negative_prompt_embeds", prompts_encoder, "negative_prompt_embeds")
     denoise.connect("negative_text_ids", prompts_encoder, "negative_text_ids")
     denoise.connect("guidance_scale", guidance_scale, "value")
+    denoise.connect("guidance_start_end", guidance_start_end, "value")
     node_graph.add_node(denoise, "denoise")
 
     latents_decoder = Flux2LatentsDecoderNode()
