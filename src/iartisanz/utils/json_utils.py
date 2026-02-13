@@ -104,7 +104,7 @@ def extract_dict_from_json_graph(json_graph: Any, wanted: Iterable[Any], *, incl
             path = node.get("path")
             version = node.get("version")
             model_type = node.get("model_type")
-            model_id = node.get("id", 0)
+            model_id = node.get("db_model_id", 0)
 
             if model_name is None and path is None and version is None and model_type is None:
                 if include_missing:
