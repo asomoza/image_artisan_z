@@ -1,3 +1,4 @@
+import gc
 import logging
 import os
 
@@ -64,7 +65,7 @@ class ZImageModelNode(Node):
         node.db_model_id = node_dict.get("db_model_id")
         return node
 
-    def update_inputs(self, node_dict):
+    def update_inputs(self, node_dict, callbacks=None):
         new_sig = (
             node_dict["path"],
             node_dict["model_name"],
@@ -159,6 +160,7 @@ class ZImageModelNode(Node):
             target_hash = target_hashes.get(comp_type)
             if target_hash is None:
                 components_to_load.append(comp_type)
+                logger.debug("Smart switch: reloading '%s' (no target hash in registry)", comp_type)
                 if comp_type == "transformer":
                     transformer_changed = True
                 continue
@@ -168,6 +170,13 @@ class ZImageModelNode(Node):
                 logger.debug("Smart switch: keeping '%s' (hash match: %s)", comp_type, target_hash[:12])
             else:
                 components_to_load.append(comp_type)
+                logger.debug(
+                    "Smart switch: reloading '%s' (current=%s, target=%s, loaded=%s)",
+                    comp_type,
+                    current_hash[:12] if current_hash else None,
+                    target_hash[:12],
+                    mm.has(comp_type),
+                )
                 if comp_type == "transformer":
                     transformer_changed = True
 
@@ -186,6 +195,13 @@ class ZImageModelNode(Node):
             with mm._lock:
                 mm._lora_sources.clear()
                 mm._compiled_components.clear()
+
+        # Force garbage collection to free GPU memory from cleared components
+        # before loading new ones. Without this, old models may still occupy
+        # VRAM (due to reference cycles in torch.nn.Module) causing OOM.
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # Resolve paths: prefer registry, fall back to self.path
         paths = {}

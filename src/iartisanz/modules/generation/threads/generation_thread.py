@@ -56,10 +56,14 @@ class NodeGraphThread(QThread):
         self.directories = directories
 
         # Staged graph is edited by the UI thread. Each generation run executes
-        # a fresh graph instance created from a JSON snapshot.
+        # against a persistent run graph that is updated from a JSON snapshot.
+        # Using update_from_json() (smart diffing) means only nodes whose inputs
+        # actually changed are re-executed, avoiding unnecessary work like
+        # re-encoding an unchanged prompt (which would load the text encoder to GPU).
         self.node_graph.set_abort_function(self.on_aborted)
         self._job_json_graph: str | None = None
         self._active_graph: ImageArtisanZNodeGraph | None = None
+        self._persistent_run_graph: ImageArtisanZNodeGraph | None = None
 
         self._graph_factory = graph_factory or ImageArtisanZNodeGraph
         self._node_classes = node_classes or NODE_CLASSES
@@ -82,13 +86,21 @@ class NodeGraphThread(QThread):
             image_send.image_callback = self.preview_image
 
     def _create_run_graph_from_json(self, json_graph: str) -> ImageArtisanZNodeGraph:
-        run_graph = self._graph_factory()
-        run_graph.set_abort_function(self.on_aborted)
-        run_graph.from_json(
-            json_graph, node_classes=self._node_classes, callbacks={"preview_image": self.preview_image}
-        )
-        self._wire_callbacks(run_graph)
-        return run_graph
+        callbacks = {"preview_image": self.preview_image}
+
+        if self._persistent_run_graph is not None:
+            self._persistent_run_graph.update_from_json(
+                json_graph, node_classes=self._node_classes, callbacks=callbacks
+            )
+        else:
+            self._persistent_run_graph = self._graph_factory()
+            self._persistent_run_graph.set_abort_function(self.on_aborted)
+            self._persistent_run_graph.from_json(
+                json_graph, node_classes=self._node_classes, callbacks=callbacks
+            )
+
+        self._wire_callbacks(self._persistent_run_graph)
+        return self._persistent_run_graph
 
     def _extract_required_loras(self, json_graph: str) -> dict[str, str | None]:
         """Return adapter_name -> path for LoRAs that should be active for this run."""
@@ -206,6 +218,7 @@ class NodeGraphThread(QThread):
         # Safety: ensure global manager is cleared even if model node isn't present.
         get_model_manager().clear()
 
+        self._persistent_run_graph = None
         self.node_graph = None
         self.dtype = None
         self.device = None
@@ -223,7 +236,9 @@ class NodeGraphThread(QThread):
         return {name: self.update_node(name, value) for name, value in values.items()}
 
     def load_json_graph(self, json_graph: str, callbacks: dict | None = None):
-        # TODO: maybe check if the models are different than the loaded ones
+        # Reset persistent run graph — the staging graph structure changed.
+        self._persistent_run_graph = None
+
         models_node = self.node_graph.get_node_by_name("model")
         incoming_model_sig = None
         try:
