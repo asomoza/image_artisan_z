@@ -135,6 +135,24 @@ def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
             for lk in lora_keys:
                 converted[f"{tb}.{diff}.{lk}.weight"] = sd.pop(f"double_blocks.{dl}.{org}.{lk}.weight")
 
+    # Root-level layers (modulation, embedders, final layer) — simple 1:1 renames
+    root_mappings = {
+        "double_stream_modulation_txt.lin": "double_stream_modulation_txt.linear",
+        "double_stream_modulation_img.lin": "double_stream_modulation_img.linear",
+        "single_stream_modulation.lin": "single_stream_modulation.linear",
+        "txt_in": "context_embedder",
+        "img_in": "x_embedder",
+        "final_layer.adaLN_modulation.1": "norm_out.linear",
+        "final_layer.linear": "proj_out",
+        "time_in.in_layer": "time_guidance_embed.timestep_embedder.linear_1",
+        "time_in.out_layer": "time_guidance_embed.timestep_embedder.linear_2",
+    }
+    for org, diff in root_mappings.items():
+        for lk in lora_keys:
+            src_key = f"{org}.{lk}.weight"
+            if src_key in sd:
+                converted[f"{diff}.{lk}.weight"] = sd.pop(src_key)
+
     if sd:
         raise ValueError(f"Unexpected keys remaining after Flux2 LoRA conversion: {list(sd.keys())}")
 
