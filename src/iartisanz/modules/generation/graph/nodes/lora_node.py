@@ -16,18 +16,64 @@ from iartisanz.modules.generation.graph.nodes.node import Node
 logger = logging.getLogger(__name__)
 
 
+def _normalize_flux2_lora_keys(state_dict: dict) -> dict:
+    """Normalize kohya-format lora_down/lora_up keys to lora_A/lora_B.
+
+    Handles alpha scaling: when .alpha keys are present, bakes scale into weights
+    (scale = alpha / rank). When absent, default alpha = rank so scale = 1.0.
+    """
+    if not any("lora_down" in k for k in state_dict):
+        return state_dict
+
+    normalized = {}
+    # Group keys by layer prefix (everything before .lora_down/.lora_up/.alpha)
+    layer_prefixes = set()
+    for k in state_dict:
+        for suffix in (".lora_down.weight", ".lora_up.weight", ".alpha"):
+            if k.endswith(suffix):
+                layer_prefixes.add(k[: -len(suffix)])
+                break
+
+    for lp in layer_prefixes:
+        down_key = f"{lp}.lora_down.weight"
+        up_key = f"{lp}.lora_up.weight"
+        alpha_key = f"{lp}.alpha"
+
+        if down_key not in state_dict or up_key not in state_dict:
+            continue
+
+        down = state_dict[down_key]
+        up = state_dict[up_key]
+        rank = down.shape[0]
+
+        alpha = state_dict.get(alpha_key)
+        if alpha is not None:
+            scale = alpha.item() / rank
+        else:
+            scale = 1.0
+
+        # Bake alpha scaling into lora_A (matches diffusers convention)
+        normalized[f"{lp}.lora_A.weight"] = down * scale if scale != 1.0 else down
+        normalized[f"{lp}.lora_B.weight"] = up
+
+    return normalized
+
+
 def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
     """Convert non-diffusers Flux2 LoRA to diffusers PEFT format.
 
     Unlike diffusers' built-in converter which hardcodes 48 single blocks (full Flux2),
     this dynamically detects block counts from the keys — works for Klein 9B (24 single),
-    Klein 4B, or any other variant.
+    Klein 4B, or any other variant. Also handles kohya-format lora_down/lora_up naming.
     """
     converted = {}
 
     # Strip diffusion_model. prefix
     prefix = "diffusion_model."
     sd = {k[len(prefix) :] if k.startswith(prefix) else k: v for k, v in state_dict.items()}
+
+    # Normalize kohya lora_down/lora_up → lora_A/lora_B (with alpha scaling)
+    sd = _normalize_flux2_lora_keys(sd)
 
     # Detect block indices from keys
     single_indices = set()
