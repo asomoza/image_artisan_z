@@ -72,9 +72,6 @@ def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
     prefix = "diffusion_model."
     sd = {k[len(prefix) :] if k.startswith(prefix) else k: v for k, v in state_dict.items()}
 
-    # Normalize kohya lora_down/lora_up → lora_A/lora_B (with alpha scaling)
-    sd = _normalize_flux2_lora_keys(sd)
-
     # Detect block indices from keys
     single_indices = set()
     double_indices = set()
@@ -333,14 +330,20 @@ class LoraNode(Node):
 
             state_dict = load_state_dict(self.path)
 
-            is_dora_scale_present = any("dora_scale" in k for k in state_dict)
-            if is_dora_scale_present:
-                state_dict = {k: v for k, v in state_dict.items() if "dora_scale" not in k}
+            # Strip dora_scale and normalize lora_down/lora_up → lora_A/lora_B
+            state_dict = {k: v for k, v in state_dict.items() if "dora_scale" not in k}
+            state_dict = _normalize_flux2_lora_keys(state_dict)
 
-            # Detect LoRA format: Flux2 vs Z-Image vs already-diffusers
-            is_flux2 = any("single_blocks." in k or "double_blocks." in k for k in state_dict)
+            # Detect LoRA format: Flux2 original vs Z-Image vs already-diffusers
+            # "double_blocks." only appears in original format (diffusers uses "transformer_blocks.")
+            # "single_blocks." must exclude "single_transformer_blocks." (diffusers format)
+            is_flux2_original = any(
+                "double_blocks." in k
+                or ("single_blocks." in k and "single_transformer_blocks." not in k)
+                for k in state_dict
+            )
 
-            if is_flux2:
+            if is_flux2_original:
                 state_dict = _convert_flux2_lora_to_diffusers(state_dict)
             else:
                 has_alphas_in_sd = any(k.endswith(".alpha") for k in state_dict)
