@@ -461,7 +461,11 @@ class ModelItemsView(QWidget):
 
         if model_data is not None:
             try:
-                shutil.rmtree(model_data.filepath)
+                path = model_data.filepath
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                elif os.path.isfile(path):
+                    os.remove(path)
             except Exception as e:
                 logger.error(f"Error deleting model item: {e}")
                 self.error.emit("Model files not found.")
