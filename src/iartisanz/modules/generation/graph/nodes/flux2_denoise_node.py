@@ -4,10 +4,12 @@ from typing import Optional, Union
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from iartisanz.app.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
 from iartisanz.modules.generation.graph.nodes.node import Node
+from iartisanz.utils.image_converters import numpy_to_pt
 
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,9 @@ class Flux2DenoiseNode(Node):
         "lora",
         "edit_image_latents",
         "edit_image_latent_ids",
+        "edit_image_base_latents",
+        "edit_image_mask",
+        "edit_image_mask_strength",
     ]
     OUTPUTS = ["latents", "latent_ids"]
     SERIALIZE_EXCLUDE = {"callback"}
@@ -222,6 +227,47 @@ class Flux2DenoiseNode(Node):
             mu=mu,
         )
 
+        # Differential diffusion setup (edit image inpainting mask)
+        edit_base_latents = getattr(self, "edit_image_base_latents", None)
+        edit_mask_np = getattr(self, "edit_image_mask", None)
+        has_dd = edit_base_latents is not None and edit_mask_np is not None
+        dd_masks = None
+        initial_noise = None
+        original_base = None
+
+        if has_dd:
+            original_base = edit_base_latents.to(self.device, dtype=latents.dtype)
+            initial_noise = latents.clone()
+
+            # Mask from dialog: painted dark (0) = change, unpainted white (1) = preserve.
+            # This matches Z-Image DD convention — use directly as preserve_mask.
+            mask_t = numpy_to_pt(edit_mask_np[None, ...]).to(self.device, dtype=latents.dtype)
+            preserve_mask = mask_t  # (1, 1, H, W)
+
+            # Apply strength: 1.0 = full DD, 0.0 = ignore mask (all change)
+            mask_strength = getattr(self, "edit_image_mask_strength", None)
+            if mask_strength is not None:
+                preserve_mask = preserve_mask * float(mask_strength)
+
+            # Derive patchified spatial dims from latent_ids (T, H, W, L)
+            patch_h = int(latent_ids[0, :, 1].max().item()) + 1
+            patch_w = int(latent_ids[0, :, 2].max().item()) + 1
+
+            preserve_mask = F.interpolate(
+                preserve_mask, size=(patch_h, patch_w), mode="bilinear", align_corners=False
+            )
+            preserve_mask = preserve_mask.reshape(1, -1)  # (1, seq_len)
+
+            # Per-step threshold schedule
+            mask_thresholds = (
+                torch.arange(num_inference_steps, dtype=preserve_mask.dtype) / num_inference_steps
+            )
+            mask_thresholds = mask_thresholds.reshape(-1, 1).to(self.device)
+            dd_masks = (preserve_mask > mask_thresholds).float()  # (steps, seq_len)
+
+            # Start from noised edit image (like img2img at full strength)
+            latents = self.scheduler.scale_noise(original_base, timesteps[:1], initial_noise)
+
         order = getattr(self.scheduler, "order", 1)
         num_warmup_steps = max(len(timesteps) - num_inference_steps * order, 0)
         step_norm_den = float(max(num_inference_steps - 1, 1))
@@ -329,6 +375,18 @@ class Flux2DenoiseNode(Node):
 
             # Scheduler step
             latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+
+            # Differential diffusion blending
+            if has_dd and dd_masks is not None:
+                step_mask = dd_masks[i].unsqueeze(0).unsqueeze(-1)  # (1, seq_len, 1)
+                if i < len(timesteps) - 1:
+                    image_latent = self.scheduler.scale_noise(
+                        original_base, timesteps[i + 1 : i + 2], initial_noise
+                    )
+                else:
+                    image_latent = original_base
+                # mask=1 -> preserve original, mask=0 -> use denoised
+                latents = image_latent * step_mask + latents * (1 - step_mask)
 
             # Step callback
             is_last = i == len(timesteps) - 1

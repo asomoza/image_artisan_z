@@ -60,6 +60,7 @@ class EditImagesPanel(BasePanel):
         self.edit_buttons: list[QPushButton] = []
         self.enable_checkboxes: list[QCheckBox] = []
         self.opacity_effects: list[QGraphicsOpacityEffect] = []
+        self.mask_button: QPushButton | None = None
 
         self._init_ui()
 
@@ -115,6 +116,15 @@ class EditImagesPanel(BasePanel):
             self.remove_buttons.append(remove_btn)
             btn_layout.addWidget(remove_btn)
 
+            # Mask button (slot 0 only)
+            if i == 0:
+                mask_btn = QPushButton("Mask")
+                mask_btn.setFixedWidth(45)
+                mask_btn.setVisible(False)
+                mask_btn.clicked.connect(self._on_mask_clicked)
+                self.mask_button = mask_btn
+                btn_layout.addWidget(mask_btn)
+
             slot_layout.addLayout(btn_layout)
 
             row, col = divmod(i, 2)
@@ -134,6 +144,12 @@ class EditImagesPanel(BasePanel):
         self.event_bus.publish(
             "edit_images",
             {"action": "remove", "image_index": index},
+        )
+
+    def _on_mask_clicked(self):
+        self.event_bus.publish(
+            "manage_dialog",
+            {"dialog_type": "edit_image_mask", "action": "open"},
         )
 
     def _on_enable_toggled(self, index: int, checked: bool):
@@ -163,6 +179,8 @@ class EditImagesPanel(BasePanel):
                 cb.blockSignals(False)
                 cb.setVisible(True)
                 self._set_slot_dimmed(index, False)
+                if index == 0 and self.mask_button is not None:
+                    self.mask_button.setVisible(True)
 
         elif action == "remove":
             if index is not None and 0 <= index < self.MAX_SLOTS:
@@ -175,6 +193,8 @@ class EditImagesPanel(BasePanel):
                 cb.blockSignals(False)
                 cb.setVisible(False)
                 self._set_slot_dimmed(index, False)
+                if index == 0 and self.mask_button is not None:
+                    self.mask_button.setVisible(False)
 
         elif action == "enable":
             if index is not None and 0 <= index < self.MAX_SLOTS:
@@ -195,3 +215,5 @@ class EditImagesPanel(BasePanel):
                 cb.blockSignals(False)
                 cb.setVisible(False)
                 self._set_slot_dimmed(i, False)
+            if self.mask_button is not None:
+                self.mask_button.setVisible(False)
