@@ -3,6 +3,7 @@ import logging
 from typing import Dict, Optional, Union
 
 import torch
+import torch.nn.functional as F
 
 from iartisanz.app.model_manager import ModelHandle, get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
@@ -39,6 +40,7 @@ class ZImageDenoiseNode(Node):
         "control_guidance_start_end",
         "control_mode",
         "prompt_mode_decay",
+        "positive_prompt_text",
     ]
     OUTPUTS = ["latents"]
     SERIALIZE_EXCLUDE = {"callback"}
@@ -221,6 +223,20 @@ class ZImageDenoiseNode(Node):
 
         return masks
 
+    def _extract_freefuse_lora_data(self) -> dict[str, tuple[torch.Tensor, str]]:
+        """Extract LoRAs that have both spatial mask and trigger words."""
+        if not self.lora:
+            return {}
+
+        result = {}
+        loras = self.lora if isinstance(self.lora, list) else [self.lora]
+        for lora_tuple in loras:
+            if len(lora_tuple) >= 4:
+                adapter_name, _, spatial_mask, trigger_words = lora_tuple[:4]
+                if spatial_mask is not None and trigger_words:
+                    result[adapter_name] = (spatial_mask, trigger_words)
+        return result
+
     @torch.inference_mode()
     def __call__(self):
         mm = get_model_manager()
@@ -328,6 +344,66 @@ class ZImageDenoiseNode(Node):
 
             except RuntimeError as e:
                 raise IArtisanZNodeError(e, self.__class__.__name__)
+
+        # Build FreeFuse attention bias if LoRAs have trigger words + spatial masks
+        freefuse_patched = None
+        if self.lora:
+            freefuse_loras = self._extract_freefuse_lora_data()
+            if freefuse_loras:
+                try:
+                    from iartisanz.modules.generation.graph.nodes.freefuse_attention_bias import (
+                        _SEQ_MULTI_OF,
+                        _ceil_to_multiple,
+                        construct_attention_bias,
+                        find_trigger_word_positions,
+                        patch_attention_with_bias,
+                    )
+
+                    tokenizer = mm.get_raw("tokenizer")
+                    prompt_text = getattr(self, "positive_prompt_text", None) or ""
+
+                    if tokenizer and prompt_text:
+                        patch_size = 2
+                        img_h = self.latents.shape[2] // patch_size
+                        img_w = self.latents.shape[3] // patch_size
+                        img_ori_len = img_h * img_w
+                        img_seq_len = _ceil_to_multiple(img_ori_len, _SEQ_MULTI_OF)
+
+                        prompt_embeds_for_len = self.prompt_embeds
+                        cap_ori_len = prompt_embeds_for_len.shape[1]
+                        txt_seq_len = _ceil_to_multiple(cap_ori_len, _SEQ_MULTI_OF)
+
+                        token_pos_maps = {}
+                        flat_masks = {}
+                        for adapter_name, (mask, trigger_words) in freefuse_loras.items():
+                            positions = find_trigger_word_positions(tokenizer, prompt_text, trigger_words)
+                            if positions:
+                                token_pos_maps[adapter_name] = positions
+                                resized = F.interpolate(
+                                    mask.float(), size=(img_h, img_w), mode="bilinear", align_corners=False
+                                )
+                                flat_masks[adapter_name] = resized.flatten(1)  # (1, N_img)
+
+                        if token_pos_maps and flat_masks:
+                            attention_bias = construct_attention_bias(
+                                lora_masks=flat_masks,
+                                token_pos_maps=token_pos_maps,
+                                img_seq_len=img_seq_len,
+                                txt_seq_len=txt_seq_len,
+                                device=self.latents.device,
+                                dtype=self.latents.dtype,
+                            )
+                            freefuse_patched = patch_attention_with_bias(
+                                transformer_raw, attention_bias
+                            )
+                            logger.info(
+                                f"[DenoiseNode] FreeFuse attention bias applied: "
+                                f"img_seq={img_seq_len}, txt_seq={txt_seq_len}, "
+                                f"loras={list(token_pos_maps.keys())}"
+                            )
+                except Exception:
+                    logger.exception("[DenoiseNode] Failed to build FreeFuse attention bias")
+                    freefuse_patched = None
 
         # Compile after adapters are set so the compiled graph matches runtime behavior.
         if (
@@ -675,6 +751,15 @@ class ZImageDenoiseNode(Node):
             is_step_boundary = (i + 1) > num_warmup_steps and (i + 1) % order == 0
             if (is_last or is_step_boundary) and self.callback is not None:
                 self.callback(step_idx, t, latents)
+
+        # Clean up FreeFuse attention bias patches
+        if freefuse_patched:
+            from iartisanz.modules.generation.graph.nodes.freefuse_attention_bias import (
+                unpatch_attention_bias,
+            )
+
+            unpatch_attention_bias(freefuse_patched)
+            logger.debug("[DenoiseNode] Cleaned up FreeFuse attention bias patches")
 
         # Clean up LoRA spatial mask patches
         if lora_masks_applied:

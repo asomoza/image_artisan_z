@@ -174,6 +174,7 @@ class LoraNode(Node):
         database_id: int = 0,
         spatial_mask_enabled: bool = False,
         spatial_mask_path: str = "",
+        trigger_words: str = "",
     ):
         super().__init__()
         self.path = path
@@ -191,6 +192,8 @@ class LoraNode(Node):
         self.spatial_mask_path = spatial_mask_path
         self._cached_mask: Optional[torch.Tensor] = None
         self._mask_load_failed: bool = False
+        # FreeFuse trigger words
+        self.trigger_words = trigger_words
 
     def update_lora(
         self,
@@ -249,6 +252,10 @@ class LoraNode(Node):
                 self._cached_mask = None
                 self._mask_load_failed = False
             self.spatial_mask_path = path
+        self.set_updated()
+
+    def update_trigger_words(self, trigger_words: str):
+        self.trigger_words = trigger_words
         self.set_updated()
 
     def _load_spatial_mask(self) -> Optional[torch.Tensor]:
@@ -388,8 +395,8 @@ class LoraNode(Node):
         if self.spatial_mask_enabled:
             spatial_mask = self._cached_mask
 
-        # Output 3-tuple: (adapter_name, scale_dict, spatial_mask)
-        self.values["lora"] = (self.adapter_name, scale, spatial_mask)
+        # Output 4-tuple: (adapter_name, scale_dict, spatial_mask, trigger_words)
+        self.values["lora"] = (self.adapter_name, scale, spatial_mask, self.trigger_words)
         return self.values
 
     def before_delete(self):

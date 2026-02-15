@@ -849,6 +849,8 @@ class GenerationModule(BaseModule):
             lora_data = data.get("lora")
             lora_data.spatial_mask_path = ""
             self.generation_thread.update_lora_spatial_mask(lora_data)
+        elif action == "update_trigger_words":
+            self.generation_thread.update_lora_trigger_words(data.get("lora"))
 
     def on_generate_event(self, data: dict):
         action = data.get("action")

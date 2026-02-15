@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -96,6 +97,17 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         sliders_layout.addWidget(self.transformer_weight_slider, 0, 1)
 
         self.main_layout.addLayout(sliders_layout)
+
+        # Trigger words for FreeFuse attention bias
+        trigger_layout = QHBoxLayout()
+        trigger_label = QLabel("Trigger words:")
+        trigger_layout.addWidget(trigger_label)
+        self.trigger_words_edit = QLineEdit()
+        self.trigger_words_edit.setPlaceholderText("e.g., woman, person (comma-separated)")
+        self.trigger_words_edit.setText(self.lora.trigger_words)
+        self.trigger_words_edit.editingFinished.connect(self.on_trigger_words_changed)
+        trigger_layout.addWidget(self.trigger_words_edit)
+        self.main_layout.addLayout(trigger_layout)
 
         granular_layout = QHBoxLayout()
         granular_scales_checkbox = QCheckBox("Enable granular scales")
@@ -359,6 +371,12 @@ class LoraAdvancedDialog(BaseSimpleDialog):
     def on_transformer_weight_changed(self, value: float):
         self.lora.transformer_weight = value
         self.event_bus.publish("lora", {"action": "update_weights", "lora": self.lora})
+
+    def on_trigger_words_changed(self):
+        text = self.trigger_words_edit.text().strip()
+        if text != self.lora.trigger_words:
+            self.lora.trigger_words = text
+            self.event_bus.publish("lora", {"action": "update_trigger_words", "lora": self.lora})
 
     def closeEvent(self, event):
         event.ignore()

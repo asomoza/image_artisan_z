@@ -84,6 +84,7 @@ def create_default_graph(model_type: int = 1):
     denoise.connect("negative_prompt_embeds", prompts_encoder, "negative_prompt_embeds")
     denoise.connect("guidance_scale", guidance_scale, "value")
     denoise.connect("guidance_start_end", guidance_start_end, "value")
+    denoise.connect("positive_prompt_text", positive_prompt, "value")
     node_graph.add_node(denoise, "denoise")
 
     latents_decoder = ZImageLatentsDecoderNode()

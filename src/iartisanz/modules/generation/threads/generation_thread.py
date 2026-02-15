@@ -303,6 +303,7 @@ class NodeGraphThread(QThread):
             database_id=lora_data.id,
             spatial_mask_enabled=lora_data.spatial_mask_enabled,
             spatial_mask_path=lora_data.spatial_mask_path,
+            trigger_words=lora_data.trigger_words,
         )
         lora_node.lora_enabled = lora_data.enabled
         lora_node.connect("transformer", self.node_graph.get_node_by_name("model"), "transformer")
@@ -343,6 +344,11 @@ class NodeGraphThread(QThread):
                 enabled=lora_data.spatial_mask_enabled,
                 path=lora_data.spatial_mask_path,
             )
+
+    def update_lora_trigger_words(self, lora_data: LoraDataObject):
+        lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
+        if lora_node is not None:
+            lora_node.update_trigger_words(lora_data.trigger_words)
 
     def remove_lora(self, lora_data: LoraDataObject):
         lora_node = None

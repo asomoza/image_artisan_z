@@ -56,3 +56,4 @@ class LoraDataObject:
     # Spatial masking fields
     spatial_mask_enabled: bool = attr.ib(default=False)
     spatial_mask_path: str = attr.ib(default="")
+    trigger_words: str = attr.ib(default="")
