@@ -242,6 +242,14 @@ class ImageArtisanZNodeGraph:
             if node_id not in new_id_to_node:
                 self.delete_node_by_id(node_id)
 
+        # Node deletions disconnect affected nodes and mark them updated, but
+        # those updates use a local set inside set_updated() and are NOT tracked
+        # in our outer updated_nodes.  Capture them now so the final reset loop
+        # doesn't discard them (fixes stale outputs when edit images are removed).
+        for node in self.nodes:
+            if node.updated and node.id not in updated_nodes:
+                node.set_updated(updated_nodes)
+
         # Include input name so we detect re-wires between inputs
         new_connections = defaultdict(list)  # to_node_id -> [(to_input_name, from_node_id, from_output_name)]
         for connection_dict in graph_dict["connections"]:
