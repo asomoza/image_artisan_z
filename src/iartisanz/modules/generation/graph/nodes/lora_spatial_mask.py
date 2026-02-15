@@ -152,7 +152,7 @@ def patch_lora_layer_with_spatial_mask(
     # Replace forward method
     layer.forward = masked_forward
 
-    logger.debug(f"Patched LoRA layer {layer.__class__.__name__} with spatial mask (hint spatial_dims={spatial_dims})")
+    logger.log(5, f"Patched LoRA layer {layer.__class__.__name__} with spatial mask (hint spatial_dims={spatial_dims})")
 
 
 def _infer_spatial_from_sequence_length(N: int) -> Tuple[Optional[int], Optional[int], int]:

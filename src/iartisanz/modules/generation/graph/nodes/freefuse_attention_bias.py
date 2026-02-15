@@ -235,71 +235,98 @@ def construct_attention_bias(
     return bias
 
 
-def patch_attention_with_bias(transformer, attention_bias: torch.Tensor) -> list:
-    """Monkey-patch transformer attention processors to inject FreeFuse bias.
+class _BiasInjectionProcessor:
+    """Wrapper processor that injects FreeFuse attention bias.
 
-    Intercepts each layer's attention processor to convert the 2D bool padding mask
-    into a 4D float mask with the FreeFuse bias added. The processor's own 2D→4D
-    conversion is then skipped (since ndim != 2).
+    Replaces the original attention processor on each layer.  The wrapper
+    converts the 2D bool padding mask into a 4D float mask with bias added,
+    then delegates to the original processor.
+
+    Note: We replace the processor *instance* rather than patching
+    ``proc.__call__`` because Python resolves ``__call__`` on the **class**
+    for implicit calls (``proc(...)``), not on the instance dict.
+    """
+
+    def __init__(self, original_processor, attention_bias: torch.Tensor):
+        self._original = original_processor
+        self._bias = attention_bias
+        # Copy attributes that callers might inspect
+        if hasattr(original_processor, "_attention_backend"):
+            self._attention_backend = original_processor._attention_backend
+        if hasattr(original_processor, "_parallel_config"):
+            self._parallel_config = original_processor._parallel_config
+
+    def __call__(
+        self,
+        attn,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        freqs_cis=None,
+    ):
+        if attention_mask is not None and attention_mask.ndim == 2:
+            B, S = attention_mask.shape
+            dt = hidden_states.dtype
+
+            # Convert 2D bool padding mask → 4D float mask (B, 1, S, S)
+            bool_4d = attention_mask.bool().unsqueeze(1).unsqueeze(1)  # (B, 1, 1, S)
+            float_mask = torch.zeros(
+                B, 1, S, S, device=attention_mask.device, dtype=dt
+            )
+            float_mask.masked_fill_(~bool_4d, torch.finfo(dt).min)
+
+            # Slice bias to match actual sequence length
+            bias_slice = self._bias[:, :S, :S]
+            if bias_slice.shape[0] < B:
+                bias_slice = bias_slice.expand(B, -1, -1)
+            bias_4d = bias_slice.unsqueeze(1).to(
+                device=float_mask.device, dtype=dt
+            )
+
+            attention_mask = float_mask + bias_4d
+
+        return self._original(
+            attn,
+            hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            attention_mask=attention_mask,
+            freqs_cis=freqs_cis,
+        )
+
+
+def patch_attention_with_bias(
+    transformer, attention_bias: torch.Tensor, last_half_only: bool = True
+) -> list:
+    """Replace transformer attention processors with bias-injecting wrappers.
+
+    Each layer's processor is swapped out for a :class:`_BiasInjectionProcessor`
+    that converts the 2D bool padding mask into a 4D float mask with the
+    FreeFuse bias added, then delegates to the original processor.
 
     Args:
         transformer: The Z-Image transformer model.
         attention_bias: Bias tensor of shape (B, total_seq, total_seq).
+        last_half_only: If True, only patch the last half of layers (matching
+            FreeFuse reference ``attention_bias_blocks="last_half"``).
 
     Returns:
-        List of (processor, original_call) tuples for cleanup.
+        List of (layer_attention, original_processor) tuples for cleanup.
     """
     patched = []
-    for layer in transformer.layers:
-        proc = layer.attention.processor
-        original_call = proc.__call__
+    n_layers = len(transformer.layers)
+    start_idx = n_layers // 2 if last_half_only else 0
 
-        def make_patched(orig, bias):
-            def patched_call(
-                attn,
-                hidden_states,
-                encoder_hidden_states=None,
-                attention_mask=None,
-                freqs_cis=None,
-            ):
-                if attention_mask is not None and attention_mask.ndim == 2:
-                    B, S = attention_mask.shape
-                    dt = hidden_states.dtype
-
-                    # Convert 2D bool padding mask → 4D float mask (B, 1, S, S)
-                    bool_4d = attention_mask.bool().unsqueeze(1).unsqueeze(1)  # (B, 1, 1, S)
-                    float_mask = torch.zeros(
-                        B, 1, S, S, device=attention_mask.device, dtype=dt
-                    )
-                    float_mask.masked_fill_(~bool_4d, torch.finfo(dt).min)
-
-                    # Slice bias to match actual sequence length
-                    bias_slice = bias[:, :S, :S]
-                    if bias_slice.shape[0] < B:
-                        bias_slice = bias_slice.expand(B, -1, -1)
-                    bias_4d = bias_slice.unsqueeze(1).to(
-                        device=float_mask.device, dtype=dt
-                    )
-
-                    attention_mask = float_mask + bias_4d
-
-                return orig(
-                    attn,
-                    hidden_states,
-                    encoder_hidden_states=encoder_hidden_states,
-                    attention_mask=attention_mask,
-                    freqs_cis=freqs_cis,
-                )
-
-            return patched_call
-
-        proc.__call__ = make_patched(original_call, attention_bias)
-        patched.append((proc, original_call))
+    for i in range(start_idx, n_layers):
+        layer = transformer.layers[i]
+        attn_module = layer.attention
+        original_proc = attn_module.processor
+        attn_module.processor = _BiasInjectionProcessor(original_proc, attention_bias)
+        patched.append((attn_module, original_proc))
 
     return patched
 
 
 def unpatch_attention_bias(patched: list) -> None:
-    """Restore original attention processor __call__ methods."""
-    for proc, original_call in patched:
-        proc.__call__ = original_call
+    """Restore original attention processors."""
+    for attn_module, original_proc in patched:
+        attn_module.processor = original_proc

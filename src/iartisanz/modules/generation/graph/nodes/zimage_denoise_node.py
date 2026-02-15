@@ -237,6 +237,20 @@ class ZImageDenoiseNode(Node):
                     result[adapter_name] = (spatial_mask, trigger_words)
         return result
 
+    def _extract_auto_mask_lora_data(self) -> dict[str, str]:
+        """Extract LoRAs with trigger words but NO spatial mask (Phase B candidates)."""
+        if not self.lora:
+            return {}
+
+        result = {}
+        loras = self.lora if isinstance(self.lora, list) else [self.lora]
+        for lora_tuple in loras:
+            if len(lora_tuple) >= 4:
+                adapter_name, _, spatial_mask, trigger_words = lora_tuple[:4]
+                if spatial_mask is None and trigger_words:
+                    result[adapter_name] = trigger_words
+        return result
+
     @torch.inference_mode()
     def __call__(self):
         mm = get_model_manager()
@@ -345,11 +359,162 @@ class ZImageDenoiseNode(Node):
             except RuntimeError as e:
                 raise IArtisanZNodeError(e, self.__class__.__name__)
 
-        # Build FreeFuse attention bias if LoRAs have trigger words + spatial masks
+        # Phase B: Auto-mask extraction for LoRAs with trigger words but no spatial mask
+        auto_mask_loras = self._extract_auto_mask_lora_data()
+        auto_derived_masks = {}
+        phase_b_total_seq = None
+
+        if auto_mask_loras and self.lora:
+            try:
+                from iartisanz.modules.generation.graph.nodes.freefuse_auto_mask import (
+                    install_sim_map_collector,
+                    process_sim_maps,
+                    remove_sim_map_collector,
+                )
+                from iartisanz.modules.generation.graph.nodes.freefuse_attention_bias import (
+                    find_trigger_word_positions,
+                )
+
+                ff_tokenizer = mm.get_raw("tokenizer")
+                ff_prompt_text = getattr(self, "positive_prompt_text", None) or ""
+
+                if not ff_prompt_text:
+                    logger.warning(
+                        "[DenoiseNode] Phase B skipped: positive_prompt_text not wired. "
+                        "Rebuild graph (switch model type and back) to enable FreeFuse auto-masks."
+                    )
+                elif ff_tokenizer:
+                    patch_size = 2
+                    img_h = self.latents.shape[2] // patch_size
+                    img_w = self.latents.shape[3] // patch_size
+                    img_ori_len = img_h * img_w
+                    cap_ori_len = self.prompt_embeds.shape[1]
+
+                    auto_token_pos_maps = {}
+                    for adapter_name, trigger_words in auto_mask_loras.items():
+                        positions = find_trigger_word_positions(
+                            ff_tokenizer, ff_prompt_text, trigger_words
+                        )
+                        if positions:
+                            auto_token_pos_maps[adapter_name] = positions
+
+                    if auto_token_pos_maps:
+                        block_idx = min(18, len(transformer_raw.layers) - 1)
+                        collector_state = install_sim_map_collector(
+                            transformer_raw, block_idx, auto_token_pos_maps,
+                            img_seq_len=img_ori_len, cap_seq_len=cap_ori_len,
+                        )
+
+                        # Disable LoRA for Phase 1 — collect base model attention
+                        transformer_raw.disable_adapters()
+
+                        try:
+                            phase1_steps = 3
+                            p1_timesteps, _ = self.retrieve_timesteps(
+                                self.scheduler, num_inference_steps, self.device,
+                                sigmas=self.sigmas,
+                            )
+                            phase1_steps = min(phase1_steps, len(p1_timesteps))
+                            phase1_latents = self.latents.clone()
+                            p1_prompt_embeds = self.prompt_embeds.to(
+                                device=self.device, dtype=transformer_dtype,
+                            )
+
+                            logger.info(
+                                "[DenoiseNode] Phase B: collecting sim maps (%d steps, block %d)",
+                                phase1_steps, block_idx,
+                            )
+
+                            collector = collector_state["collector"]
+                            for i, t in enumerate(p1_timesteps[:phase1_steps]):
+                                collector.cal_concept_sim_map = (
+                                    i == phase1_steps - 1
+                                )
+                                timestep = t.expand(phase1_latents.shape[0])
+                                timestep = (1000 - timestep) / 1000
+
+                                lat = phase1_latents.to(transformer_dtype).unsqueeze(2)
+                                lat_list = lat.unbind(dim=0)
+
+                                model_out = transformer_raw(
+                                    lat_list, timestep, (p1_prompt_embeds,),
+                                    return_dict=False,
+                                )[0]
+                                noise_pred_p1 = torch.stack(
+                                    [o.float() for o in model_out], dim=0
+                                )
+                                noise_pred_p1 = noise_pred_p1.squeeze(2)
+                                noise_pred_p1 = -noise_pred_p1
+                                phase1_latents = self.scheduler.step(
+                                    noise_pred_p1.to(torch.float32), t,
+                                    phase1_latents, return_dict=False,
+                                )[0]
+
+                            concept_sim_maps = collector.concept_sim_maps
+                            phase_b_total_seq = collector.total_seq
+                        finally:
+                            remove_sim_map_collector(collector_state)
+                            transformer_raw.enable_adapters()
+
+                        if concept_sim_maps:
+                            logger.debug(
+                                "[DenoiseNode] Phase B sim maps collected: %s",
+                                {k: v.shape for k, v in concept_sim_maps.items()},
+                            )
+                            auto_derived_masks = process_sim_maps(
+                                concept_sim_maps, img_h, img_w, img_ori_len,
+                            )
+                            if auto_derived_masks:
+                                for mn, mv in auto_derived_masks.items():
+                                    logger.info(
+                                        "[DenoiseNode] Phase B mask '%s': "
+                                        "coverage=%.1f%% (%d/%d tokens)",
+                                        mn, mv.sum().item() / mv.numel() * 100,
+                                        int(mv.sum().item()), mv.numel(),
+                                    )
+                            else:
+                                logger.warning(
+                                    "[DenoiseNode] Phase B: process_sim_maps returned empty masks"
+                                )
+                        else:
+                            logger.warning(
+                                "[DenoiseNode] Phase B: no concept sim maps collected"
+                            )
+
+            except Exception:
+                logger.exception("[DenoiseNode] Failed Phase B auto-mask extraction")
+                auto_derived_masks = {}
+
+        # Apply Phase B auto-derived masks as LoRA spatial masks
+        # (equivalent to FreeFuseLinear / set_freefuse_masks in the reference)
+        if auto_derived_masks:
+            from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import (
+                patch_lora_adapter_with_spatial_mask,
+            )
+
+            _patch_size = 2
+            _img_h = self.latents.shape[2] // _patch_size
+            _img_w = self.latents.shape[3] // _patch_size
+            _latent_dims = (self.latents.shape[2], self.latents.shape[3])
+            for adapter_name, flat_mask in auto_derived_masks.items():
+                spatial_mask_2d = flat_mask.view(1, 1, _img_h, _img_w)
+                patch_lora_adapter_with_spatial_mask(
+                    transformer_raw, adapter_name, spatial_mask_2d,
+                    latent_spatial_dims=_latent_dims,
+                )
+            lora_masks_applied = True
+            logger.info(
+                "[DenoiseNode] Phase B: applied auto-derived spatial masks to LoRA layers: %s",
+                list(auto_derived_masks.keys()),
+            )
+
+        # Build FreeFuse attention bias (Phase A manual + Phase B auto masks)
         freefuse_patched = None
         if self.lora:
             freefuse_loras = self._extract_freefuse_lora_data()
-            if freefuse_loras:
+            has_freefuse_data = bool(freefuse_loras) or bool(auto_derived_masks)
+
+            if has_freefuse_data:
                 try:
                     from iartisanz.modules.generation.graph.nodes.freefuse_attention_bias import (
                         _SEQ_MULTI_OF,
@@ -362,7 +527,12 @@ class ZImageDenoiseNode(Node):
                     tokenizer = mm.get_raw("tokenizer")
                     prompt_text = getattr(self, "positive_prompt_text", None) or ""
 
-                    if tokenizer and prompt_text:
+                    if not prompt_text:
+                        logger.warning(
+                            "[DenoiseNode] FreeFuse skipped: positive_prompt_text not wired. "
+                            "Rebuild graph (switch model type and back) to enable FreeFuse."
+                        )
+                    elif tokenizer:
                         patch_size = 2
                         img_h = self.latents.shape[2] // patch_size
                         img_w = self.latents.shape[3] // patch_size
@@ -371,10 +541,19 @@ class ZImageDenoiseNode(Node):
 
                         prompt_embeds_for_len = self.prompt_embeds
                         cap_ori_len = prompt_embeds_for_len.shape[1]
-                        txt_seq_len = _ceil_to_multiple(cap_ori_len, _SEQ_MULTI_OF)
+
+                        # Use actual caption length from Phase B collector when available.
+                        # The transformer may compress prompt_embeds (e.g. 2560 → 32 tokens),
+                        # so prompt_embeds.shape[1] can be much larger than reality.
+                        if phase_b_total_seq is not None:
+                            txt_seq_len = phase_b_total_seq - img_seq_len
+                        else:
+                            txt_seq_len = _ceil_to_multiple(cap_ori_len, _SEQ_MULTI_OF)
 
                         token_pos_maps = {}
                         flat_masks = {}
+
+                        # Phase A: manual masks with trigger words
                         for adapter_name, (mask, trigger_words) in freefuse_loras.items():
                             positions = find_trigger_word_positions(tokenizer, prompt_text, trigger_words)
                             if positions:
@@ -383,6 +562,17 @@ class ZImageDenoiseNode(Node):
                                     mask.float(), size=(img_h, img_w), mode="bilinear", align_corners=False
                                 )
                                 flat_masks[adapter_name] = resized.flatten(1)  # (1, N_img)
+
+                        # Phase B: auto-derived masks (don't override manual)
+                        for adapter_name, flat_mask in auto_derived_masks.items():
+                            if adapter_name not in flat_masks:
+                                trigger_words = auto_mask_loras.get(adapter_name, "")
+                                positions = find_trigger_word_positions(
+                                    tokenizer, prompt_text, trigger_words
+                                )
+                                if positions:
+                                    token_pos_maps[adapter_name] = positions
+                                    flat_masks[adapter_name] = flat_mask
 
                         if token_pos_maps and flat_masks:
                             attention_bias = construct_attention_bias(

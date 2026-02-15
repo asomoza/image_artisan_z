@@ -285,6 +285,22 @@ class NodeGraphThread(QThread):
             db_model_id=model_data_object.id if model_data_object.id else None,
         )
 
+    def _ensure_freefuse_wiring(self):
+        """Ensure positive_prompt_text is wired to denoise for FreeFuse.
+
+        Old graphs created before FreeFuse was added lack this connection.
+        This is a no-op if the connection already exists.
+        """
+        denoise = self.node_graph.get_node_by_name("denoise")
+        if denoise is None:
+            return
+        if denoise.connections.get("positive_prompt_text"):
+            return
+        positive_prompt = self.node_graph.get_node_by_name("positive_prompt")
+        if positive_prompt is None:
+            return
+        denoise.connect("positive_prompt_text", positive_prompt, "value")
+
     def add_lora(self, lora_data: LoraDataObject):
         lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
 
@@ -311,6 +327,8 @@ class NodeGraphThread(QThread):
 
         denoise = self.node_graph.get_node_by_name("denoise")
         denoise.connect("lora", lora_node, "lora")
+
+        self._ensure_freefuse_wiring()
 
     def update_lora_weights(self, lora_data: LoraDataObject):
         lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
@@ -349,6 +367,8 @@ class NodeGraphThread(QThread):
         lora_node = self.node_graph.get_node_by_name(lora_data.lora_node_name)
         if lora_node is not None:
             lora_node.update_trigger_words(lora_data.trigger_words)
+            if lora_data.trigger_words:
+                self._ensure_freefuse_wiring()
 
     def remove_lora(self, lora_data: LoraDataObject):
         lora_node = None
