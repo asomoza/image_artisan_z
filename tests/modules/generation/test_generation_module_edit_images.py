@@ -42,6 +42,7 @@ def module():
         mod.edit_image_thumb_paths = [None] * 4
         mod.edit_source_image_layers = [None] * 4
         mod.edit_result_image_layers = [None] * 4
+        mod.edit_image_enabled = [True] * 4
 
         yield mod
 
@@ -115,6 +116,68 @@ class TestOnEditImagesEvent:
         module.on_edit_images_event({"action": "update_source_layers", "image_index": 0, "layers": layers})
 
         assert module.edit_source_image_layers[0] is layers
+
+    def test_disable_removes_from_graph_preserves_state(self, module):
+        """Disabling an edit image removes it from the graph but keeps paths/layers."""
+        module.edit_image_paths[1] = "/tmp/edit.png"
+        module.edit_image_thumb_paths[1] = "/tmp/thumb.png"
+        module.edit_source_image_layers[1] = ["layer"]
+
+        module.on_edit_images_event({"action": "disable", "image_index": 1})
+
+        assert module.edit_image_enabled[1] is False
+        # State preserved
+        assert module.edit_image_paths[1] == "/tmp/edit.png"
+        assert module.edit_image_thumb_paths[1] == "/tmp/thumb.png"
+        assert module.edit_source_image_layers[1] == ["layer"]
+        # Node removed from graph
+        module.generation_thread.remove_edit_image.assert_called_once_with(1)
+
+    def test_enable_readds_to_graph(self, module):
+        """Enabling a previously disabled edit image re-adds it to the graph."""
+        module.edit_image_paths[2] = "/tmp/edit.png"
+        module.edit_image_enabled[2] = False
+
+        module.on_edit_images_event({"action": "enable", "image_index": 2})
+
+        assert module.edit_image_enabled[2] is True
+        module.generation_thread.add_edit_image.assert_called_once_with(2, "/tmp/edit.png")
+
+    def test_enable_without_path_does_not_call_thread(self, module):
+        """Enabling a slot with no image path should not call the thread."""
+        module.edit_image_enabled[0] = False
+
+        module.on_edit_images_event({"action": "enable", "image_index": 0})
+
+        assert module.edit_image_enabled[0] is True
+        module.generation_thread.add_edit_image.assert_not_called()
+
+    def test_remove_resets_enabled_to_true(self, module):
+        """Removing an edit image resets enabled state to True for next use."""
+        module.edit_image_paths[0] = "/tmp/edit.png"
+        module.edit_image_enabled[0] = False
+
+        module.on_edit_images_event({"action": "remove", "image_index": 0})
+
+        assert module.edit_image_enabled[0] is True
+
+    def test_reset_resets_all_enabled(self, module):
+        """Reset clears all enabled states back to True."""
+        module.edit_image_enabled = [False, True, False, True]
+
+        module.on_edit_images_event({"action": "reset"})
+
+        assert module.edit_image_enabled == [True] * 4
+
+    def test_add_sets_enabled_true(self, module):
+        """Adding an image always sets enabled to True."""
+        module.edit_image_enabled[0] = False
+
+        module.on_edit_images_event(
+            {"action": "add", "image_index": 0, "image_path": "/tmp/edit.png", "image_thumb_path": "/tmp/thumb.png"}
+        )
+
+        assert module.edit_image_enabled[0] is True
 
 
 class TestEditImagesDialogCloseKey:

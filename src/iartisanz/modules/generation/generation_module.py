@@ -85,6 +85,7 @@ class GenerationModule(BaseModule):
         self.edit_image_thumb_paths: list[str | None] = [None] * 4
         self.edit_source_image_layers: list = [None] * 4
         self.edit_result_image_layers: list = [None] * 4
+        self.edit_image_enabled: list[bool] = [True] * 4
 
         self.create_generation_thread()
 
@@ -493,6 +494,7 @@ class GenerationModule(BaseModule):
             self.edit_image_thumb_paths = [None] * 4
             self.edit_source_image_layers = [None] * 4
             self.edit_result_image_layers = [None] * 4
+            self.edit_image_enabled = [True] * 4
 
             # Recreate staged graph/thread without clearing ModelManager / VRAM.
             old_thread = self.generation_thread
@@ -755,6 +757,7 @@ class GenerationModule(BaseModule):
         self.edit_image_thumb_paths = [None] * 4
         self.edit_source_image_layers = [None] * 4
         self.edit_result_image_layers = [None] * 4
+        self.edit_image_enabled = [True] * 4
 
         # Reset prompts widget state so all values get pushed to the new graph.
         self.prompts_widget.previous_seed = None
@@ -1082,6 +1085,7 @@ class GenerationModule(BaseModule):
                 image_path = data.get("image_path")
                 self.edit_image_paths[index] = image_path
                 self.edit_image_thumb_paths[index] = data.get("image_thumb_path")
+                self.edit_image_enabled[index] = True
                 if image_path:
                     if action == "add":
                         self.generation_thread.add_edit_image(index, image_path)
@@ -1094,6 +1098,19 @@ class GenerationModule(BaseModule):
                 self.edit_image_thumb_paths[index] = None
                 self.edit_source_image_layers[index] = None
                 self.edit_result_image_layers[index] = None
+                self.edit_image_enabled[index] = True
+                self.generation_thread.remove_edit_image(index)
+
+        elif action == "enable":
+            if index is not None and 0 <= index < 4:
+                self.edit_image_enabled[index] = True
+                image_path = self.edit_image_paths[index]
+                if image_path:
+                    self.generation_thread.add_edit_image(index, image_path)
+
+        elif action == "disable":
+            if index is not None and 0 <= index < 4:
+                self.edit_image_enabled[index] = False
                 self.generation_thread.remove_edit_image(index)
 
         elif action == "update_layers":
@@ -1109,4 +1126,5 @@ class GenerationModule(BaseModule):
             self.edit_image_thumb_paths = [None] * 4
             self.edit_source_image_layers = [None] * 4
             self.edit_result_image_layers = [None] * 4
+            self.edit_image_enabled = [True] * 4
             self.generation_thread.remove_all_edit_images()

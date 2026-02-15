@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QGraphicsOpacityEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from iartisanz.modules.generation.panels.base_panel import BasePanel
 
@@ -50,6 +58,8 @@ class EditImagesPanel(BasePanel):
         self.thumb_labels: list[EditImageSlotWidget] = []
         self.remove_buttons: list[QPushButton] = []
         self.edit_buttons: list[QPushButton] = []
+        self.enable_checkboxes: list[QCheckBox] = []
+        self.opacity_effects: list[QGraphicsOpacityEffect] = []
 
         self._init_ui()
 
@@ -75,8 +85,20 @@ class EditImagesPanel(BasePanel):
             self.thumb_labels.append(thumb)
             slot_layout.addWidget(thumb, alignment=Qt.AlignmentFlag.AlignCenter)
 
+            opacity_effect = QGraphicsOpacityEffect(thumb)
+            opacity_effect.setOpacity(1.0)
+            thumb.setGraphicsEffect(opacity_effect)
+            self.opacity_effects.append(opacity_effect)
+
             btn_layout = QHBoxLayout()
             btn_layout.setSpacing(4)
+
+            enable_cb = QCheckBox()
+            enable_cb.setChecked(True)
+            enable_cb.setVisible(False)
+            enable_cb.toggled.connect(lambda checked, idx=i: self._on_enable_toggled(idx, checked))
+            self.enable_checkboxes.append(enable_cb)
+            btn_layout.addWidget(enable_cb)
 
             edit_btn = QPushButton("Edit")
             edit_btn.setObjectName("green_button")
@@ -114,6 +136,16 @@ class EditImagesPanel(BasePanel):
             {"action": "remove", "image_index": index},
         )
 
+    def _on_enable_toggled(self, index: int, checked: bool):
+        action = "enable" if checked else "disable"
+        self.event_bus.publish(
+            "edit_images",
+            {"action": action, "image_index": index},
+        )
+
+    def _set_slot_dimmed(self, index: int, dimmed: bool):
+        self.opacity_effects[index].setOpacity(0.35 if dimmed else 1.0)
+
     def on_edit_images_event(self, data: dict):
         action = data.get("action")
         index = data.get("image_index")
@@ -125,15 +157,41 @@ class EditImagesPanel(BasePanel):
                 if thumb_path:
                     self.thumb_labels[index].set_thumbnail(thumb_path)
                 self.remove_buttons[index].setVisible(True)
+                cb = self.enable_checkboxes[index]
+                cb.blockSignals(True)
+                cb.setChecked(True)
+                cb.blockSignals(False)
+                cb.setVisible(True)
+                self._set_slot_dimmed(index, False)
 
         elif action == "remove":
             if index is not None and 0 <= index < self.MAX_SLOTS:
                 self.thumb_paths[index] = None
                 self.thumb_labels[index].clear_thumbnail()
                 self.remove_buttons[index].setVisible(False)
+                cb = self.enable_checkboxes[index]
+                cb.blockSignals(True)
+                cb.setChecked(True)
+                cb.blockSignals(False)
+                cb.setVisible(False)
+                self._set_slot_dimmed(index, False)
+
+        elif action == "enable":
+            if index is not None and 0 <= index < self.MAX_SLOTS:
+                self._set_slot_dimmed(index, False)
+
+        elif action == "disable":
+            if index is not None and 0 <= index < self.MAX_SLOTS:
+                self._set_slot_dimmed(index, True)
 
         elif action == "reset":
             for i in range(self.MAX_SLOTS):
                 self.thumb_paths[i] = None
                 self.thumb_labels[i].clear_thumbnail()
                 self.remove_buttons[i].setVisible(False)
+                cb = self.enable_checkboxes[i]
+                cb.blockSignals(True)
+                cb.setChecked(True)
+                cb.blockSignals(False)
+                cb.setVisible(False)
+                self._set_slot_dimmed(i, False)
