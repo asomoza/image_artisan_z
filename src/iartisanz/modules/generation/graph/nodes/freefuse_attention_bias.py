@@ -29,6 +29,10 @@ def find_trigger_word_positions(
 ) -> list[int]:
     """Find token positions for trigger words in the tokenized prompt.
 
+    Uses character-span mapping rather than token-subsequence matching,
+    because subword tokenizers (SentencePiece, BPE) produce different
+    tokens for the same word depending on surrounding context.
+
     Args:
         tokenizer: The tokenizer used for the prompt.
         prompt_text: The full prompt text.
@@ -44,39 +48,108 @@ def find_trigger_word_positions(
     if not words:
         return []
 
-    # Tokenize full prompt (without special tokens — they are added by the encoder)
-    full_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-
     positions: list[int] = []
-    used: set[int] = set()
+    used_chars: set[int] = set()
+    used_tokens: set[int] = set()
+
+    # Try offset-mapping approach first (fast tokenizers support this)
+    offsets = _get_token_offsets(tokenizer, prompt_text)
 
     for word in words:
-        word_ids = tokenizer.encode(word, add_special_tokens=False)
-        if not word_ids:
-            logger.warning(f"[FreeFuse] Trigger word '{word}' produced no tokens, skipping")
+        # Find character span of trigger word in prompt
+        char_start = prompt_text.find(word)
+        if char_start == -1:
+            logger.warning(
+                f"[FreeFuse] Trigger word '{word}' not found in prompt text, skipping"
+            )
             continue
 
-        # Sliding window search for subsequence
-        found = False
-        for start in range(len(full_ids) - len(word_ids) + 1):
-            if start in used:
-                continue
-            if full_ids[start : start + len(word_ids)] == word_ids:
-                new_positions = list(range(start, start + len(word_ids)))
-                # Skip if overlapping with already-claimed positions
-                if any(p in used for p in new_positions):
-                    continue
-                positions.extend(new_positions)
-                used.update(new_positions)
-                found = True
-                break
+        char_end = char_start + len(word)
 
-        if not found:
+        # Skip if overlapping with already-claimed characters
+        if any(c in used_chars for c in range(char_start, char_end)):
+            continue
+
+        if offsets is not None:
+            # Use offset mapping: find tokens whose character span overlaps
+            word_tokens = _tokens_from_offsets(offsets, char_start, char_end, used_tokens)
+        else:
+            # Fallback: prefix-length method
+            word_tokens = _tokens_from_prefix_length(
+                tokenizer, prompt_text, char_start, char_end, used_tokens
+            )
+
+        if word_tokens:
+            positions.extend(word_tokens)
+            used_tokens.update(word_tokens)
+            used_chars.update(range(char_start, char_end))
+        else:
             logger.warning(
-                f"[FreeFuse] Trigger word '{word}' not found in prompt tokens, skipping"
+                f"[FreeFuse] Trigger word '{word}' could not be mapped to tokens, skipping"
             )
 
     return sorted(positions)
+
+
+def _get_token_offsets(tokenizer, text: str) -> list[tuple[int, int]] | None:
+    """Try to get (char_start, char_end) offsets for each token.
+
+    Returns None if the tokenizer doesn't support offset mapping.
+    """
+    try:
+        encoding = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+        offsets = encoding.get("offset_mapping")
+        if offsets and len(offsets) == len(encoding["input_ids"]):
+            return offsets
+    except Exception:
+        pass
+    return None
+
+
+def _tokens_from_offsets(
+    offsets: list[tuple[int, int]],
+    char_start: int,
+    char_end: int,
+    used_tokens: set[int],
+) -> list[int]:
+    """Map a character span to token indices using offset mapping."""
+    result = []
+    for tok_idx, (tok_start, tok_end) in enumerate(offsets):
+        if tok_idx in used_tokens:
+            continue
+        if tok_end <= char_start or tok_start >= char_end:
+            continue
+        result.append(tok_idx)
+    return result
+
+
+def _tokens_from_prefix_length(
+    tokenizer,
+    prompt_text: str,
+    char_start: int,
+    char_end: int,
+    used_tokens: set[int],
+) -> list[int]:
+    """Map a character span to token indices using prefix token counts.
+
+    Tokenizes the prompt up to char_start and up to char_end, then the
+    trigger word tokens are the difference in token count. This works
+    regardless of tokenizer type because it preserves the full left context.
+    """
+    try:
+        prefix_ids = tokenizer.encode(prompt_text[:char_start], add_special_tokens=False)
+        prefix_plus_word_ids = tokenizer.encode(prompt_text[:char_end], add_special_tokens=False)
+
+        tok_start = len(prefix_ids)
+        tok_end = len(prefix_plus_word_ids)
+
+        if tok_end <= tok_start:
+            return []
+
+        result = [i for i in range(tok_start, tok_end) if i not in used_tokens]
+        return result
+    except Exception:
+        return []
 
 
 def construct_attention_bias(
