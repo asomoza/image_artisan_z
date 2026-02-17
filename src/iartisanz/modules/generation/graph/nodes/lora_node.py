@@ -322,6 +322,60 @@ def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
     return {f"transformer.{k}": v for k, v in converted.items()}
 
 
+def _is_diffusers_format(state_dict: dict) -> bool:
+    """Check if state dict is already in diffusers PEFT format.
+
+    Diffusers PEFT keys start with ``transformer.`` and use ``lora_A``/``lora_B``
+    naming.  Non-diffusers formats use other prefixes (``diffusion_model.``,
+    ``lora_unet``), kohya naming (``lora_down``/``lora_up``), or ``.alpha`` keys.
+    """
+    return all(k.startswith("transformer.") for k in state_dict)
+
+
+def _convert_zimage_lora(state_dict: dict) -> dict:
+    """Convert a non-diffusers Z-Image LoRA to diffusers PEFT format.
+
+    Handles kohya format (lora_unet__ prefixed keys with lora_down/lora_up)
+    and other non-diffusers formats (alpha keys, diffusion_model. prefix, etc.).
+    Already-diffusers-format LoRAs are returned as-is.
+    """
+    if _is_diffusers_format(state_dict):
+        return state_dict
+    return _convert_non_diffusers_z_image_lora_to_diffusers(state_dict)
+
+
+def _convert_flux2_lora(state_dict: dict) -> dict:
+    """Convert a non-diffusers Flux2 LoRA to diffusers PEFT format.
+
+    Handles kohya format (lora_down/lora_up naming), original format
+    (double_blocks/single_blocks), and already-diffusers-format LoRAs.
+    """
+    if _is_diffusers_format(state_dict):
+        return state_dict
+
+    # Normalize kohya lora_down/lora_up → lora_A/lora_B
+    state_dict = _normalize_flux2_lora_keys(state_dict)
+
+    # Original format uses double_blocks/single_blocks (not transformer_blocks/single_transformer_blocks)
+    is_original_format = any(
+        "double_blocks." in k or ("single_blocks." in k and "single_transformer_blocks." not in k)
+        for k in state_dict
+    )
+    if is_original_format:
+        state_dict = _convert_flux2_lora_to_diffusers(state_dict)
+
+    return state_dict
+
+
+def _convert_lora_to_diffusers(state_dict: dict, transformer) -> dict:
+    """Convert LoRA state dict to diffusers PEFT format based on transformer type."""
+    from diffusers import Flux2Transformer2DModel
+
+    if isinstance(transformer, Flux2Transformer2DModel):
+        return _convert_flux2_lora(state_dict)
+    return _convert_zimage_lora(state_dict)
+
+
 class LoraNode(Node):
     PRIORITY = 1
     REQUIRED_INPUTS = ["transformer"]
@@ -527,30 +581,8 @@ class LoraNode(Node):
                 self.values["lora"] = (None, None, self._get_spatial_mask(), self.trigger_words)
                 return self.values
 
-            # Detect LoRA format and convert to diffusers PEFT format.
-            # Check Z-Image kohya format BEFORE Flux2 normalization, because
-            # _normalize_flux2_lora_keys() consumes .alpha keys that the Z-Image
-            # converter needs for detection.
-            has_alphas_in_sd = any(k.endswith(".alpha") for k in state_dict)
-            has_diffusion_model = any(k.startswith("diffusion_model.") for k in state_dict)
-            has_default = any("default." in k for k in state_dict)
-            is_zimage_kohya = any(k.startswith("lora_unet") for k in state_dict)
-
-            if is_zimage_kohya or has_alphas_in_sd or has_diffusion_model or has_default:
-                state_dict = _convert_non_diffusers_z_image_lora_to_diffusers(state_dict)
-            else:
-                # Flux2 path: normalize kohya lora_down/lora_up keys first
-                state_dict = _normalize_flux2_lora_keys(state_dict)
-
-                # "double_blocks." only appears in original format (diffusers uses "transformer_blocks.")
-                # "single_blocks." must exclude "single_transformer_blocks." (diffusers format)
-                is_flux2_original = any(
-                    "double_blocks." in k or ("single_blocks." in k and "single_transformer_blocks." not in k)
-                    for k in state_dict
-                )
-
-                if is_flux2_original:
-                    state_dict = _convert_flux2_lora_to_diffusers(state_dict)
+            # Convert non-diffusers LoRA keys based on the target model.
+            state_dict = _convert_lora_to_diffusers(state_dict, transformer)
 
             is_correct_format = all("lora" in key for key in state_dict.keys())
             if not is_correct_format:
