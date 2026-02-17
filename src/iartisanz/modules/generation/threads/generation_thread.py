@@ -294,6 +294,8 @@ class NodeGraphThread(QThread):
         denoise = self.node_graph.get_node_by_name("denoise")
         if denoise is None:
             return
+        if "positive_prompt_text" not in denoise.OPTIONAL_INPUTS:
+            return
         if denoise.connections.get("positive_prompt_text"):
             return
         positive_prompt = self.node_graph.get_node_by_name("positive_prompt")
