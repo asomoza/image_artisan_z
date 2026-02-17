@@ -210,13 +210,13 @@ class ZImageDenoiseNode(Node):
         if isinstance(self.lora, list):
             # Multiple LoRAs
             for lora_tuple in self.lora:
-                if len(lora_tuple) >= 3 and lora_tuple[2] is not None:
+                if len(lora_tuple) >= 3 and lora_tuple[0] is not None and lora_tuple[2] is not None:
                     adapter_name = lora_tuple[0]
                     mask = lora_tuple[2]
                     masks[adapter_name] = mask
         else:
             # Single LoRA
-            if len(self.lora) >= 3 and self.lora[2] is not None:
+            if len(self.lora) >= 3 and self.lora[0] is not None and self.lora[2] is not None:
                 adapter_name = self.lora[0]
                 mask = self.lora[2]
                 masks[adapter_name] = mask
@@ -233,7 +233,7 @@ class ZImageDenoiseNode(Node):
         for lora_tuple in loras:
             if len(lora_tuple) >= 4:
                 adapter_name, _, spatial_mask, trigger_words = lora_tuple[:4]
-                if spatial_mask is not None and trigger_words:
+                if adapter_name is not None and spatial_mask is not None and trigger_words:
                     result[adapter_name] = (spatial_mask, trigger_words)
         return result
 
@@ -247,7 +247,7 @@ class ZImageDenoiseNode(Node):
         for lora_tuple in loras:
             if len(lora_tuple) >= 4:
                 adapter_name, _, spatial_mask, trigger_words = lora_tuple[:4]
-                if spatial_mask is None and trigger_words:
+                if adapter_name is not None and spatial_mask is None and trigger_words:
                     result[adapter_name] = trigger_words
         return result
 
@@ -334,11 +334,15 @@ class ZImageDenoiseNode(Node):
         if self.lora:
             try:
                 if isinstance(self.lora, list):
-                    keys = [item[0] for item in self.lora]
-                    transformer_values = [item[1]["transformer"] for item in self.lora]
-                    transformer_raw.set_adapters(keys, transformer_values)
+                    # Filter LoKr entries (adapter_name=None) — weight-merged, not PEFT
+                    peft_items = [item for item in self.lora if item[0] is not None]
+                    if peft_items:
+                        keys = [item[0] for item in peft_items]
+                        transformer_values = [item[1]["transformer"] for item in peft_items]
+                        transformer_raw.set_adapters(keys, transformer_values)
                 else:
-                    transformer_raw.set_adapters([self.lora[0]], self.lora[1]["transformer"])
+                    if self.lora[0] is not None:
+                        transformer_raw.set_adapters([self.lora[0]], self.lora[1]["transformer"])
 
                 # Extract and apply LoRA spatial masks
                 lora_masks = self._extract_lora_masks()

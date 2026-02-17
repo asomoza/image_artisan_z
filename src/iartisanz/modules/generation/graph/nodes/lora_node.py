@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from typing import Optional
 
 import numpy as np
@@ -57,6 +58,171 @@ def _normalize_flux2_lora_keys(state_dict: dict) -> dict:
         normalized[f"{lp}.lora_B.weight"] = up
 
     return normalized
+
+
+def _is_lokr_format(state_dict: dict) -> bool:
+    """Check if state dict contains LoKr-format weights (lokr_w1/lokr_w2)."""
+    return any("lokr_w" in k for k in state_dict)
+
+
+def _map_lokr_layer_to_targets(layer_prefix: str) -> list[tuple[str, int | None]]:
+    """Map an original LoKr layer prefix to diffusers model parameter targets.
+
+    Returns list of (module_path, split_idx) tuples.
+    split_idx is None for 1:1 mappings, or 0/1/2 for QKV chunk index.
+    """
+    # Single blocks: 1:1 mapping
+    m = re.match(r"single_blocks\.(\d+)\.linear1$", layer_prefix)
+    if m:
+        return [(f"single_transformer_blocks.{m.group(1)}.attn.to_qkv_mlp_proj", None)]
+
+    m = re.match(r"single_blocks\.(\d+)\.linear2$", layer_prefix)
+    if m:
+        return [(f"single_transformer_blocks.{m.group(1)}.attn.to_out", None)]
+
+    # Double blocks: fused QKV → split into Q, K, V
+    m = re.match(r"double_blocks\.(\d+)\.img_attn\.qkv$", layer_prefix)
+    if m:
+        tb = f"transformer_blocks.{m.group(1)}"
+        return [(f"{tb}.attn.to_q", 0), (f"{tb}.attn.to_k", 1), (f"{tb}.attn.to_v", 2)]
+
+    m = re.match(r"double_blocks\.(\d+)\.txt_attn\.qkv$", layer_prefix)
+    if m:
+        tb = f"transformer_blocks.{m.group(1)}"
+        return [(f"{tb}.attn.add_q_proj", 0), (f"{tb}.attn.add_k_proj", 1), (f"{tb}.attn.add_v_proj", 2)]
+
+    # Double blocks: projection and MLP (1:1)
+    simple_patterns = [
+        (r"double_blocks\.(\d+)\.img_attn\.proj$", "transformer_blocks.{}.attn.to_out.0"),
+        (r"double_blocks\.(\d+)\.txt_attn\.proj$", "transformer_blocks.{}.attn.to_add_out"),
+        (r"double_blocks\.(\d+)\.img_mlp\.0$", "transformer_blocks.{}.ff.linear_in"),
+        (r"double_blocks\.(\d+)\.img_mlp\.2$", "transformer_blocks.{}.ff.linear_out"),
+        (r"double_blocks\.(\d+)\.txt_mlp\.0$", "transformer_blocks.{}.ff_context.linear_in"),
+        (r"double_blocks\.(\d+)\.txt_mlp\.2$", "transformer_blocks.{}.ff_context.linear_out"),
+    ]
+    for pattern, template in simple_patterns:
+        m = re.match(pattern, layer_prefix)
+        if m:
+            return [(template.format(m.group(1)), None)]
+
+    # Root-level mappings
+    root_map = {
+        "double_stream_modulation_txt.lin": "double_stream_modulation_txt.linear",
+        "double_stream_modulation_img.lin": "double_stream_modulation_img.linear",
+        "single_stream_modulation.lin": "single_stream_modulation.linear",
+        "txt_in": "context_embedder",
+        "img_in": "x_embedder",
+        "final_layer.adaLN_modulation.1": "norm_out.linear",
+        "final_layer.linear": "proj_out",
+        "time_in.in_layer": "time_guidance_embed.timestep_embedder.linear_1",
+        "time_in.out_layer": "time_guidance_embed.timestep_embedder.linear_2",
+    }
+    if layer_prefix in root_map:
+        return [(root_map[layer_prefix], None)]
+
+    return []
+
+
+def _parse_lokr_entries(state_dict: dict) -> list[dict]:
+    """Parse LoKr state dict into entries for direct weight merging.
+
+    Each entry contains w1/w2 tensors and target parameter mappings.
+    Alpha scaling is baked into w1 (unless sentinel value detected).
+    """
+    # Strip diffusion_model. prefix
+    dm_prefix = "diffusion_model."
+    sd = {k[len(dm_prefix):] if k.startswith(dm_prefix) else k: v for k, v in state_dict.items()}
+
+    # Identify LoKr layer prefixes
+    lokr_w_suffixes = (
+        ".lokr_w1", ".lokr_w2", ".lokr_w1_a", ".lokr_w1_b",
+        ".lokr_w2_a", ".lokr_w2_b", ".lokr_t2",
+    )
+    lokr_prefixes = set()
+    for k in sd:
+        for sfx in lokr_w_suffixes:
+            if k.endswith(sfx):
+                lokr_prefixes.add(k[:-len(sfx)])
+                break
+
+    entries = []
+    for lp in sorted(lokr_prefixes):
+        w1 = sd.get(f"{lp}.lokr_w1")
+        w2 = sd.get(f"{lp}.lokr_w2")
+        w1_a = sd.get(f"{lp}.lokr_w1_a")
+        w1_b = sd.get(f"{lp}.lokr_w1_b")
+        w2_a = sd.get(f"{lp}.lokr_w2_a")
+        w2_b = sd.get(f"{lp}.lokr_w2_b")
+        t2 = sd.get(f"{lp}.lokr_t2")
+        alpha = sd.get(f"{lp}.alpha")
+
+        # Reconstruct from low-rank factors if needed
+        if w1 is None and w1_a is not None and w1_b is not None:
+            w1 = w1_a @ w1_b
+        if w2 is None and w2_a is not None and w2_b is not None:
+            w2 = w2_a @ w2_b
+
+        if w1 is None or w2 is None:
+            logger.warning("[LoKr] Incomplete layer %s, skipping", lp)
+            continue
+
+        if t2 is not None:
+            w2 = t2 @ w2
+
+        # Bake alpha scaling into w1 (float32, tiny tensor).
+        # Skip sentinel values (e.g. ~1e10 in bfloat16) that produce unreasonable scale.
+        w1_scaled = w1.float()
+        if alpha is not None:
+            lokr_dim = min(w1.shape)
+            scale = alpha.float().item() / lokr_dim
+            if 1e-3 <= abs(scale) <= 1e3:
+                w1_scaled = w1_scaled * scale
+
+        targets = _map_lokr_layer_to_targets(lp)
+        if not targets:
+            logger.warning("[LoKr] No target mapping for layer %s, skipping", lp)
+            continue
+
+        entries.append({"w1": w1_scaled, "w2": w2, "targets": targets})
+
+    logger.info("[LoKr] Parsed %d layers for weight merging", len(entries))
+    return entries
+
+
+def _get_module_weight(model, module_path: str):
+    """Get a module's weight tensor, handling PEFT wrapping transparently."""
+    mod = model
+    for part in module_path.split("."):
+        mod = getattr(mod, part, None)
+        if mod is None:
+            return None
+    # PEFT wraps Linear → LoraLayer with base_layer attribute
+    if hasattr(mod, "base_layer"):
+        return mod.base_layer.weight
+    return mod.weight
+
+
+def _apply_lokr_delta(model, entries: list[dict], scale_delta: float):
+    """Apply LoKr weight deltas to model parameters.
+
+    Computes kron(w1, w2) per layer and adds scale_delta * delta to weights.
+    QKV-fused layers are split into separate Q/K/V parameter updates.
+    """
+    for entry in entries:
+        delta = torch.kron(entry["w1"], entry["w2"].float())
+
+        for module_path, split_idx in entry["targets"]:
+            weight = _get_module_weight(model, module_path)
+            if weight is None:
+                logger.warning("[LoKr] Parameter not found: %s", module_path)
+                continue
+
+            if split_idx is not None:
+                chunk = delta.chunk(3, dim=0)[split_idx]
+            else:
+                chunk = delta
+
+            weight.data.add_(chunk.to(device=weight.device, dtype=weight.dtype) * scale_delta)
 
 
 def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
@@ -194,6 +360,11 @@ class LoraNode(Node):
         self._mask_load_failed: bool = False
         # FreeFuse trigger words
         self.trigger_words = trigger_words
+        # LoKr weight merge state (set on first load if LoKr format detected)
+        self._is_lokr = False
+        self._lokr_entries: list[dict] | None = None
+        self._lokr_scale = 0.0
+        self._lokr_transformer_id: int | None = None
 
     def update_lora(
         self,
@@ -309,6 +480,12 @@ class LoraNode(Node):
         mm = get_model_manager()
         transformer = mm.resolve(self.transformer)
 
+        # LoKr weight merge path (already detected from prior call)
+        if self._is_lokr:
+            self._update_lokr_merge(transformer)
+            self.values["lora"] = (None, None, self._get_spatial_mask(), self.trigger_words)
+            return self.values
+
         # If this adapter name was previously loaded from a different file, force a reload.
         # This prevents stale adapters when users swap LoRAs that share adapter names.
         existing_src = mm.get_lora_source(self.adapter_name) if self.adapter_name else None
@@ -337,16 +514,27 @@ class LoraNode(Node):
 
             state_dict = load_state_dict(self.path)
 
-            # Strip dora_scale and normalize lora_down/lora_up → lora_A/lora_B
+            # Strip dora_scale keys
             state_dict = {k: v for k, v in state_dict.items() if "dora_scale" not in k}
+
+            # Detect LoKr format → use direct weight merge (lossless, no PEFT adapter)
+            if _is_lokr_format(state_dict):
+                self._lokr_entries = _parse_lokr_entries(state_dict)
+                self._is_lokr = True
+                self._lokr_scale = 0.0
+                self._lokr_transformer_id = None
+                self._update_lokr_merge(transformer)
+                self.values["lora"] = (None, None, self._get_spatial_mask(), self.trigger_words)
+                return self.values
+
+            # Regular LoRA: normalize kohya keys
             state_dict = _normalize_flux2_lora_keys(state_dict)
 
             # Detect LoRA format: Flux2 original vs Z-Image vs already-diffusers
             # "double_blocks." only appears in original format (diffusers uses "transformer_blocks.")
             # "single_blocks." must exclude "single_transformer_blocks." (diffusers format)
             is_flux2_original = any(
-                "double_blocks." in k
-                or ("single_blocks." in k and "single_transformer_blocks." not in k)
+                "double_blocks." in k or ("single_blocks." in k and "single_transformer_blocks." not in k)
                 for k in state_dict
             )
 
@@ -399,11 +587,52 @@ class LoraNode(Node):
         self.values["lora"] = (self.adapter_name, scale, spatial_mask, self.trigger_words)
         return self.values
 
+    def _update_lokr_merge(self, transformer):
+        """Update LoKr weight merge to match current scale/enabled state."""
+        current_id = id(transformer)
+
+        # If transformer object changed (model switch), previous merge is gone
+        if self._lokr_transformer_id != current_id:
+            self._lokr_scale = 0.0
+            self._lokr_transformer_id = current_id
+
+        target_scale = self.transformer_weight if self.lora_enabled else 0.0
+        scale_delta = target_scale - self._lokr_scale
+
+        if abs(scale_delta) > 1e-8:
+            _apply_lokr_delta(transformer, self._lokr_entries, scale_delta)
+            self._lokr_scale = target_scale
+            logger.info("[LoKr] Weight merge updated: scale %.4f → %.4f",
+                        target_scale - scale_delta, target_scale)
+
+    def _get_spatial_mask(self) -> Optional[torch.Tensor]:
+        """Load and return spatial mask if enabled, or None."""
+        if self.spatial_mask_enabled and self._cached_mask is None:
+            self._cached_mask = self._load_spatial_mask()
+        return self._cached_mask if self.spatial_mask_enabled else None
+
     def before_delete(self):
         mm = get_model_manager()
         try:
             transformer = mm.resolve(self.transformer)
         except Exception:
+            return
+
+        if self._is_lokr:
+            # Unmerge LoKr weight delta
+            if (
+                self._lokr_scale != 0.0
+                and self._lokr_entries
+                and id(transformer) == self._lokr_transformer_id
+            ):
+                try:
+                    _apply_lokr_delta(transformer, self._lokr_entries, -self._lokr_scale)
+                    logger.info("[LoKr] Unmerged weights (scale was %.4f)", self._lokr_scale)
+                except Exception:
+                    logger.warning("[LoKr] Failed to unmerge weights on delete")
+            self._lokr_entries = None
+            self._lokr_scale = 0.0
+            self._is_lokr = False
             return
 
         try:

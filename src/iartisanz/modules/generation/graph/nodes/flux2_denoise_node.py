@@ -161,11 +161,15 @@ class Flux2DenoiseNode(Node):
         if self.lora:
             try:
                 if isinstance(self.lora, list):
-                    keys = [item[0] for item in self.lora]
-                    transformer_values = [item[1]["transformer"] for item in self.lora]
-                    transformer_raw.set_adapters(keys, transformer_values)
+                    # Filter LoKr entries (adapter_name=None) — weight-merged, not PEFT
+                    peft_items = [item for item in self.lora if item[0] is not None]
+                    if peft_items:
+                        keys = [item[0] for item in peft_items]
+                        transformer_values = [item[1]["transformer"] for item in peft_items]
+                        transformer_raw.set_adapters(keys, transformer_values)
                 else:
-                    transformer_raw.set_adapters([self.lora[0]], self.lora[1]["transformer"])
+                    if self.lora[0] is not None:
+                        transformer_raw.set_adapters([self.lora[0]], self.lora[1]["transformer"])
             except RuntimeError as e:
                 raise IArtisanZNodeError(e, self.__class__.__name__)
 
