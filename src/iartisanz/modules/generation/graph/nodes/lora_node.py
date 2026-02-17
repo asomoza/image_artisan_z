@@ -527,26 +527,30 @@ class LoraNode(Node):
                 self.values["lora"] = (None, None, self._get_spatial_mask(), self.trigger_words)
                 return self.values
 
-            # Regular LoRA: normalize kohya keys
-            state_dict = _normalize_flux2_lora_keys(state_dict)
+            # Detect LoRA format and convert to diffusers PEFT format.
+            # Check Z-Image kohya format BEFORE Flux2 normalization, because
+            # _normalize_flux2_lora_keys() consumes .alpha keys that the Z-Image
+            # converter needs for detection.
+            has_alphas_in_sd = any(k.endswith(".alpha") for k in state_dict)
+            has_diffusion_model = any(k.startswith("diffusion_model.") for k in state_dict)
+            has_default = any("default." in k for k in state_dict)
+            is_zimage_kohya = any(k.startswith("lora_unet") for k in state_dict)
 
-            # Detect LoRA format: Flux2 original vs Z-Image vs already-diffusers
-            # "double_blocks." only appears in original format (diffusers uses "transformer_blocks.")
-            # "single_blocks." must exclude "single_transformer_blocks." (diffusers format)
-            is_flux2_original = any(
-                "double_blocks." in k or ("single_blocks." in k and "single_transformer_blocks." not in k)
-                for k in state_dict
-            )
-
-            if is_flux2_original:
-                state_dict = _convert_flux2_lora_to_diffusers(state_dict)
+            if is_zimage_kohya or has_alphas_in_sd or has_diffusion_model or has_default:
+                state_dict = _convert_non_diffusers_z_image_lora_to_diffusers(state_dict)
             else:
-                has_alphas_in_sd = any(k.endswith(".alpha") for k in state_dict)
-                has_diffusion_model = any(k.startswith("diffusion_model.") for k in state_dict)
-                has_default = any("default." in k for k in state_dict)
+                # Flux2 path: normalize kohya lora_down/lora_up keys first
+                state_dict = _normalize_flux2_lora_keys(state_dict)
 
-                if has_alphas_in_sd or has_diffusion_model or has_default:
-                    state_dict = _convert_non_diffusers_z_image_lora_to_diffusers(state_dict)
+                # "double_blocks." only appears in original format (diffusers uses "transformer_blocks.")
+                # "single_blocks." must exclude "single_transformer_blocks." (diffusers format)
+                is_flux2_original = any(
+                    "double_blocks." in k or ("single_blocks." in k and "single_transformer_blocks." not in k)
+                    for k in state_dict
+                )
+
+                if is_flux2_original:
+                    state_dict = _convert_flux2_lora_to_diffusers(state_dict)
 
             is_correct_format = all("lora" in key for key in state_dict.keys())
             if not is_correct_format:
