@@ -65,8 +65,21 @@ def _is_lokr_format(state_dict: dict) -> bool:
     return any("lokr_w" in k for k in state_dict)
 
 
-def _map_lokr_layer_to_targets(layer_prefix: str) -> list[tuple[str, int | None]]:
-    """Map an original LoKr layer prefix to diffusers model parameter targets.
+def _map_zimage_lokr_layer_to_targets(layer_prefix: str) -> list[tuple[str, int | None]]:
+    """Map a Z-Image LoKr layer prefix to diffusers model parameter targets.
+
+    Z-Image LoKr keys (after stripping diffusion_model. prefix) already match
+    the diffusers parameter names, so this is a 1:1 identity mapping.
+    """
+    if re.match(r"layers\.\d+\.", layer_prefix):
+        return [(layer_prefix, None)]
+    if re.match(r"(context_refiner|noise_refiner)\.\d+\.", layer_prefix):
+        return [(layer_prefix, None)]
+    return []
+
+
+def _map_flux2_lokr_layer_to_targets(layer_prefix: str) -> list[tuple[str, int | None]]:
+    """Map a Flux2 LoKr layer prefix to diffusers model parameter targets.
 
     Returns list of (module_path, split_idx) tuples.
     split_idx is None for 1:1 mappings, or 0/1/2 for QKV chunk index.
@@ -123,12 +136,20 @@ def _map_lokr_layer_to_targets(layer_prefix: str) -> list[tuple[str, int | None]
     return []
 
 
-def _parse_lokr_entries(state_dict: dict) -> list[dict]:
+def _parse_lokr_entries(state_dict: dict, transformer) -> list[dict]:
     """Parse LoKr state dict into entries for direct weight merging.
 
     Each entry contains w1/w2 tensors and target parameter mappings.
     Alpha scaling is baked into w1 (unless sentinel value detected).
+    Dispatches to model-specific layer mapping based on transformer type.
     """
+    from diffusers import Flux2Transformer2DModel
+
+    if isinstance(transformer, Flux2Transformer2DModel):
+        map_fn = _map_flux2_lokr_layer_to_targets
+    else:
+        map_fn = _map_zimage_lokr_layer_to_targets
+
     # Strip diffusion_model. prefix
     dm_prefix = "diffusion_model."
     sd = {k[len(dm_prefix):] if k.startswith(dm_prefix) else k: v for k, v in state_dict.items()}
@@ -178,7 +199,7 @@ def _parse_lokr_entries(state_dict: dict) -> list[dict]:
             if 1e-3 <= abs(scale) <= 1e3:
                 w1_scaled = w1_scaled * scale
 
-        targets = _map_lokr_layer_to_targets(lp)
+        targets = map_fn(lp)
         if not targets:
             logger.warning("[LoKr] No target mapping for layer %s, skipping", lp)
             continue
@@ -573,7 +594,7 @@ class LoraNode(Node):
 
             # Detect LoKr format → use direct weight merge (lossless, no PEFT adapter)
             if _is_lokr_format(state_dict):
-                self._lokr_entries = _parse_lokr_entries(state_dict)
+                self._lokr_entries = _parse_lokr_entries(state_dict, transformer)
                 self._is_lokr = True
                 self._lokr_scale = 0.0
                 self._lokr_transformer_id = None
