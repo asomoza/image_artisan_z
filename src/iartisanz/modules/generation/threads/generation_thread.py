@@ -64,6 +64,7 @@ class NodeGraphThread(QThread):
         self._job_json_graph: str | None = None
         self._active_graph: ImageArtisanZNodeGraph | None = None
         self._persistent_run_graph: ImageArtisanZNodeGraph | None = None
+        self._completion_emitted: bool = False
 
         self._graph_factory = graph_factory or ImageArtisanZNodeGraph
         self._node_classes = node_classes or NODE_CLASSES
@@ -178,6 +179,7 @@ class NodeGraphThread(QThread):
 
     def run(self):
         self.status_changed.emit("Generating image...")
+        self._completion_emitted = False
 
         json_graph = self._job_json_graph or self.get_staged_json_graph()
 
@@ -197,12 +199,19 @@ class NodeGraphThread(QThread):
         except ValueError as e:
             # Configuration validation errors
             logger.debug(f"Configuration error: {e}")
+            self._completion_emitted = True
             self.generation_error.emit(str(e), False)
         except IArtisanZNodeError as e:
             logger.debug(f"Error in node: '{e.node_name}': {e}")
+            self._completion_emitted = True
             self.generation_error.emit(f"Error in node '{e.node_name}': {e}", False)
         finally:
             self._active_graph = None
+
+        # If the graph ran but produced no output (e.g. all nodes were no-ops due
+        # to unchanged inputs), release the UI — treat it as an abort.
+        if not self._completion_emitted:
+            self.generation_aborted.emit()
 
     def clean_up(self):
         if self._active_graph is not None:
@@ -924,6 +933,7 @@ class NodeGraphThread(QThread):
         if self._active_graph is not None:
             denoise_node = self._active_graph.get_node_by_name("denoise")
             duration = getattr(denoise_node, "elapsed_time", None) if denoise_node is not None else None
+        self._completion_emitted = True
         self.generation_finished.emit(image, duration)
 
     def abort_graph(self):
@@ -933,4 +943,5 @@ class NodeGraphThread(QThread):
             self.node_graph.abort_graph()
 
     def on_aborted(self):
+        self._completion_emitted = True
         self.generation_aborted.emit()
