@@ -83,6 +83,27 @@ FLUX2_MODEL_TYPES = {3, 4, 5, 6}
 FLUX2_DISTILLED_MODEL_TYPES = {3, 5}
 FLUX2_BASE_MODEL_TYPES = {4, 6}
 
+# (num_double_blocks, num_single_blocks) for Flux2 models
+FLUX2_LAYER_COUNTS = {
+    3: (8, 24),   # Klein 9B
+    4: (8, 24),   # Klein Base 9B
+    5: (5, 20),   # Klein 4B
+    6: (5, 20),   # Klein Base 4B
+}
+
+
+def get_default_granular_weights(model_type: int) -> dict:
+    """Return default per-layer granular weights dict for the given model type."""
+    if model_type in ZIMAGE_MODEL_TYPES:
+        return {f"layers.{i}": 1.0 for i in range(30)}
+    if model_type in FLUX2_MODEL_TYPES:
+        n_double, n_single = FLUX2_LAYER_COUNTS[model_type]
+        weights = {f"transformer_blocks.{i}": 1.0 for i in range(n_double)}
+        weights.update({f"single_transformer_blocks.{i}": 1.0 for i in range(n_single)})
+        return weights
+    return {}
+
+
 # Default generation parameters per model type (num_inference_steps, guidance_scale).
 MODEL_TYPE_DEFAULTS: dict[int, dict[str, int | float]] = {
     1: {"num_inference_steps": 9, "guidance_scale": 1.0},

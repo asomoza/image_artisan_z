@@ -28,6 +28,7 @@ from iartisanz.buttons.brush_erase_button import BrushEraseButton
 from iartisanz.buttons.color_button import ColorButton
 from iartisanz.buttons.eyedropper_button import EyeDropperButton
 from iartisanz.buttons.linked_button import LinkedButton
+from iartisanz.modules.generation.constants import FLUX2_LAYER_COUNTS, FLUX2_MODEL_TYPES, get_default_granular_weights
 from iartisanz.modules.generation.image.mask_widget import MaskWidget
 from iartisanz.modules.generation.threads.mask_pixmap_save_thread import MaskPixmapSaveThread
 
@@ -51,6 +52,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         self,
         dialog_key: str,
         lora: "LoraDataObject",
+        model_type: int = 1,
         image_viewer: "ImageViewerSimpleWidget" = None,
         image_width: int = 1024,
         image_height: int = 1024,
@@ -62,10 +64,16 @@ class LoraAdvancedDialog(BaseSimpleDialog):
 
         self.dialog_key = dialog_key
         self.lora = lora
+        self.model_type = model_type
         self.image_viewer = image_viewer
         self.image_width = image_width
         self.image_height = image_height
         self.directories = directories
+
+        # Reset granular weights if stored keys don't match current model type
+        expected = get_default_granular_weights(model_type)
+        if set(lora.granular_transformer_weights.keys()) != set(expected.keys()):
+            lora.granular_transformer_weights = expected
 
         self.low_range = 0.0
         self.high_range = 1.0
@@ -296,12 +304,12 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         if self.lora.spatial_mask_enabled:
             self.setMinimumHeight(self.EXPANDED_MIN_HEIGHT)
 
-    def _build_granular_layer_sliders(self, sections_layout: QHBoxLayout) -> None:
-        self.layer_sliders.clear()
-        self.layer_linked_buttons.clear()
-        self.layer_previous_values.clear()
-
-        for idx, (layer_key, weight) in enumerate(self.lora.granular_transformer_weights.items()):
+    def _build_slider_section(
+        self, layout: QHBoxLayout, keys: list[str], label_prefix: str
+    ) -> None:
+        """Add a group of vertical sliders to layout with given label prefix (e.g. 'D', 'S', 'L')."""
+        for idx, layer_key in enumerate(keys):
+            weight = self.lora.granular_transformer_weights.get(layer_key, 1.0)
             layer_layout = QVBoxLayout()
 
             linked_button = LinkedButton()
@@ -315,13 +323,53 @@ class LoraAdvancedDialog(BaseSimpleDialog):
             layer_slider.valueChanged.connect(lambda v, k=layer_key: self._on_slider_value_changed(k, v))
             layer_layout.addWidget(layer_slider)
 
-            layer_label = QLabel(f"L{idx + 1}")
+            layer_label = QLabel(f"{label_prefix}{idx + 1}")
             layer_layout.addWidget(layer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
-            sections_layout.addLayout(layer_layout)
+            layout.addLayout(layer_layout)
             self.layer_sliders[layer_key] = layer_slider
             self.layer_linked_buttons[layer_key] = linked_button
             self.layer_previous_values[layer_key] = weight
+
+    def _build_granular_layer_sliders(self, sections_layout: QHBoxLayout) -> None:
+        self.layer_sliders.clear()
+        self.layer_linked_buttons.clear()
+        self.layer_previous_values.clear()
+
+        if self.model_type in FLUX2_MODEL_TYPES:
+            n_double, n_single = FLUX2_LAYER_COUNTS[self.model_type]
+            double_keys = [f"transformer_blocks.{i}" for i in range(n_double)]
+            single_keys = [f"single_transformer_blocks.{i}" for i in range(n_single)]
+
+            # Double blocks section
+            double_section = QVBoxLayout()
+            double_label = QLabel("Double Blocks")
+            double_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            double_sliders_layout = QHBoxLayout()
+            self._build_slider_section(double_sliders_layout, double_keys, "D")
+            double_section.addWidget(double_label)
+            double_section.addLayout(double_sliders_layout)
+            sections_layout.addLayout(double_section)
+
+            # Vertical separator
+            separator = QFrame()
+            separator.setFrameShape(QFrame.Shape.VLine)
+            separator.setStyleSheet("QFrame { color: #555; }")
+            sections_layout.addWidget(separator)
+
+            # Single blocks section
+            single_section = QVBoxLayout()
+            single_label = QLabel("Single Blocks")
+            single_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            single_sliders_layout = QHBoxLayout()
+            self._build_slider_section(single_sliders_layout, single_keys, "S")
+            single_section.addWidget(single_label)
+            single_section.addLayout(single_sliders_layout)
+            sections_layout.addLayout(single_section)
+        else:
+            # Z-Image: flat list of 30 layers
+            layer_keys = list(self.lora.granular_transformer_weights.keys())
+            self._build_slider_section(sections_layout, layer_keys, "L")
 
     def _on_slider_value_changed(self, layer_key: str, value: float) -> None:
         """Handle slider value change, propagating to linked sliders."""

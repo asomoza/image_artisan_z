@@ -423,6 +423,7 @@ class GenerationModule(BaseModule):
                 self.generation_thread.update_model(self.selected_model)
             except Exception:
                 pass
+            self.right_menu.update_panels_for_model_type(self.selected_model.model_type)
 
         if "num_inference_steps" in subset:
             try:
@@ -646,6 +647,7 @@ class GenerationModule(BaseModule):
                 "factory": lambda d: LoraAdvancedDialog(
                     self._lora_advanced_key(d.get("lora")),
                     d.get("lora"),
+                    model_type=self.gen_settings.model.model_type,
                     image_viewer=self.image_viewer,
                     image_width=self.gen_settings.image_width,
                     image_height=self.gen_settings.image_height,
