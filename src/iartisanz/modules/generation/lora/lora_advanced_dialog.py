@@ -33,7 +33,7 @@ from iartisanz.modules.generation.threads.mask_pixmap_save_thread import MaskPix
 
 
 if TYPE_CHECKING:
-    from iartisanz.app.directories import Directories
+    from iartisanz.app.directories import DirectoriesObject
     from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
     from iartisanz.modules.generation.widgets.image_viewer_simple_widget import ImageViewerSimpleWidget
 
@@ -54,7 +54,7 @@ class LoraAdvancedDialog(BaseSimpleDialog):
         image_viewer: "ImageViewerSimpleWidget" = None,
         image_width: int = 1024,
         image_height: int = 1024,
-        directories: "Directories" = None,
+        directories: DirectoriesObject = None,
     ):
         super().__init__("LoRA Advanced Dialog", minWidth=1200, minHeight=self.COLLAPSED_MIN_HEIGHT)
 
