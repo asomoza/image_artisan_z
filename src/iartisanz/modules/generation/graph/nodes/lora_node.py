@@ -22,11 +22,20 @@ def _normalize_flux2_lora_keys(state_dict: dict) -> dict:
 
     Handles alpha scaling: when .alpha keys are present, bakes scale into weights
     (scale = alpha / rank). When absent, default alpha = rank so scale = 1.0.
+
+    Mixed-format files (some layers already using lora_A/lora_B, others using
+    lora_down/lora_up) are handled by preserving existing lora_A/lora_B keys.
     """
     if not any("lora_down" in k for k in state_dict):
         return state_dict
 
     normalized = {}
+
+    # Preserve keys that already use lora_A/lora_B naming (mixed-format files)
+    for k, v in state_dict.items():
+        if k.endswith(".lora_A.weight") or k.endswith(".lora_B.weight"):
+            normalized[k] = v
+
     # Group keys by layer prefix (everything before .lora_down/.lora_up/.alpha)
     layer_prefixes = set()
     for k in state_dict:
@@ -246,18 +255,54 @@ def _apply_lokr_delta(model, entries: list[dict], scale_delta: float):
             weight.data.add_(chunk.to(device=weight.device, dtype=weight.dtype) * scale_delta)
 
 
+def _strip_lora_unet_prefix(sd: dict) -> dict:
+    """Convert kohya lora_unet_ prefixed keys to raw Flux2 block format.
+
+    Examples:
+        lora_unet_single_blocks_8_linear1.lora_A.weight
+            → single_blocks.8.linear1.lora_A.weight
+        lora_unet_double_blocks_5_img_attn_qkv.lora_A.weight
+            → double_blocks.5.img_attn.qkv.lora_A.weight
+    """
+    lora_unet = "lora_unet_"
+    result = {}
+    for k, v in sd.items():
+        if not k.startswith(lora_unet):
+            result[k] = v
+            continue
+        remainder = k[len(lora_unet):]  # e.g. "single_blocks_8_linear1.lora_A.weight"
+        dot_pos = remainder.find(".")
+        layer_path = remainder[:dot_pos] if dot_pos >= 0 else remainder
+        suffix = remainder[dot_pos:] if dot_pos >= 0 else ""
+        m = re.match(r"^(single_blocks|double_blocks)_(\d+)_(.+)$", layer_path)
+        if m:
+            block_type, idx, rest = m.groups()
+            # For double blocks, compound names like img_attn/txt_attn/img_mlp/txt_mlp
+            # keep their underscore; only the separator after them becomes a dot.
+            # e.g. img_attn_qkv → img_attn.qkv, txt_mlp_0 → txt_mlp.0
+            # For single blocks, rest is just linear1/linear2 — no substitution needed.
+            converted_rest = re.sub(r"^(img|txt)_(attn|mlp)_", r"\1_\2.", rest)
+            result[f"{block_type}.{idx}.{converted_rest}{suffix}"] = v
+        else:
+            result[k] = v  # Unknown format, keep as-is
+    return result
+
+
 def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
     """Convert non-diffusers Flux2 LoRA to diffusers PEFT format.
 
     Unlike diffusers' built-in converter which hardcodes 48 single blocks (full Flux2),
     this dynamically detects block counts from the keys — works for Klein 9B (24 single),
-    Klein 4B, or any other variant. Also handles kohya-format lora_down/lora_up naming.
+    Klein 4B, or any other variant. Also handles kohya-format lora_down/lora_up naming
+    and mixed-format files (e.g. double blocks in diffusion_model. format, single blocks
+    in lora_unet_ kohya format).
     """
     converted = {}
 
-    # Strip diffusion_model. prefix
+    # Strip diffusion_model. prefix, then normalise any remaining lora_unet_ prefixes
     prefix = "diffusion_model."
     sd = {k[len(prefix) :] if k.startswith(prefix) else k: v for k, v in state_dict.items()}
+    sd = _strip_lora_unet_prefix(sd)
 
     # Detect block indices from keys
     single_indices = set()
