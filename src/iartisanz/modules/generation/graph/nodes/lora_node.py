@@ -394,8 +394,13 @@ def _is_diffusers_format(state_dict: dict) -> bool:
     Diffusers PEFT keys start with ``transformer.`` and use ``lora_A``/``lora_B``
     naming.  Non-diffusers formats use other prefixes (``diffusion_model.``,
     ``lora_unet``), kohya naming (``lora_down``/``lora_up``), or ``.alpha`` keys.
+    A file can have a ``transformer.`` prefix but still use kohya lora_down/lora_up
+    naming — that is NOT diffusers format and needs conversion.
     """
-    return all(k.startswith("transformer.") for k in state_dict)
+    return (
+        all(k.startswith("transformer.") for k in state_dict)
+        and not any("lora_down" in k for k in state_dict)
+    )
 
 
 def _convert_zimage_lora(state_dict: dict) -> dict:
