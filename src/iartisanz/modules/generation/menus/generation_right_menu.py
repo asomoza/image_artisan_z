@@ -1,11 +1,9 @@
 import logging
-from typing import Type
+from typing import TYPE_CHECKING, Type
 
 from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QTimer
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout
 
-from iartisanz.app.directories import DirectoriesObject
-from iartisanz.app.preferences import PreferencesObject
 from iartisanz.buttons.expand_contract_button import ExpandContractButton
 from iartisanz.buttons.vertical_button import VerticalButton
 from iartisanz.modules.generation.constants import FLUX2_MODEL_TYPES
@@ -17,6 +15,10 @@ from iartisanz.modules.generation.panels.generation_panel import GenerationPanel
 from iartisanz.modules.generation.panels.panel_container import PanelContainer
 from iartisanz.modules.generation.source_image.source_image_panel import SourceImagePanel
 
+
+if TYPE_CHECKING:
+    from iartisanz.app.directories import DirectoriesObject
+    from iartisanz.app.preferences import PreferencesObject
 
 logger = logging.getLogger(__name__)
 
