@@ -49,6 +49,38 @@ class Flux2DenoiseNode(Node):
     - No noise negation
     """
 
+    def _extract_lora_masks(self) -> dict[str, torch.Tensor]:
+        """Extract spatial masks from LoRA inputs.
+
+        LoRA tuples can be 2-tuples (legacy) or 3-tuples (with mask).
+        - 2-tuple: (adapter_name, scale_dict)
+        - 3-tuple: (adapter_name, scale_dict, spatial_mask)
+
+        Returns:
+            Dict mapping adapter_name -> mask_tensor
+            Empty dict if no masks present
+        """
+        if not self.lora:
+            return {}
+
+        masks = {}
+
+        if isinstance(self.lora, list):
+            # Multiple LoRAs
+            for lora_tuple in self.lora:
+                if len(lora_tuple) >= 3 and lora_tuple[0] is not None and lora_tuple[2] is not None:
+                    adapter_name = lora_tuple[0]
+                    mask = lora_tuple[2]
+                    masks[adapter_name] = mask
+        else:
+            # Single LoRA
+            if len(self.lora) >= 3 and self.lora[0] is not None and self.lora[2] is not None:
+                adapter_name = self.lora[0]
+                mask = self.lora[2]
+                masks[adapter_name] = mask
+
+        return masks
+
     REQUIRED_INPUTS = [
         "transformer",
         "num_inference_steps",
@@ -158,6 +190,8 @@ class Flux2DenoiseNode(Node):
 
         num_inference_steps = int(self.num_inference_steps)
 
+        lora_masks_applied = False
+
         if self.lora:
             try:
                 if isinstance(self.lora, list):
@@ -172,6 +206,27 @@ class Flux2DenoiseNode(Node):
                         transformer_raw.set_adapters([self.lora[0]], self.lora[1]["transformer"])
             except RuntimeError as e:
                 raise IArtisanZNodeError(e, self.__class__.__name__)
+
+            # LoRA spatial masking (Phase A — manual masks)
+            lora_masks = self._extract_lora_masks()
+            if lora_masks:
+                from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import patch_lora_adapter_with_spatial_mask
+
+                # Derive patch-space dims from latent_ids (T, H, W, L) — still on CPU, fine for .max()
+                patch_h = int(self.latent_ids[0, :, 1].max().item()) + 1
+                patch_w = int(self.latent_ids[0, :, 2].max().item()) + 1
+                latent_spatial_dims = (patch_h, patch_w)
+
+                for adapter_name, mask in lora_masks.items():
+                    patch_lora_adapter_with_spatial_mask(
+                        transformer_raw, adapter_name, mask, latent_spatial_dims
+                    )
+                    logger.debug(
+                        "[Flux2DenoiseNode] Applied spatial mask for LoRA '%s' at patch dims %s",
+                        adapter_name,
+                        latent_spatial_dims,
+                    )
+                lora_masks_applied = True
 
         if (
             use_torch_compile
@@ -397,6 +452,12 @@ class Flux2DenoiseNode(Node):
             is_step_boundary = (i + 1) > num_warmup_steps and (i + 1) % order == 0
             if (is_last or is_step_boundary) and self.callback is not None:
                 self.callback(step_idx, t, latents)
+
+        if lora_masks_applied:
+            from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import unpatch_all_lora_layers
+            unpatch_count = unpatch_all_lora_layers()
+            if unpatch_count > 0:
+                logger.debug(f"[Flux2DenoiseNode] Cleaned up {unpatch_count} LoRA spatial mask patches")
 
         self.values["latents"] = latents.detach().to("cpu")
         self.values["latent_ids"] = self.latent_ids.detach().to("cpu")
