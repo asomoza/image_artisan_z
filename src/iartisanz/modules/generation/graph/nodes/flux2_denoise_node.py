@@ -81,6 +81,34 @@ class Flux2DenoiseNode(Node):
 
         return masks
 
+    def _extract_freefuse_lora_data(self) -> dict[str, tuple[torch.Tensor, str]]:
+        """Extract LoRAs that have both spatial mask and trigger words."""
+        if not self.lora:
+            return {}
+
+        result = {}
+        loras = self.lora if isinstance(self.lora, list) else [self.lora]
+        for lora_tuple in loras:
+            if len(lora_tuple) >= 4:
+                adapter_name, _, spatial_mask, trigger_words = lora_tuple[:4]
+                if adapter_name is not None and spatial_mask is not None and trigger_words:
+                    result[adapter_name] = (spatial_mask, trigger_words)
+        return result
+
+    def _extract_auto_mask_lora_data(self) -> dict[str, str]:
+        """Extract LoRAs with trigger words but NO spatial mask (Phase B candidates)."""
+        if not self.lora:
+            return {}
+
+        result = {}
+        loras = self.lora if isinstance(self.lora, list) else [self.lora]
+        for lora_tuple in loras:
+            if len(lora_tuple) >= 4:
+                adapter_name, _, spatial_mask, trigger_words = lora_tuple[:4]
+                if adapter_name is not None and spatial_mask is None and trigger_words:
+                    result[adapter_name] = trigger_words
+        return result
+
     REQUIRED_INPUTS = [
         "transformer",
         "num_inference_steps",
@@ -101,6 +129,7 @@ class Flux2DenoiseNode(Node):
         "edit_image_base_latents",
         "edit_image_mask",
         "edit_image_mask_strength",
+        "positive_prompt_text",
     ]
     OUTPUTS = ["latents", "latent_ids"]
     SERIALIZE_EXCLUDE = {"callback"}
@@ -227,6 +256,239 @@ class Flux2DenoiseNode(Node):
                         latent_spatial_dims,
                     )
                 lora_masks_applied = True
+
+        # Phase B: Auto-mask extraction for LoRAs with trigger words but no spatial mask
+        auto_mask_loras = self._extract_auto_mask_lora_data()
+        auto_derived_masks = {}
+
+        if auto_mask_loras and self.lora:
+            try:
+                from iartisanz.modules.generation.graph.nodes.freefuse_flux2_auto_mask import (
+                    install_flux2_sim_map_collector,
+                    remove_flux2_sim_map_collector,
+                )
+                from iartisanz.modules.generation.graph.nodes.freefuse_flux2_attention_bias import (
+                    find_trigger_word_positions_flux2,
+                )
+                from iartisanz.modules.generation.graph.nodes.freefuse_auto_mask import (
+                    process_sim_maps,
+                )
+
+                ff_tokenizer = mm.get_raw("tokenizer")
+                ff_prompt_text = getattr(self, "positive_prompt_text", None) or ""
+
+                if not ff_prompt_text:
+                    logger.warning(
+                        "[Flux2DenoiseNode] Phase B skipped: positive_prompt_text not wired. "
+                        "Rebuild graph (switch model type and back) to enable FreeFuse auto-masks."
+                    )
+                elif ff_tokenizer:
+                    # Derive spatial dims from latent_ids
+                    patch_h = int(self.latent_ids[0, :, 1].max().item()) + 1
+                    patch_w = int(self.latent_ids[0, :, 2].max().item()) + 1
+                    img_seq_len = patch_h * patch_w
+                    txt_seq_len = self.prompt_embeds.shape[1]
+
+                    auto_token_pos_maps = {}
+                    for adapter_name, trigger_words in auto_mask_loras.items():
+                        positions = find_trigger_word_positions_flux2(
+                            ff_tokenizer, ff_prompt_text, trigger_words
+                        )
+                        if positions:
+                            auto_token_pos_maps[adapter_name] = positions
+
+                    if auto_token_pos_maps:
+                        # Install collector on last double-stream block
+                        double_blocks = getattr(transformer_raw, "transformer_blocks", [])
+                        block_idx = max(0, len(double_blocks) - 1)
+
+                        collector_state = install_flux2_sim_map_collector(
+                            transformer_raw, block_idx, auto_token_pos_maps,
+                            txt_seq_len=txt_seq_len,
+                        )
+
+                        # Disable LoRA for Phase 1
+                        transformer_raw.disable_adapters()
+
+                        try:
+                            phase1_steps = 3
+                            # Compute sigmas and timesteps for Phase 1
+                            p1_sigmas = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps).tolist()
+                            p1_mu = compute_empirical_mu(img_seq_len, num_inference_steps)
+                            p1_timesteps, _ = self.retrieve_timesteps(
+                                self.scheduler, num_inference_steps, self.device,
+                                sigmas=p1_sigmas, mu=p1_mu,
+                            )
+                            phase1_steps = min(phase1_steps, len(p1_timesteps))
+                            phase1_latents = self.latents.to(self.device)
+                            p1_latent_ids = self.latent_ids.to(self.device)
+                            p1_prompt_embeds = self.prompt_embeds.to(
+                                device=self.device, dtype=transformer_dtype,
+                            )
+                            p1_text_ids = self.text_ids.to(self.device)
+
+                            logger.info(
+                                "[Flux2DenoiseNode] Phase B: collecting sim maps (%d steps, double block %d)",
+                                phase1_steps, block_idx,
+                            )
+
+                            collector = collector_state["collector"]
+                            self.scheduler.set_begin_index(0)
+
+                            for p1_i, p1_t in enumerate(p1_timesteps[:phase1_steps]):
+                                collector.cal_concept_sim_map = (p1_i == phase1_steps - 1)
+                                p1_timestep = p1_t.expand(phase1_latents.shape[0]).to(phase1_latents.dtype)
+
+                                p1_latent_input = phase1_latents.to(transformer_dtype)
+
+                                p1_noise_pred = transformer_raw(
+                                    hidden_states=p1_latent_input,
+                                    timestep=p1_timestep / 1000,
+                                    guidance=None,
+                                    encoder_hidden_states=p1_prompt_embeds,
+                                    txt_ids=p1_text_ids,
+                                    img_ids=p1_latent_ids,
+                                    return_dict=False,
+                                )[0]
+                                p1_noise_pred = p1_noise_pred[:, :phase1_latents.size(1)]
+
+                                phase1_latents = self.scheduler.step(
+                                    p1_noise_pred, p1_t, phase1_latents, return_dict=False
+                                )[0]
+
+                            concept_sim_maps = collector.concept_sim_maps
+                        finally:
+                            remove_flux2_sim_map_collector(collector_state)
+                            transformer_raw.enable_adapters()
+
+                        if concept_sim_maps:
+                            logger.debug(
+                                "[Flux2DenoiseNode] Phase B sim maps collected: %s",
+                                {k: v.shape for k, v in concept_sim_maps.items()},
+                            )
+                            auto_derived_masks = process_sim_maps(
+                                concept_sim_maps, patch_h, patch_w, img_seq_len,
+                            )
+                            if auto_derived_masks:
+                                for mn, mv in auto_derived_masks.items():
+                                    logger.info(
+                                        "[Flux2DenoiseNode] Phase B mask '%s': "
+                                        "coverage=%.1f%% (%d/%d tokens)",
+                                        mn, mv.sum().item() / mv.numel() * 100,
+                                        int(mv.sum().item()), mv.numel(),
+                                    )
+                            else:
+                                logger.warning(
+                                    "[Flux2DenoiseNode] Phase B: process_sim_maps returned empty masks"
+                                )
+                        else:
+                            logger.warning(
+                                "[Flux2DenoiseNode] Phase B: no concept sim maps collected"
+                            )
+
+            except Exception:
+                logger.exception("[Flux2DenoiseNode] Failed Phase B auto-mask extraction")
+                auto_derived_masks = {}
+
+        # Apply Phase B auto-derived masks as LoRA spatial masks
+        if auto_derived_masks:
+            from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import (
+                patch_lora_adapter_with_spatial_mask,
+            )
+
+            patch_h = int(self.latent_ids[0, :, 1].max().item()) + 1
+            patch_w = int(self.latent_ids[0, :, 2].max().item()) + 1
+            latent_spatial_dims = (patch_h, patch_w)
+            for adapter_name, flat_mask in auto_derived_masks.items():
+                spatial_mask_2d = flat_mask.view(1, 1, patch_h, patch_w)
+                patch_lora_adapter_with_spatial_mask(
+                    transformer_raw, adapter_name, spatial_mask_2d,
+                    latent_spatial_dims=latent_spatial_dims,
+                )
+            lora_masks_applied = True
+            logger.info(
+                "[Flux2DenoiseNode] Phase B: applied auto-derived spatial masks: %s",
+                list(auto_derived_masks.keys()),
+            )
+
+        # Build FreeFuse attention bias (Phase A manual + Phase B auto masks)
+        freefuse_patched = None
+        if self.lora:
+            freefuse_loras = self._extract_freefuse_lora_data()
+            has_freefuse_data = bool(freefuse_loras) or bool(auto_derived_masks)
+
+            if has_freefuse_data:
+                try:
+                    from iartisanz.modules.generation.graph.nodes.freefuse_flux2_attention_bias import (
+                        construct_flux2_attention_bias,
+                        find_trigger_word_positions_flux2,
+                        patch_flux2_attention_with_bias,
+                    )
+
+                    tokenizer = mm.get_raw("tokenizer")
+                    prompt_text = getattr(self, "positive_prompt_text", None) or ""
+
+                    if not prompt_text:
+                        logger.warning(
+                            "[Flux2DenoiseNode] FreeFuse skipped: positive_prompt_text not wired. "
+                            "Rebuild graph (switch model type and back) to enable FreeFuse."
+                        )
+                    elif tokenizer:
+                        patch_h = int(self.latent_ids[0, :, 1].max().item()) + 1
+                        patch_w = int(self.latent_ids[0, :, 2].max().item()) + 1
+                        img_seq_len = patch_h * patch_w
+                        txt_seq_len = self.prompt_embeds.shape[1]
+
+                        token_pos_maps = {}
+                        flat_masks = {}
+
+                        # Phase A: manual masks with trigger words
+                        for adapter_name, (mask, trigger_words) in freefuse_loras.items():
+                            positions = find_trigger_word_positions_flux2(
+                                tokenizer, prompt_text, trigger_words
+                            )
+                            if positions:
+                                token_pos_maps[adapter_name] = positions
+                                resized = F.interpolate(
+                                    mask.float().unsqueeze(0).unsqueeze(0) if mask.dim() == 2
+                                    else mask.float(),
+                                    size=(patch_h, patch_w),
+                                    mode="bilinear",
+                                    align_corners=False,
+                                )
+                                flat_masks[adapter_name] = resized.flatten(1)
+
+                        # Phase B: auto-derived masks (don't override manual)
+                        for adapter_name, flat_mask in auto_derived_masks.items():
+                            if adapter_name not in flat_masks:
+                                trigger_words = auto_mask_loras.get(adapter_name, "")
+                                positions = find_trigger_word_positions_flux2(
+                                    tokenizer, prompt_text, trigger_words
+                                )
+                                if positions:
+                                    token_pos_maps[adapter_name] = positions
+                                    flat_masks[adapter_name] = flat_mask
+
+                        if token_pos_maps and flat_masks:
+                            attention_bias = construct_flux2_attention_bias(
+                                lora_masks=flat_masks,
+                                token_pos_maps=token_pos_maps,
+                                txt_seq_len=txt_seq_len,
+                                img_seq_len=img_seq_len,
+                                device=self.device,
+                                dtype=self.latents.dtype,
+                            )
+                            freefuse_patched = patch_flux2_attention_with_bias(
+                                transformer_raw, attention_bias
+                            )
+                            logger.info(
+                                "[Flux2DenoiseNode] FreeFuse attention bias applied: "
+                                "img_seq=%d, txt_seq=%d, loras=%s",
+                                img_seq_len, txt_seq_len, list(token_pos_maps.keys()),
+                            )
+                except Exception:
+                    logger.exception("[Flux2DenoiseNode] Failed to build FreeFuse attention bias")
+                    freefuse_patched = None
 
         if (
             use_torch_compile
@@ -452,6 +714,14 @@ class Flux2DenoiseNode(Node):
             is_step_boundary = (i + 1) > num_warmup_steps and (i + 1) % order == 0
             if (is_last or is_step_boundary) and self.callback is not None:
                 self.callback(step_idx, t, latents)
+
+        # Clean up FreeFuse attention bias patches
+        if freefuse_patched:
+            from iartisanz.modules.generation.graph.nodes.freefuse_flux2_attention_bias import (
+                unpatch_flux2_attention_bias,
+            )
+            unpatch_flux2_attention_bias(freefuse_patched)
+            logger.debug("[Flux2DenoiseNode] Cleaned up FreeFuse attention bias patches")
 
         if lora_masks_applied:
             from iartisanz.modules.generation.graph.nodes.lora_spatial_mask import unpatch_all_lora_layers
