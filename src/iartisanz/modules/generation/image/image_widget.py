@@ -296,3 +296,6 @@ class ImageWidget(QWidget):
 
     def set_erase_mode(self, value: bool):
         self.image_editor.erasing = value
+
+    def set_draw_tool(self, draw_tool: str):
+        self.image_editor.set_draw_tool(draw_tool)

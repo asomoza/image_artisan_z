@@ -230,6 +230,9 @@ class MaskWidget(QWidget):
     def set_erase_mode(self, value: bool):
         self.image_editor.erasing = value
 
+    def set_draw_tool(self, draw_tool: str):
+        self.image_editor.set_draw_tool(draw_tool)
+
     def on_clear_mask(self):
         pixmap = QPixmap(self.editor_width, self.editor_height)
         pixmap.fill(Qt.GlobalColor.transparent)

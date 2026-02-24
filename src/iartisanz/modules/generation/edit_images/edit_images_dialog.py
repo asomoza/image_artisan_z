@@ -10,8 +10,8 @@ from superqt import QLabeledDoubleSlider, QLabeledSlider
 
 from iartisanz.app.base_dialog import BaseDialog
 from iartisanz.app.model_manager import get_model_manager
-from iartisanz.buttons.brush_erase_button import BrushEraseButton
 from iartisanz.buttons.color_button import ColorButton
+from iartisanz.buttons.drawing_tool_button import DrawingToolButton
 from iartisanz.buttons.eyedropper_button import EyeDropperButton
 from iartisanz.modules.generation.controlnet.canny_preprocessor_widget import CannyPreprocessorWidget
 from iartisanz.modules.generation.controlnet.preprocessor_option_widget import PreprocessorOptionWidget
@@ -165,8 +165,8 @@ class EditImagesDialog(BaseDialog):
         self.brush_steps_slider.setValue(0.25)
         brush_layout.addWidget(self.brush_steps_slider)
 
-        self.brush_erase_button = BrushEraseButton()
-        brush_layout.addWidget(self.brush_erase_button)
+        self.drawing_tool_button = DrawingToolButton()
+        brush_layout.addWidget(self.drawing_tool_button)
 
         self.color_button = ColorButton("Color:")
         brush_layout.addWidget(self.color_button, 0)
@@ -270,7 +270,14 @@ class EditImagesDialog(BaseDialog):
         self.brush_hardness_slider.valueChanged.connect(widget.image_editor.set_brush_hardness)
         self.brush_steps_slider.valueChanged.connect(widget.image_editor.set_brush_steps)
         self.color_button.color_changed.connect(widget.image_editor.set_brush_color)
-        self.brush_erase_button.brush_selected.connect(widget.set_erase_mode)
+        self.drawing_tool_button.tool_selected.connect(
+            lambda draw_tool, erase_mode, w=widget: self._set_widget_drawing_tool(w, draw_tool, erase_mode)
+        )
+        self._set_widget_drawing_tool(widget, self.drawing_tool_button.draw_tool, self.drawing_tool_button.erase_mode)
+
+    def _set_widget_drawing_tool(self, widget: ImageWidget, draw_tool: str, erase_mode: bool):
+        widget.set_draw_tool(draw_tool)
+        widget.set_erase_mode(erase_mode)
 
     def on_preprocessor_changed(self, index):
         preprocessor = self.preprocessing_combo.itemData(index)
@@ -444,10 +451,7 @@ class EditImagesDialog(BaseDialog):
 
         self.dialog_busy = True
 
-        if (
-            self.result_image_path is not None
-            and self.directories.temp_path in self.result_image_path
-        ):
+        if self.result_image_path is not None and self.directories.temp_path in self.result_image_path:
             if os.path.isfile(self.result_image_path):
                 os.remove(self.result_image_path)
 

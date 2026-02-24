@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import logging
-import math
 import os
 from datetime import datetime
 from typing import Union
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QBrush,
@@ -18,7 +17,15 @@ from PyQt6.QtGui import (
     QPixmap,
     QRadialGradient,
 )
-from PyQt6.QtWidgets import QApplication, QFileDialog, QGraphicsEllipseItem, QGraphicsScene, QGraphicsView, QMenu
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QGraphicsEllipseItem,
+    QGraphicsRectItem,
+    QGraphicsScene,
+    QGraphicsView,
+    QMenu,
+)
 
 from iartisanz.modules.generation.image.image_editor_layer import ImageEditorLayer
 from iartisanz.modules.generation.image.layer_manager import LayerManager
@@ -33,6 +40,12 @@ class ImageEditor(QGraphicsView):
     image_rotated = pyqtSignal(float)
     image_pasted = pyqtSignal(QPixmap)
     image_copy = pyqtSignal()
+
+    DRAW_TOOL_BRUSH = "brush"
+    DRAW_TOOL_SQUARE_OUTLINE = "square_outline"
+    DRAW_TOOL_SQUARE_FILL = "square_fill"
+    DRAW_TOOL_CIRCLE_OUTLINE = "circle_outline"
+    DRAW_TOOL_CIRCLE_FILL = "circle_fill"
 
     def __init__(
         self,
@@ -79,6 +92,9 @@ class ImageEditor(QGraphicsView):
         self.accumulated_distance = 0.0
 
         self.erasing = False
+        self.draw_tool = self.DRAW_TOOL_BRUSH
+        self.shape_start_point = QPointF()
+        self.shape_preview_item = None
 
         self.moving = False
         self.last_mouse_position = None
@@ -159,6 +175,7 @@ class ImageEditor(QGraphicsView):
     def leaveEvent(self, event):
         self.timer.stop()
         self._hide_brush_outline()
+        self._clear_shape_preview()
         super().leaveEvent(event)
 
     def showEvent(self, event):
@@ -169,6 +186,7 @@ class ImageEditor(QGraphicsView):
         self._oscillation_sizes.clear()
         self._stable_viewport_size = None
         self._hide_brush_outline()
+        self._clear_shape_preview()
         super().showEvent(event)
 
     def add_layer(self, image_path: str = None, save_temp: bool = False) -> ImageEditorLayer:
@@ -414,6 +432,7 @@ class ImageEditor(QGraphicsView):
     def clear_all(self):
         self.scene.clear()
         self.layer_manager.delete_all()
+        self.shape_preview_item = None
 
     def draw(self, point):
         pixmap = self.selected_layer.pixmap_item.pixmap()
@@ -437,6 +456,97 @@ class ImageEditor(QGraphicsView):
 
         self.selected_layer.pixmap_item.setPixmap(pixmap)
         self.update()
+
+    def draw_shape(self, start_point: QPointF, end_point: QPointF, shape: str, filled: bool):
+        pixmap = self.selected_layer.pixmap_item.pixmap()
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if self.erasing:
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        else:
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
+        draw_rect = QRectF(start_point, end_point).normalized()
+
+        if filled:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(self.brush_color))
+        else:
+            outline_width = max(1.0, float(self.brush_size) / 10.0)
+            painter.setPen(QPen(self.brush_color, outline_width))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        if shape == "square":
+            painter.drawRect(draw_rect)
+        elif shape == "circle":
+            painter.drawEllipse(draw_rect)
+
+        painter.end()
+
+        self.selected_layer.pixmap_item.setPixmap(pixmap)
+        self.update()
+
+    def _shape_tool_to_config(self):
+        if self.draw_tool == self.DRAW_TOOL_SQUARE_OUTLINE:
+            return "square", False
+        if self.draw_tool == self.DRAW_TOOL_SQUARE_FILL:
+            return "square", True
+        if self.draw_tool == self.DRAW_TOOL_CIRCLE_OUTLINE:
+            return "circle", False
+        if self.draw_tool == self.DRAW_TOOL_CIRCLE_FILL:
+            return "circle", True
+        return None, None
+
+    def _clear_shape_preview(self):
+        if self.shape_preview_item is not None:
+            self.scene.removeItem(self.shape_preview_item)
+            self.shape_preview_item = None
+
+    def _apply_shape_constraint(self, start_point: QPointF, end_point: QPointF, constrain: bool) -> QPointF:
+        if not constrain:
+            return end_point
+
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        side = max(abs(dx), abs(dy))
+
+        constrained_x = start_point.x() + (side if dx >= 0 else -side)
+        constrained_y = start_point.y() + (side if dy >= 0 else -side)
+        return QPointF(constrained_x, constrained_y)
+
+    def _update_shape_preview(self, start_point: QPointF, end_point: QPointF, shape: str, filled: bool):
+        if self.selected_layer is None or self.selected_layer.pixmap_item is None:
+            return
+
+        draw_rect = QRectF(start_point, end_point).normalized()
+        expected_type = QGraphicsRectItem if shape == "square" else QGraphicsEllipseItem
+
+        if self.shape_preview_item is None or not isinstance(self.shape_preview_item, expected_type):
+            self._clear_shape_preview()
+            self.shape_preview_item = expected_type(self.selected_layer.pixmap_item)
+            self.shape_preview_item.setZValue(10001)
+
+        brightness = (
+            self.brush_color.red() * 299 + self.brush_color.green() * 587 + self.brush_color.blue() * 114
+        ) / 1000
+        outline_color = QColor(255, 255, 255, 220) if brightness < 128 else QColor(0, 0, 0, 220)
+        outline_width = max(1.0, float(self.brush_size) / 10.0)
+        preview_pen = QPen(outline_color, outline_width)
+        preview_pen.setStyle(Qt.PenStyle.DashLine)
+        self.shape_preview_item.setPen(preview_pen)
+
+        if filled:
+            if self.erasing:
+                fill_color = QColor(180, 180, 180, 90)
+            else:
+                fill_color = QColor(self.brush_color.red(), self.brush_color.green(), self.brush_color.blue(), 90)
+            self.shape_preview_item.setBrush(QBrush(fill_color))
+        else:
+            self.shape_preview_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+
+        self.shape_preview_item.setRect(draw_rect)
+        self.shape_preview_item.setVisible(True)
 
     def draw_line(self, start_point, end_point):
         if start_point == end_point:
@@ -466,25 +576,38 @@ class ImageEditor(QGraphicsView):
                 self.last_mouse_position = event.pos()
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
             else:
+                if self.selected_layer is None or self.selected_layer.pixmap_item is None:
+                    super().mousePressEvent(event)
+                    return
+
                 self.drawing = True
                 self.last_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
                 self.accumulated_distance = 0.0  # Reset on new stroke
-                self.draw(self.last_point)
+
+                if self.draw_tool == self.DRAW_TOOL_BRUSH:
+                    self.draw(self.last_point)
+                else:
+                    self.shape_start_point = QPointF(self.last_point)
+                    shape, filled = self._shape_tool_to_config()
+                    if shape is not None:
+                        self._update_shape_preview(self.shape_start_point, self.shape_start_point, shape, filled)
 
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         # Update brush outline position
-        if self._brush_outline is not None and self.selected_layer and self.selected_layer.pixmap_item:
+        if (
+            self.draw_tool == self.DRAW_TOOL_BRUSH
+            and self._brush_outline is not None
+            and self.selected_layer
+            and self.selected_layer.pixmap_item
+        ):
             scene_pos = self.mapToScene(event.pos())
             scale_factor = self.selected_layer.pixmap_item.scale()
             brush_size_in_scene = self.brush_size * scale_factor
             radius = brush_size_in_scene / 2
             self._brush_outline.setRect(
-                scene_pos.x() - radius,
-                scene_pos.y() - radius,
-                brush_size_in_scene,
-                brush_size_in_scene
+                scene_pos.x() - radius, scene_pos.y() - radius, brush_size_in_scene, brush_size_in_scene
             )
 
         if event.buttons() & Qt.MouseButton.LeftButton:
@@ -495,10 +618,20 @@ class ImageEditor(QGraphicsView):
                 self.translate(delta.x() / self.current_scale_factor, delta.y() / self.current_scale_factor)
                 self.total_translation += delta
                 self.last_mouse_position = event.pos()
-            elif self.drawing:
+            elif self.drawing and self.draw_tool == self.DRAW_TOOL_BRUSH:
                 current_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
                 self.draw_line(self.last_point, current_point)
                 self.last_point = current_point
+            elif self.drawing and self.draw_tool != self.DRAW_TOOL_BRUSH:
+                current_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
+                constrained_point = self._apply_shape_constraint(
+                    self.shape_start_point,
+                    current_point,
+                    bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier),
+                )
+                shape, filled = self._shape_tool_to_config()
+                if shape is not None:
+                    self._update_shape_preview(self.shape_start_point, constrained_point, shape, filled)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -506,6 +639,20 @@ class ImageEditor(QGraphicsView):
             if self.moving:
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
             elif self.drawing:
+                if self.draw_tool != self.DRAW_TOOL_BRUSH and self.selected_layer and self.selected_layer.pixmap_item:
+                    end_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
+                    constrained_end_point = self._apply_shape_constraint(
+                        self.shape_start_point,
+                        end_point,
+                        bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier),
+                    )
+
+                    shape, filled = self._shape_tool_to_config()
+                    if shape is not None:
+                        self.draw_shape(self.shape_start_point, constrained_end_point, shape, filled)
+
+                self._clear_shape_preview()
+
                 self.image_changed.emit()
                 self.drawing = False
                 self.timer.start(100)
@@ -622,10 +769,7 @@ class ImageEditor(QGraphicsView):
 
         # Update position and size
         self._brush_outline.setRect(
-            scene_pos.x() - radius,
-            scene_pos.y() - radius,
-            brush_size_in_scene,
-            brush_size_in_scene
+            scene_pos.x() - radius, scene_pos.y() - radius, brush_size_in_scene, brush_size_in_scene
         )
         self._brush_outline.setVisible(True)
 
@@ -636,6 +780,11 @@ class ImageEditor(QGraphicsView):
 
     def update_cursor(self):
         if self.selected_layer is None or self.selected_layer.pixmap_item is None:
+            return
+
+        if self.draw_tool != self.DRAW_TOOL_BRUSH:
+            self._hide_brush_outline()
+            self.setCursor(Qt.CursorShape.CrossCursor)
             return
 
         # Get cursor position and convert to scene coordinates
@@ -695,6 +844,22 @@ class ImageEditor(QGraphicsView):
 
     def set_brush_color(self, color: tuple):
         self.brush_color = QColor(int(color[0]), int(color[1]), int(color[2]), 255)
+
+    def set_draw_tool(self, draw_tool: str):
+        allowed_tools = {
+            self.DRAW_TOOL_BRUSH,
+            self.DRAW_TOOL_SQUARE_OUTLINE,
+            self.DRAW_TOOL_SQUARE_FILL,
+            self.DRAW_TOOL_CIRCLE_OUTLINE,
+            self.DRAW_TOOL_CIRCLE_FILL,
+        }
+        if draw_tool not in allowed_tools:
+            return
+
+        self.draw_tool = draw_tool
+        if self.draw_tool != self.DRAW_TOOL_BRUSH:
+            self._hide_brush_outline()
+        self._clear_shape_preview()
 
     def set_brush_size(self, value):
         self.brush_size = value
