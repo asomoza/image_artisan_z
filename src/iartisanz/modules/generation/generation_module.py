@@ -10,14 +10,18 @@ from PyQt6.QtGui import QImageReader
 from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy, QSpacerItem, QVBoxLayout
 
 from iartisanz.modules.base_module import BaseModule
-from iartisanz.modules.generation.constants import FLUX2_LATENT_RGB_FACTORS, ZIMAGE_LATENT_RGB_FACTORS
+from iartisanz.modules.generation.constants import (
+    FLUX2_LATENT_RGB_FACTORS,
+    FLUX2_MODEL_TYPES,
+    MODEL_TYPE_DEFAULTS,
+    ZIMAGE_LATENT_RGB_FACTORS,
+)
 from iartisanz.modules.generation.controlnet.controlnet_image_dialog import ControlNetImageDialog
 from iartisanz.modules.generation.controlnet.controlnet_mask_dialog import ControlNetMaskDialog
+from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.edit_images.edit_image_mask_dialog import EditImageMaskDialog
 from iartisanz.modules.generation.edit_images.edit_images_dialog import EditImagesDialog
-from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.generation_settings import GenerationSettings
-from iartisanz.modules.generation.constants import FLUX2_MODEL_TYPES, MODEL_TYPE_DEFAULTS
 from iartisanz.modules.generation.graph.new_graph import create_graph_for_model_type
 from iartisanz.modules.generation.lora.lora_advanced_dialog import LoraAdvancedDialog
 from iartisanz.modules.generation.lora.lora_manager_dialog import LoraManagerDialog
