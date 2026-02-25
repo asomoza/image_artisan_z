@@ -169,7 +169,9 @@ class ImageArtisanZNodeGraph:
     def from_json(self, json_str, node_classes, callbacks=None):
         graph_dict = json.loads(json_str)
 
-        self.nodes.clear()
+        # Clean up existing nodes (e.g. LoKr weight merges) before replacing.
+        for i in range(len(self.nodes) - 1, -1, -1):
+            self.delete_node(self.nodes[i])
         self.node_counter = 0
 
         self.additional_generation_data = graph_dict.get("additional_generation_data", {}) or {}

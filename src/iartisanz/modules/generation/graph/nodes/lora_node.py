@@ -1,148 +1,25 @@
 import logging
 import os
-import re
 from typing import Optional
 
 import numpy as np
 import torch
-from diffusers.loaders.lora_conversion_utils import _convert_non_diffusers_z_image_lora_to_diffusers
 from diffusers.models.model_loading_utils import load_state_dict
 from PIL import Image
 
 from iartisanz.app.model_manager import get_model_manager
 from iartisanz.modules.generation.graph.iartisanz_node_error import IArtisanZNodeError
+from iartisanz.modules.generation.graph.nodes.lora_conversion import (
+    _convert_flux2_lora,
+    _convert_zimage_lora,
+    _is_lokr_format,
+    _map_flux2_lokr_layer_to_targets,
+    _map_zimage_lokr_layer_to_targets,
+)
 from iartisanz.modules.generation.graph.nodes.node import Node
 
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_flux2_lora_keys(state_dict: dict) -> dict:
-    """Normalize kohya-format lora_down/lora_up keys to lora_A/lora_B.
-
-    Handles alpha scaling: when .alpha keys are present, bakes scale into weights
-    (scale = alpha / rank). When absent, default alpha = rank so scale = 1.0.
-
-    Mixed-format files (some layers already using lora_A/lora_B, others using
-    lora_down/lora_up) are handled by preserving existing lora_A/lora_B keys.
-    """
-    if not any("lora_down" in k for k in state_dict):
-        return state_dict
-
-    normalized = {}
-
-    # Preserve keys that already use lora_A/lora_B naming (mixed-format files)
-    for k, v in state_dict.items():
-        if k.endswith(".lora_A.weight") or k.endswith(".lora_B.weight"):
-            normalized[k] = v
-
-    # Group keys by layer prefix (everything before .lora_down/.lora_up/.alpha)
-    layer_prefixes = set()
-    for k in state_dict:
-        for suffix in (".lora_down.weight", ".lora_up.weight", ".alpha"):
-            if k.endswith(suffix):
-                layer_prefixes.add(k[: -len(suffix)])
-                break
-
-    for lp in layer_prefixes:
-        down_key = f"{lp}.lora_down.weight"
-        up_key = f"{lp}.lora_up.weight"
-        alpha_key = f"{lp}.alpha"
-
-        if down_key not in state_dict or up_key not in state_dict:
-            continue
-
-        down = state_dict[down_key]
-        up = state_dict[up_key]
-        rank = down.shape[0]
-
-        alpha = state_dict.get(alpha_key)
-        if alpha is not None:
-            scale = alpha.item() / rank
-        else:
-            scale = 1.0
-
-        # Bake alpha scaling into lora_A (matches diffusers convention)
-        normalized[f"{lp}.lora_A.weight"] = down * scale if scale != 1.0 else down
-        normalized[f"{lp}.lora_B.weight"] = up
-
-    return normalized
-
-
-def _is_lokr_format(state_dict: dict) -> bool:
-    """Check if state dict contains LoKr-format weights (lokr_w1/lokr_w2)."""
-    return any("lokr_w" in k for k in state_dict)
-
-
-def _map_zimage_lokr_layer_to_targets(layer_prefix: str) -> list[tuple[str, int | None]]:
-    """Map a Z-Image LoKr layer prefix to diffusers model parameter targets.
-
-    Z-Image LoKr keys (after stripping diffusion_model. prefix) already match
-    the diffusers parameter names, so this is a 1:1 identity mapping.
-    """
-    if re.match(r"layers\.\d+\.", layer_prefix):
-        return [(layer_prefix, None)]
-    if re.match(r"(context_refiner|noise_refiner)\.\d+\.", layer_prefix):
-        return [(layer_prefix, None)]
-    return []
-
-
-def _map_flux2_lokr_layer_to_targets(layer_prefix: str) -> list[tuple[str, int | None]]:
-    """Map a Flux2 LoKr layer prefix to diffusers model parameter targets.
-
-    Returns list of (module_path, split_idx) tuples.
-    split_idx is None for 1:1 mappings, or 0/1/2 for QKV chunk index.
-    """
-    # Single blocks: 1:1 mapping
-    m = re.match(r"single_blocks\.(\d+)\.linear1$", layer_prefix)
-    if m:
-        return [(f"single_transformer_blocks.{m.group(1)}.attn.to_qkv_mlp_proj", None)]
-
-    m = re.match(r"single_blocks\.(\d+)\.linear2$", layer_prefix)
-    if m:
-        return [(f"single_transformer_blocks.{m.group(1)}.attn.to_out", None)]
-
-    # Double blocks: fused QKV → split into Q, K, V
-    m = re.match(r"double_blocks\.(\d+)\.img_attn\.qkv$", layer_prefix)
-    if m:
-        tb = f"transformer_blocks.{m.group(1)}"
-        return [(f"{tb}.attn.to_q", 0), (f"{tb}.attn.to_k", 1), (f"{tb}.attn.to_v", 2)]
-
-    m = re.match(r"double_blocks\.(\d+)\.txt_attn\.qkv$", layer_prefix)
-    if m:
-        tb = f"transformer_blocks.{m.group(1)}"
-        return [(f"{tb}.attn.add_q_proj", 0), (f"{tb}.attn.add_k_proj", 1), (f"{tb}.attn.add_v_proj", 2)]
-
-    # Double blocks: projection and MLP (1:1)
-    simple_patterns = [
-        (r"double_blocks\.(\d+)\.img_attn\.proj$", "transformer_blocks.{}.attn.to_out.0"),
-        (r"double_blocks\.(\d+)\.txt_attn\.proj$", "transformer_blocks.{}.attn.to_add_out"),
-        (r"double_blocks\.(\d+)\.img_mlp\.0$", "transformer_blocks.{}.ff.linear_in"),
-        (r"double_blocks\.(\d+)\.img_mlp\.2$", "transformer_blocks.{}.ff.linear_out"),
-        (r"double_blocks\.(\d+)\.txt_mlp\.0$", "transformer_blocks.{}.ff_context.linear_in"),
-        (r"double_blocks\.(\d+)\.txt_mlp\.2$", "transformer_blocks.{}.ff_context.linear_out"),
-    ]
-    for pattern, template in simple_patterns:
-        m = re.match(pattern, layer_prefix)
-        if m:
-            return [(template.format(m.group(1)), None)]
-
-    # Root-level mappings
-    root_map = {
-        "double_stream_modulation_txt.lin": "double_stream_modulation_txt.linear",
-        "double_stream_modulation_img.lin": "double_stream_modulation_img.linear",
-        "single_stream_modulation.lin": "single_stream_modulation.linear",
-        "txt_in": "context_embedder",
-        "img_in": "x_embedder",
-        "final_layer.adaLN_modulation.1": "norm_out.linear",
-        "final_layer.linear": "proj_out",
-        "time_in.in_layer": "time_guidance_embed.timestep_embedder.linear_1",
-        "time_in.out_layer": "time_guidance_embed.timestep_embedder.linear_2",
-    }
-    if layer_prefix in root_map:
-        return [(root_map[layer_prefix], None)]
-
-    return []
 
 
 def _parse_lokr_entries(state_dict: dict, transformer) -> list[dict]:
@@ -232,11 +109,22 @@ def _get_module_weight(model, module_path: str):
     return mod.weight
 
 
-def _apply_lokr_delta(model, entries: list[dict], scale_delta: float):
-    """Apply LoKr weight deltas to model parameters.
+def _apply_lokr_merge(
+    model, entries: list[dict], new_scale: float, original_weights: dict[str, torch.Tensor]
+):
+    """Apply LoKr weight merge to model parameters using save/restore strategy.
 
-    Computes kron(w1, w2) per layer and adds scale_delta * delta to weights.
-    QKV-fused layers are split into separate Q/K/V parameter updates.
+    Instead of accumulating deltas (which loses precision due to floating-point
+    rounding), this saves the original weights on first call and restores them
+    before applying the new scale. This guarantees exact restoration when
+    new_scale=0.
+
+    Args:
+        model: The transformer model.
+        entries: LoKr entries from _parse_lokr_entries.
+        new_scale: The desired LoKr scale (0.0 = fully unmerged).
+        original_weights: Dict mapping module_path to saved original weight
+            tensors. Populated on first call, used on subsequent calls.
     """
     for entry in entries:
         delta = torch.kron(entry["w1"], entry["w2"].float())
@@ -247,195 +135,19 @@ def _apply_lokr_delta(model, entries: list[dict], scale_delta: float):
                 logger.warning("[LoKr] Parameter not found: %s", module_path)
                 continue
 
+            # Save original weight on first encounter (CPU to avoid VRAM bloat)
+            if module_path not in original_weights:
+                original_weights[module_path] = weight.data.detach().cpu().clone()
+
             if split_idx is not None:
                 chunk = delta.chunk(3, dim=0)[split_idx]
             else:
                 chunk = delta
 
-            weight.data.add_(chunk.to(device=weight.device, dtype=weight.dtype) * scale_delta)
-
-
-def _strip_lora_unet_prefix(sd: dict) -> dict:
-    """Convert kohya lora_unet_ prefixed keys to raw Flux2 block format.
-
-    Examples:
-        lora_unet_single_blocks_8_linear1.lora_A.weight
-            → single_blocks.8.linear1.lora_A.weight
-        lora_unet_double_blocks_5_img_attn_qkv.lora_A.weight
-            → double_blocks.5.img_attn.qkv.lora_A.weight
-    """
-    lora_unet = "lora_unet_"
-    result = {}
-    for k, v in sd.items():
-        if not k.startswith(lora_unet):
-            result[k] = v
-            continue
-        remainder = k[len(lora_unet):]  # e.g. "single_blocks_8_linear1.lora_A.weight"
-        dot_pos = remainder.find(".")
-        layer_path = remainder[:dot_pos] if dot_pos >= 0 else remainder
-        suffix = remainder[dot_pos:] if dot_pos >= 0 else ""
-        m = re.match(r"^(single_blocks|double_blocks)_(\d+)_(.+)$", layer_path)
-        if m:
-            block_type, idx, rest = m.groups()
-            # For double blocks, compound names like img_attn/txt_attn/img_mlp/txt_mlp
-            # keep their underscore; only the separator after them becomes a dot.
-            # e.g. img_attn_qkv → img_attn.qkv, txt_mlp_0 → txt_mlp.0
-            # For single blocks, rest is just linear1/linear2 — no substitution needed.
-            converted_rest = re.sub(r"^(img|txt)_(attn|mlp)_", r"\1_\2.", rest)
-            result[f"{block_type}.{idx}.{converted_rest}{suffix}"] = v
-        else:
-            result[k] = v  # Unknown format, keep as-is
-    return result
-
-
-def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
-    """Convert non-diffusers Flux2 LoRA to diffusers PEFT format.
-
-    Unlike diffusers' built-in converter which hardcodes 48 single blocks (full Flux2),
-    this dynamically detects block counts from the keys — works for Klein 9B (24 single),
-    Klein 4B, or any other variant. Also handles kohya-format lora_down/lora_up naming
-    and mixed-format files (e.g. double blocks in diffusion_model. format, single blocks
-    in lora_unet_ kohya format).
-    """
-    converted = {}
-
-    # Strip diffusion_model. prefix, then normalise any remaining lora_unet_ prefixes
-    prefix = "diffusion_model."
-    sd = {k[len(prefix) :] if k.startswith(prefix) else k: v for k, v in state_dict.items()}
-    sd = _strip_lora_unet_prefix(sd)
-
-    # Detect block indices from keys
-    single_indices = set()
-    double_indices = set()
-    for k in sd:
-        if k.startswith("single_blocks."):
-            single_indices.add(int(k.split(".")[1]))
-        elif k.startswith("double_blocks."):
-            double_indices.add(int(k.split(".")[1]))
-
-    lora_keys = ("lora_A", "lora_B")
-
-    for sl in sorted(single_indices):
-        src = f"single_blocks.{sl}"
-        dst = f"single_transformer_blocks.{sl}.attn"
-        for lk in lora_keys:
-            converted[f"{dst}.to_qkv_mlp_proj.{lk}.weight"] = sd.pop(f"{src}.linear1.{lk}.weight")
-            converted[f"{dst}.to_out.{lk}.weight"] = sd.pop(f"{src}.linear2.{lk}.weight")
-
-    for dl in sorted(double_indices):
-        tb = f"transformer_blocks.{dl}"
-        for lk in lora_keys:
-            for attn_type in ("img_attn", "txt_attn"):
-                fused = sd.pop(f"double_blocks.{dl}.{attn_type}.qkv.{lk}.weight")
-                if lk == "lora_A":
-                    proj_keys = (
-                        ["to_q", "to_k", "to_v"]
-                        if attn_type == "img_attn"
-                        else ["add_q_proj", "add_k_proj", "add_v_proj"]
-                    )
-                    for pk in proj_keys:
-                        converted[f"{tb}.attn.{pk}.{lk}.weight"] = torch.cat([fused])
-                else:
-                    q, k_val, v = torch.chunk(fused, 3, dim=0)
-                    if attn_type == "img_attn":
-                        converted[f"{tb}.attn.to_q.{lk}.weight"] = q
-                        converted[f"{tb}.attn.to_k.{lk}.weight"] = k_val
-                        converted[f"{tb}.attn.to_v.{lk}.weight"] = v
-                    else:
-                        converted[f"{tb}.attn.add_q_proj.{lk}.weight"] = q
-                        converted[f"{tb}.attn.add_k_proj.{lk}.weight"] = k_val
-                        converted[f"{tb}.attn.add_v_proj.{lk}.weight"] = v
-
-        proj_mappings = [
-            ("img_attn.proj", "attn.to_out.0"),
-            ("txt_attn.proj", "attn.to_add_out"),
-        ]
-        for org, diff in proj_mappings:
-            for lk in lora_keys:
-                converted[f"{tb}.{diff}.{lk}.weight"] = sd.pop(f"double_blocks.{dl}.{org}.{lk}.weight")
-
-        mlp_mappings = [
-            ("img_mlp.0", "ff.linear_in"),
-            ("img_mlp.2", "ff.linear_out"),
-            ("txt_mlp.0", "ff_context.linear_in"),
-            ("txt_mlp.2", "ff_context.linear_out"),
-        ]
-        for org, diff in mlp_mappings:
-            for lk in lora_keys:
-                converted[f"{tb}.{diff}.{lk}.weight"] = sd.pop(f"double_blocks.{dl}.{org}.{lk}.weight")
-
-    # Root-level layers (modulation, embedders, final layer) — simple 1:1 renames
-    root_mappings = {
-        "double_stream_modulation_txt.lin": "double_stream_modulation_txt.linear",
-        "double_stream_modulation_img.lin": "double_stream_modulation_img.linear",
-        "single_stream_modulation.lin": "single_stream_modulation.linear",
-        "txt_in": "context_embedder",
-        "img_in": "x_embedder",
-        "final_layer.adaLN_modulation.1": "norm_out.linear",
-        "final_layer.linear": "proj_out",
-        "time_in.in_layer": "time_guidance_embed.timestep_embedder.linear_1",
-        "time_in.out_layer": "time_guidance_embed.timestep_embedder.linear_2",
-    }
-    for org, diff in root_mappings.items():
-        for lk in lora_keys:
-            src_key = f"{org}.{lk}.weight"
-            if src_key in sd:
-                converted[f"{diff}.{lk}.weight"] = sd.pop(src_key)
-
-    if sd:
-        raise ValueError(f"Unexpected keys remaining after Flux2 LoRA conversion: {list(sd.keys())}")
-
-    return {f"transformer.{k}": v for k, v in converted.items()}
-
-
-def _is_diffusers_format(state_dict: dict) -> bool:
-    """Check if state dict is already in diffusers PEFT format.
-
-    Diffusers PEFT keys start with ``transformer.`` and use ``lora_A``/``lora_B``
-    naming.  Non-diffusers formats use other prefixes (``diffusion_model.``,
-    ``lora_unet``), kohya naming (``lora_down``/``lora_up``), or ``.alpha`` keys.
-    A file can have a ``transformer.`` prefix but still use kohya lora_down/lora_up
-    naming — that is NOT diffusers format and needs conversion.
-    """
-    return (
-        all(k.startswith("transformer.") for k in state_dict)
-        and not any("lora_down" in k for k in state_dict)
-    )
-
-
-def _convert_zimage_lora(state_dict: dict) -> dict:
-    """Convert a non-diffusers Z-Image LoRA to diffusers PEFT format.
-
-    Handles kohya format (lora_unet__ prefixed keys with lora_down/lora_up)
-    and other non-diffusers formats (alpha keys, diffusion_model. prefix, etc.).
-    Already-diffusers-format LoRAs are returned as-is.
-    """
-    if _is_diffusers_format(state_dict):
-        return state_dict
-    return _convert_non_diffusers_z_image_lora_to_diffusers(state_dict)
-
-
-def _convert_flux2_lora(state_dict: dict) -> dict:
-    """Convert a non-diffusers Flux2 LoRA to diffusers PEFT format.
-
-    Handles kohya format (lora_down/lora_up naming), original format
-    (double_blocks/single_blocks), and already-diffusers-format LoRAs.
-    """
-    if _is_diffusers_format(state_dict):
-        return state_dict
-
-    # Normalize kohya lora_down/lora_up → lora_A/lora_B
-    state_dict = _normalize_flux2_lora_keys(state_dict)
-
-    # Original format uses double_blocks/single_blocks (not transformer_blocks/single_transformer_blocks)
-    is_original_format = any(
-        "double_blocks." in k or ("single_blocks." in k and "single_transformer_blocks." not in k)
-        for k in state_dict
-    )
-    if is_original_format:
-        state_dict = _convert_flux2_lora_to_diffusers(state_dict)
-
-    return state_dict
+            # Restore original weight, then apply at new scale
+            weight.data.copy_(original_weights[module_path])
+            if abs(new_scale) > 1e-8:
+                weight.data.add_(chunk.to(device=weight.device, dtype=weight.dtype) * new_scale)
 
 
 def _convert_lora_to_diffusers(state_dict: dict, transformer) -> dict:
@@ -490,6 +202,7 @@ class LoraNode(Node):
         self._lokr_entries: list[dict] | None = None
         self._lokr_scale = 0.0
         self._lokr_transformer_id: int | None = None
+        self._lokr_original_weights: dict[str, torch.Tensor] = {}
 
     def update_lora(
         self,
@@ -702,15 +415,18 @@ class LoraNode(Node):
         if self._lokr_transformer_id != current_id:
             self._lokr_scale = 0.0
             self._lokr_transformer_id = current_id
+            self._lokr_original_weights = {}
 
         target_scale = self.transformer_weight if self.lora_enabled else 0.0
-        scale_delta = target_scale - self._lokr_scale
 
-        if abs(scale_delta) > 1e-8:
-            _apply_lokr_delta(transformer, self._lokr_entries, scale_delta)
+        if abs(target_scale - self._lokr_scale) > 1e-8:
+            old_scale = self._lokr_scale
+            _apply_lokr_merge(
+                transformer, self._lokr_entries, target_scale, self._lokr_original_weights
+            )
             self._lokr_scale = target_scale
             logger.info("[LoKr] Weight merge updated: scale %.4f → %.4f",
-                        target_scale - scale_delta, target_scale)
+                        old_scale, target_scale)
 
     def _get_spatial_mask(self) -> Optional[torch.Tensor]:
         """Load and return spatial mask if enabled, or None."""
@@ -723,22 +439,31 @@ class LoraNode(Node):
         try:
             transformer = mm.resolve(self.transformer)
         except Exception:
+            if self._is_lokr and self._lokr_scale != 0.0:
+                logger.error(
+                    "[LoKr] Cannot resolve transformer in before_delete — "
+                    "LoKr weights at scale %.4f will NOT be restored!",
+                    self._lokr_scale,
+                )
             return
 
         if self._is_lokr:
-            # Unmerge LoKr weight delta
+            # Restore original weights (scale → 0)
             if (
                 self._lokr_scale != 0.0
                 and self._lokr_entries
                 and id(transformer) == self._lokr_transformer_id
             ):
                 try:
-                    _apply_lokr_delta(transformer, self._lokr_entries, -self._lokr_scale)
-                    logger.info("[LoKr] Unmerged weights (scale was %.4f)", self._lokr_scale)
+                    _apply_lokr_merge(
+                        transformer, self._lokr_entries, 0.0, self._lokr_original_weights
+                    )
+                    logger.info("[LoKr] Restored original weights (scale was %.4f)", self._lokr_scale)
                 except Exception:
-                    logger.warning("[LoKr] Failed to unmerge weights on delete")
+                    logger.warning("[LoKr] Failed to restore weights on delete")
             self._lokr_entries = None
             self._lokr_scale = 0.0
+            self._lokr_original_weights = {}
             self._is_lokr = False
             return
 

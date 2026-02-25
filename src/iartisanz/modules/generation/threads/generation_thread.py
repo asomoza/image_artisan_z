@@ -245,8 +245,11 @@ class NodeGraphThread(QThread):
         return {name: self.update_node(name, value) for name, value in values.items()}
 
     def load_json_graph(self, json_graph: str, callbacks: dict | None = None):
-        # Reset persistent run graph — the staging graph structure changed.
-        self._persistent_run_graph = None
+        # Clean up persistent run graph — nodes may hold state (e.g. LoKr weight
+        # merges) that must be reverted via before_delete() before dropping.
+        if self._persistent_run_graph is not None:
+            self._persistent_run_graph.clean_up()
+            self._persistent_run_graph = None
 
         models_node = self.node_graph.get_node_by_name("model")
         incoming_model_sig = None
