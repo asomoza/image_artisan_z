@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QGraphicsEllipseItem,
+    QGraphicsLineItem,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
@@ -46,6 +47,7 @@ class ImageEditor(QGraphicsView):
     DRAW_TOOL_SQUARE_FILL = "square_fill"
     DRAW_TOOL_CIRCLE_OUTLINE = "circle_outline"
     DRAW_TOOL_CIRCLE_FILL = "circle_fill"
+    DRAW_TOOL_CLONE_STAMP = "clone_stamp"
 
     def __init__(
         self,
@@ -95,6 +97,11 @@ class ImageEditor(QGraphicsView):
         self.draw_tool = self.DRAW_TOOL_BRUSH
         self.shape_start_point = QPointF()
         self.shape_preview_item = None
+        self.clone_source_scene_point = None
+        self.clone_offset_scene = QPointF(0, 0)
+        self.clone_source_marker_circle = None
+        self.clone_source_marker_hline = None
+        self.clone_source_marker_vline = None
 
         self.moving = False
         self.last_mouse_position = None
@@ -207,6 +214,9 @@ class ImageEditor(QGraphicsView):
 
     def restore_layers(self, layers: list[ImageEditorLayer]):
         self.layer_manager.delete_all()
+        self.clone_source_marker_circle = None
+        self.clone_source_marker_hline = None
+        self.clone_source_marker_vline = None
         self.scene.clear()
 
         for layer in layers:
@@ -433,6 +443,10 @@ class ImageEditor(QGraphicsView):
         self.scene.clear()
         self.layer_manager.delete_all()
         self.shape_preview_item = None
+        self.clone_source_marker_circle = None
+        self.clone_source_marker_hline = None
+        self.clone_source_marker_vline = None
+        self.clone_source_scene_point = None
 
     def draw(self, point):
         pixmap = self.selected_layer.pixmap_item.pixmap()
@@ -548,6 +562,109 @@ class ImageEditor(QGraphicsView):
         self.shape_preview_item.setRect(draw_rect)
         self.shape_preview_item.setVisible(True)
 
+    def _clear_clone_source_marker(self):
+        for item in [
+            self.clone_source_marker_circle,
+            self.clone_source_marker_hline,
+            self.clone_source_marker_vline,
+        ]:
+            if item is not None:
+                try:
+                    self.scene.removeItem(item)
+                except RuntimeError:
+                    pass
+
+        self.clone_source_marker_circle = None
+        self.clone_source_marker_hline = None
+        self.clone_source_marker_vline = None
+
+    def _update_clone_source_marker(self, source_scene_point: QPointF):
+        needs_create = (
+            self.clone_source_marker_circle is None
+            or self.clone_source_marker_hline is None
+            or self.clone_source_marker_vline is None
+        )
+
+        if needs_create:
+            self.clone_source_marker_circle = QGraphicsEllipseItem()
+            self.clone_source_marker_hline = QGraphicsLineItem()
+            self.clone_source_marker_vline = QGraphicsLineItem()
+
+            self.scene.addItem(self.clone_source_marker_circle)
+            self.scene.addItem(self.clone_source_marker_hline)
+            self.scene.addItem(self.clone_source_marker_vline)
+
+            for marker_item in [
+                self.clone_source_marker_circle,
+                self.clone_source_marker_hline,
+                self.clone_source_marker_vline,
+            ]:
+                marker_item.setZValue(10002)
+
+        marker_color = QColor(255, 255, 255, 220)
+        marker_pen = QPen(marker_color, 1.5)
+
+        radius = max(4.0, float(self.brush_size) / 3.0)
+        cross_half = radius + 3.0
+
+        self.clone_source_marker_circle.setPen(marker_pen)
+        self.clone_source_marker_circle.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        self.clone_source_marker_circle.setRect(
+            source_scene_point.x() - radius,
+            source_scene_point.y() - radius,
+            radius * 2,
+            radius * 2,
+        )
+
+        self.clone_source_marker_hline.setPen(marker_pen)
+        self.clone_source_marker_hline.setLine(
+            source_scene_point.x() - cross_half,
+            source_scene_point.y(),
+            source_scene_point.x() + cross_half,
+            source_scene_point.y(),
+        )
+
+        self.clone_source_marker_vline.setPen(marker_pen)
+        self.clone_source_marker_vline.setLine(
+            source_scene_point.x(),
+            source_scene_point.y() - cross_half,
+            source_scene_point.x(),
+            source_scene_point.y() + cross_half,
+        )
+
+    def _capture_scene_for_clone(self):
+        scene_rect = self.sceneRect()
+        if scene_rect.isEmpty():
+            return None, QRectF()
+
+        snapshot = QPixmap(scene_rect.size().toSize())
+        snapshot.fill(Qt.GlobalColor.transparent)
+
+        overlay_items = [
+            self._brush_outline,
+            self.clone_source_marker_circle,
+            self.clone_source_marker_hline,
+            self.clone_source_marker_vline,
+            self.shape_preview_item,
+            self.brush_preview,
+        ]
+        visibility_state = []
+        for item in overlay_items:
+            if item is not None:
+                visibility_state.append((item, item.isVisible()))
+                item.setVisible(False)
+
+        painter = QPainter(snapshot)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        self.scene.render(painter, QRectF(snapshot.rect()), scene_rect)
+        painter.end()
+
+        for item, is_visible in visibility_state:
+            item.setVisible(is_visible)
+
+        return snapshot, scene_rect
+
     def draw_line(self, start_point, end_point):
         if start_point == end_point:
             return
@@ -569,6 +686,80 @@ class ImageEditor(QGraphicsView):
             self.draw(end_point)
             self.accumulated_distance = 0.0  # Reset accumulated distance
 
+    def draw_clone_stamp(self, target_local_point: QPointF, target_scene_point: QPointF):
+        clone_source_pixmap, clone_source_scene_rect = self._capture_scene_for_clone()
+        if clone_source_pixmap is None:
+            return
+
+        diameter = max(1, int(round(self.brush_size)))
+        radius = diameter / 2.0
+
+        source_scene_point = QPointF(
+            target_scene_point.x() + self.clone_offset_scene.x(),
+            target_scene_point.y() + self.clone_offset_scene.y(),
+        )
+        self._update_clone_source_marker(source_scene_point)
+        src_x = int(round(source_scene_point.x() - radius - clone_source_scene_rect.left()))
+        src_y = int(round(source_scene_point.y() - radius - clone_source_scene_rect.top()))
+
+        source_patch = QPixmap(diameter, diameter)
+        source_patch.fill(Qt.GlobalColor.transparent)
+        source_patch_painter = QPainter(source_patch)
+        source_patch_painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        source_patch_painter.drawPixmap(0, 0, clone_source_pixmap, src_x, src_y, diameter, diameter)
+        source_patch_painter.end()
+
+        masked_patch = QPixmap(diameter, diameter)
+        masked_patch.fill(Qt.GlobalColor.transparent)
+        masked_painter = QPainter(masked_patch)
+        masked_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        masked_painter.drawPixmap(0, 0, source_patch)
+        masked_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        gradient = QRadialGradient(QPointF(radius, radius), radius)
+        gradient.setColorAt(0, QColor(255, 255, 255, 255))
+        gradient.setColorAt(self.hardness, QColor(255, 255, 255, 255))
+        gradient.setColorAt(1, QColor(255, 255, 255, 0))
+        masked_painter.setPen(Qt.PenStyle.NoPen)
+        masked_painter.setBrush(QBrush(gradient))
+        masked_painter.drawEllipse(QRectF(0, 0, diameter, diameter))
+        masked_painter.end()
+
+        pixmap = self.selected_layer.pixmap_item.pixmap()
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawPixmap(
+            int(round(target_local_point.x() - radius)),
+            int(round(target_local_point.y() - radius)),
+            masked_patch,
+        )
+        painter.end()
+
+        self.selected_layer.pixmap_item.setPixmap(pixmap)
+        self.update()
+
+    def draw_clone_line(
+        self,
+        start_local_point: QPointF,
+        end_local_point: QPointF,
+        end_scene_point: QPointF,
+    ):
+        if start_local_point == end_local_point:
+            return
+
+        dx = end_local_point.x() - start_local_point.x()
+        dy = end_local_point.y() - start_local_point.y()
+        distance = (dx * dx + dy * dy) ** 0.5
+
+        self.accumulated_distance += distance
+
+        base_step_size = max(1.0, self.brush_size * 0.1)
+        step_size = base_step_size * self.steps
+
+        if self.accumulated_distance >= step_size:
+            self.draw_clone_stamp(end_local_point, end_scene_point)
+            self.accumulated_distance = 0.0
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.moving:
@@ -584,8 +775,35 @@ class ImageEditor(QGraphicsView):
                 self.last_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
                 self.accumulated_distance = 0.0  # Reset on new stroke
 
+                if (
+                    self.draw_tool == self.DRAW_TOOL_CLONE_STAMP
+                    and event.modifiers() & Qt.KeyboardModifier.AltModifier
+                ):
+                    clone_source_scene_point = self.mapToScene(event.pos())
+                    self.clone_source_scene_point = QPointF(clone_source_scene_point)
+                    self._update_clone_source_marker(self.clone_source_scene_point)
+                    self.drawing = False
+                    super().mousePressEvent(event)
+                    return
+
                 if self.draw_tool == self.DRAW_TOOL_BRUSH:
                     self.draw(self.last_point)
+                elif self.draw_tool == self.DRAW_TOOL_CLONE_STAMP:
+                    if self.clone_source_scene_point is None:
+                        self.drawing = False
+                    else:
+                        start_scene_point = self.mapToScene(event.pos())
+                        self.clone_offset_scene = QPointF(
+                            self.clone_source_scene_point.x() - start_scene_point.x(),
+                            self.clone_source_scene_point.y() - start_scene_point.y(),
+                        )
+                        self._update_clone_source_marker(
+                            QPointF(
+                                start_scene_point.x() + self.clone_offset_scene.x(),
+                                start_scene_point.y() + self.clone_offset_scene.y(),
+                            )
+                        )
+                        self.draw_clone_stamp(self.last_point, start_scene_point)
                 else:
                     self.shape_start_point = QPointF(self.last_point)
                     shape, filled = self._shape_tool_to_config()
@@ -597,7 +815,7 @@ class ImageEditor(QGraphicsView):
     def mouseMoveEvent(self, event):
         # Update brush outline position
         if (
-            self.draw_tool == self.DRAW_TOOL_BRUSH
+            self.draw_tool in {self.DRAW_TOOL_BRUSH, self.DRAW_TOOL_CLONE_STAMP}
             and self._brush_outline is not None
             and self.selected_layer
             and self.selected_layer.pixmap_item
@@ -622,6 +840,17 @@ class ImageEditor(QGraphicsView):
                 current_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
                 self.draw_line(self.last_point, current_point)
                 self.last_point = current_point
+            elif self.drawing and self.draw_tool == self.DRAW_TOOL_CLONE_STAMP:
+                current_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
+                current_scene_point = self.mapToScene(event.pos())
+                self._update_clone_source_marker(
+                    QPointF(
+                        current_scene_point.x() + self.clone_offset_scene.x(),
+                        current_scene_point.y() + self.clone_offset_scene.y(),
+                    )
+                )
+                self.draw_clone_line(self.last_point, current_point, current_scene_point)
+                self.last_point = current_point
             elif self.drawing and self.draw_tool != self.DRAW_TOOL_BRUSH:
                 current_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
                 constrained_point = self._apply_shape_constraint(
@@ -640,16 +869,17 @@ class ImageEditor(QGraphicsView):
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
             elif self.drawing:
                 if self.draw_tool != self.DRAW_TOOL_BRUSH and self.selected_layer and self.selected_layer.pixmap_item:
-                    end_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
-                    constrained_end_point = self._apply_shape_constraint(
-                        self.shape_start_point,
-                        end_point,
-                        bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier),
-                    )
+                    if self.draw_tool != self.DRAW_TOOL_CLONE_STAMP:
+                        end_point = self.selected_layer.pixmap_item.mapFromScene(self.mapToScene(event.pos()))
+                        constrained_end_point = self._apply_shape_constraint(
+                            self.shape_start_point,
+                            end_point,
+                            bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier),
+                        )
 
-                    shape, filled = self._shape_tool_to_config()
-                    if shape is not None:
-                        self.draw_shape(self.shape_start_point, constrained_end_point, shape, filled)
+                        shape, filled = self._shape_tool_to_config()
+                        if shape is not None:
+                            self.draw_shape(self.shape_start_point, constrained_end_point, shape, filled)
 
                 self._clear_shape_preview()
 
@@ -782,7 +1012,7 @@ class ImageEditor(QGraphicsView):
         if self.selected_layer is None or self.selected_layer.pixmap_item is None:
             return
 
-        if self.draw_tool != self.DRAW_TOOL_BRUSH:
+        if self.draw_tool not in {self.DRAW_TOOL_BRUSH, self.DRAW_TOOL_CLONE_STAMP}:
             self._hide_brush_outline()
             self.setCursor(Qt.CursorShape.CrossCursor)
             return
@@ -852,13 +1082,18 @@ class ImageEditor(QGraphicsView):
             self.DRAW_TOOL_SQUARE_FILL,
             self.DRAW_TOOL_CIRCLE_OUTLINE,
             self.DRAW_TOOL_CIRCLE_FILL,
+            self.DRAW_TOOL_CLONE_STAMP,
         }
         if draw_tool not in allowed_tools:
             return
 
         self.draw_tool = draw_tool
-        if self.draw_tool != self.DRAW_TOOL_BRUSH:
+        if self.draw_tool not in {self.DRAW_TOOL_BRUSH, self.DRAW_TOOL_CLONE_STAMP}:
             self._hide_brush_outline()
+        if self.draw_tool == self.DRAW_TOOL_CLONE_STAMP and self.clone_source_scene_point is not None:
+            self._update_clone_source_marker(self.clone_source_scene_point)
+        elif self.draw_tool != self.DRAW_TOOL_CLONE_STAMP:
+            self._clear_clone_source_marker()
         self._clear_shape_preview()
 
     def set_brush_size(self, value):
