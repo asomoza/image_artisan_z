@@ -251,7 +251,7 @@ class ZImageDenoiseNode(Node):
                     result[adapter_name] = trigger_words
         return result
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def __call__(self):
         mm = get_model_manager()
         transformer_input = self.transformer

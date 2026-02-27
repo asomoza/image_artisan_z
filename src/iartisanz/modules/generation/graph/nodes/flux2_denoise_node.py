@@ -160,7 +160,7 @@ class Flux2DenoiseNode(Node):
 
             return forward_fn()
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def __call__(self):
         mm = get_model_manager()
         transformer_input = self.transformer
