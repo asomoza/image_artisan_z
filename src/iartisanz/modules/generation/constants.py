@@ -137,3 +137,10 @@ SCHEDULER_NAME_CLASS_MAPPING = {
 }
 
 SCHEDULER_NAMES = list(SCHEDULER_NAME_CLASS_MAPPING.keys())
+
+OFFLOAD_STRATEGIES: dict[str, str] = {
+    "auto": "Auto",
+    "model_offload": "Model Offload",
+    "group_offload": "Group Offload",
+    "sequential_group_offload": "Sequential Group Offload",
+}

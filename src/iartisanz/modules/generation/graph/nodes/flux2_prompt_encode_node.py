@@ -26,21 +26,22 @@ class Flux2PromptEncoderNode(Node):
     def __call__(self):
         mm = get_model_manager()
 
-        tokenizer = mm.resolve(self.tokenizer)
-        text_encoder = mm.resolve(self.text_encoder)
+        with mm.use_components("text_encoder", device=self.device):
+            tokenizer = mm.resolve(self.tokenizer)
+            text_encoder = mm.resolve(self.text_encoder)
 
-        negative_prompt = self.negative_prompt if self.negative_prompt is not None else ""
+            negative_prompt = self.negative_prompt if self.negative_prompt is not None else ""
 
-        prompt_embeds = self.encode_prompt(self.positive_prompt, tokenizer=tokenizer, text_encoder=text_encoder)
-        negative_prompt_embeds = self.encode_prompt(negative_prompt, tokenizer=tokenizer, text_encoder=text_encoder)
+            prompt_embeds = self.encode_prompt(self.positive_prompt, tokenizer=tokenizer, text_encoder=text_encoder)
+            negative_prompt_embeds = self.encode_prompt(negative_prompt, tokenizer=tokenizer, text_encoder=text_encoder)
 
-        text_ids = self._prepare_text_ids(prompt_embeds)
-        negative_text_ids = self._prepare_text_ids(negative_prompt_embeds)
+            text_ids = self._prepare_text_ids(prompt_embeds)
+            negative_text_ids = self._prepare_text_ids(negative_prompt_embeds)
 
-        self.values["prompt_embeds"] = prompt_embeds.to("cpu").detach().clone()
-        self.values["negative_prompt_embeds"] = negative_prompt_embeds.to("cpu").detach().clone()
-        self.values["text_ids"] = text_ids.to("cpu").detach().clone()
-        self.values["negative_text_ids"] = negative_text_ids.to("cpu").detach().clone()
+            self.values["prompt_embeds"] = prompt_embeds.to("cpu").detach().clone()
+            self.values["negative_prompt_embeds"] = negative_prompt_embeds.to("cpu").detach().clone()
+            self.values["text_ids"] = text_ids.to("cpu").detach().clone()
+            self.values["negative_text_ids"] = negative_text_ids.to("cpu").detach().clone()
 
         return self.values
 

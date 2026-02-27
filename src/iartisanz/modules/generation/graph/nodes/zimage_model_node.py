@@ -356,6 +356,15 @@ class ZImageModelNode(Node):
         self.values["num_channels_latents"] = transformer.in_channels
         self.values["vae_scale_factor"] = 2 ** (len(vae.config.block_out_channels) - 1)
 
+        # Register nn.Module components for offload lifecycle management
+        text_encoder = mm.get_raw("text_encoder")
+        mm.register_managed_component("text_encoder", text_encoder)
+        mm.register_managed_component("transformer", transformer)
+        mm.register_managed_component("vae", vae)
+
+        # Apply offload strategy (no-op for "auto")
+        mm.apply_offload_strategy(self.device)
+
     def delete(self):
         self.clear_models()
         super().delete()

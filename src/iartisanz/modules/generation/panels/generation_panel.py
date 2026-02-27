@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 )
 from superqt import QDoubleRangeSlider, QLabeledDoubleSlider, QLabeledSlider
 
-from iartisanz.modules.generation.constants import SCHEDULER_NAME_CLASS_MAPPING, SCHEDULER_NAMES
+from iartisanz.modules.generation.constants import OFFLOAD_STRATEGIES, SCHEDULER_NAME_CLASS_MAPPING, SCHEDULER_NAMES
 from iartisanz.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
 from iartisanz.modules.generation.panels.base_panel import BasePanel
 from iartisanz.modules.generation.widgets.image_dimensions_widget import ImageDimensionsWidget
@@ -44,6 +44,9 @@ class GenerationPanel(BasePanel):
             self.gen_settings.model,
             bool(getattr(self.gen_settings, "use_torch_compile", False)),
             str(getattr(self.gen_settings, "attention_backend", "native")),
+            str(getattr(self.gen_settings, "offload_strategy", "auto")),
+            bool(getattr(self.gen_settings, "group_offload_use_stream", False)),
+            bool(getattr(self.gen_settings, "group_offload_low_cpu_mem", False)),
         )
 
         self.event_bus.subscribe("model", self.on_model_event)
@@ -148,6 +151,29 @@ class GenerationPanel(BasePanel):
         attention_layout.addWidget(self.attention_backend_combobox, 1)
         main_layout.addLayout(attention_layout)
 
+        # Offload strategy dropdown
+        offload_layout = QHBoxLayout()
+        offload_label = QLabel("Offload:")
+        offload_layout.addWidget(offload_label)
+
+        self.offload_strategy_combobox = QComboBox()
+        for strategy_id, display_name in OFFLOAD_STRATEGIES.items():
+            self.offload_strategy_combobox.addItem(display_name, strategy_id)
+        self.offload_strategy_combobox.currentIndexChanged.connect(self.on_offload_strategy_changed)
+        offload_layout.addWidget(self.offload_strategy_combobox, 1)
+        main_layout.addLayout(offload_layout)
+
+        # Group offload sub-options
+        self.group_offload_use_stream_checkbox = QCheckBox("Use CUDA Streams")
+        self.group_offload_use_stream_checkbox.toggled.connect(self.on_use_stream_toggled)
+        main_layout.addWidget(self.group_offload_use_stream_checkbox)
+
+        self.group_offload_low_cpu_mem_checkbox = QCheckBox("Low CPU Memory")
+        self.group_offload_low_cpu_mem_checkbox.toggled.connect(self.on_low_cpu_mem_toggled)
+        main_layout.addWidget(self.group_offload_low_cpu_mem_checkbox)
+
+        self._update_group_offload_options_visibility()
+
         main_layout.addStretch()
 
         clear_graph_button = QPushButton("Clear Graph")
@@ -231,6 +257,9 @@ class GenerationPanel(BasePanel):
         model: ModelDataObject,
         use_torch_compile: bool = False,
         attention_backend: str = "native",
+        offload_strategy: str = "auto",
+        group_offload_use_stream: bool = False,
+        group_offload_low_cpu_mem: bool = False,
     ):
         # Block signals so we don't emit generation_change while initializing
         blockers = [
@@ -240,6 +269,9 @@ class GenerationPanel(BasePanel):
             QSignalBlocker(self.guidance_slider),
             QSignalBlocker(self.use_torch_compile_checkbox),
             QSignalBlocker(self.attention_backend_combobox),
+            QSignalBlocker(self.offload_strategy_combobox),
+            QSignalBlocker(self.group_offload_use_stream_checkbox),
+            QSignalBlocker(self.group_offload_low_cpu_mem_checkbox),
         ]
         try:
             self.image_dimensions.width_slider.setValue(int(width))
@@ -263,6 +295,8 @@ class GenerationPanel(BasePanel):
         self._set_guidance_start_end_ui(start, end)
         self._set_scheduler_ui(scheduler)
         self._set_attention_backend_ui(attention_backend)
+        self._set_offload_strategy_ui(offload_strategy)
+        self._set_group_offload_options_ui(group_offload_use_stream, group_offload_low_cpu_mem)
 
     def open_model_manager_dialog(self):
         self.event_bus.publish("manage_dialog", {"dialog_type": "model_manager", "action": "open"})
@@ -302,6 +336,61 @@ class GenerationPanel(BasePanel):
         backend = self.attention_backend_combobox.itemData(index)
         if backend:
             self.event_bus.publish("generation_change", {"attr": "attention_backend", "value": backend})
+
+    def on_offload_strategy_changed(self, index: int):
+        strategy = self.offload_strategy_combobox.itemData(index)
+        if strategy:
+            self.event_bus.publish("generation_change", {"attr": "offload_strategy", "value": strategy})
+        self._update_group_offload_options_visibility()
+
+    def on_use_stream_toggled(self, checked: bool):
+        self.event_bus.publish("generation_change", {"attr": "group_offload_use_stream", "value": bool(checked)})
+        self._update_low_cpu_mem_enabled()
+
+    def on_low_cpu_mem_toggled(self, checked: bool):
+        self.event_bus.publish("generation_change", {"attr": "group_offload_low_cpu_mem", "value": bool(checked)})
+
+    def _update_group_offload_options_visibility(self):
+        strategy = self.offload_strategy_combobox.currentData()
+        show = strategy in ("group_offload", "sequential_group_offload")
+        self.group_offload_use_stream_checkbox.setVisible(show)
+        self.group_offload_low_cpu_mem_checkbox.setVisible(show)
+        if show:
+            self._update_low_cpu_mem_enabled()
+
+    def _update_low_cpu_mem_enabled(self):
+        self.group_offload_low_cpu_mem_checkbox.setEnabled(
+            self.group_offload_use_stream_checkbox.isChecked()
+        )
+
+    def _set_offload_strategy_ui(self, strategy: str):
+        for i in range(self.offload_strategy_combobox.count()):
+            if self.offload_strategy_combobox.itemData(i) == strategy:
+                blocker = QSignalBlocker(self.offload_strategy_combobox)
+                try:
+                    self.offload_strategy_combobox.setCurrentIndex(i)
+                finally:
+                    del blocker
+                self._update_group_offload_options_visibility()
+                return
+        # Fallback to auto
+        blocker = QSignalBlocker(self.offload_strategy_combobox)
+        try:
+            self.offload_strategy_combobox.setCurrentIndex(0)
+        finally:
+            del blocker
+        self._update_group_offload_options_visibility()
+
+    def _set_group_offload_options_ui(self, use_stream: bool, low_cpu_mem: bool):
+        blocker1 = QSignalBlocker(self.group_offload_use_stream_checkbox)
+        blocker2 = QSignalBlocker(self.group_offload_low_cpu_mem_checkbox)
+        try:
+            self.group_offload_use_stream_checkbox.setChecked(use_stream)
+            self.group_offload_low_cpu_mem_checkbox.setChecked(low_cpu_mem)
+            self._update_low_cpu_mem_enabled()
+        finally:
+            del blocker1
+            del blocker2
 
     def _confirm_destructive_action(self, title: str, text: str) -> bool:
         res = QMessageBox.question(
@@ -353,10 +442,13 @@ class GenerationPanel(BasePanel):
             guidance_start_end = data.get("guidance_start_end", self.gen_settings.guidance_start_end)
             scheduler = data.get("scheduler", self.gen_settings.scheduler)
             model = cast_model(data.get("model", self.gen_settings.model))
-            # use_torch_compile and attention_backend are NOT loaded from graphs -
-            # they are runtime configs. Always use the user's persisted settings.
+            # use_torch_compile, attention_backend, and offload settings are NOT loaded
+            # from graphs - they are runtime configs. Always use the user's persisted settings.
             use_torch_compile = self.gen_settings.use_torch_compile
             attention_backend = self.gen_settings.attention_backend
+            offload_strategy = self.gen_settings.offload_strategy
+            group_offload_use_stream = self.gen_settings.group_offload_use_stream
+            group_offload_low_cpu_mem = self.gen_settings.group_offload_low_cpu_mem
 
             self.update_panel(
                 width,
@@ -368,4 +460,7 @@ class GenerationPanel(BasePanel):
                 model,
                 use_torch_compile,
                 attention_backend,
+                offload_strategy,
+                group_offload_use_stream,
+                group_offload_low_cpu_mem,
             )

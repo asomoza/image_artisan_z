@@ -22,47 +22,49 @@ class Flux2LatentsDecoderNode(Node):
     @torch.no_grad()
     def __call__(self):
         mm = get_model_manager()
-        vae = mm.resolve(self.vae)
 
-        latents = self.latents.to(self.device, vae.dtype)
-        latent_ids = self.latent_ids.to(self.device)
+        with mm.use_components("vae", device=self.device):
+            vae = mm.resolve(self.vae)
 
-        # Step 1: Unpack sequence -> spatial using position IDs
-        latents = self._unpack_latents_with_ids(latents, latent_ids)
+            latents = self.latents.to(self.device, vae.dtype)
+            latent_ids = self.latent_ids.to(self.device)
 
-        # Step 2: BatchNorm denormalization
-        bn = vae.bn
-        bn_mean = bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)
-        bn_std = torch.sqrt(bn.running_var.view(1, -1, 1, 1) + vae.config.batch_norm_eps).to(
-            latents.device, latents.dtype
-        )
-        latents = latents * bn_std + bn_mean
+            # Step 1: Unpack sequence -> spatial using position IDs
+            latents = self._unpack_latents_with_ids(latents, latent_ids)
 
-        # Step 3: Unpatchify (B, C*4, H/2, W/2) -> (B, C, H, W)
-        latents = self._unpatchify_latents(latents)
+            # Step 2: BatchNorm denormalization
+            bn = vae.bn
+            bn_mean = bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)
+            bn_std = torch.sqrt(bn.running_var.view(1, -1, 1, 1) + vae.config.batch_norm_eps).to(
+                latents.device, latents.dtype
+            )
+            latents = latents * bn_std + bn_mean
 
-        # Step 4: VAE decode
-        try:
-            decoded = vae.decode(latents, return_dict=False)[0]
-        except Exception as e:
-            if not mm.is_cuda_oom(e):
-                raise
-            mm.free_vram_for_forward_pass(preserve=("vae",))
+            # Step 3: Unpatchify (B, C*4, H/2, W/2) -> (B, C, H, W)
+            latents = self._unpatchify_latents(latents)
+
+            # Step 4: VAE decode
             try:
                 decoded = vae.decode(latents, return_dict=False)[0]
-            except Exception as retry_exc:
-                if mm.is_cuda_oom(retry_exc):
-                    raise IArtisanZNodeError(
-                        "CUDA out of memory during VAE decode even after offloading.",
-                        "Flux2LatentsDecoderNode",
-                    ) from retry_exc
-                raise
+            except Exception as e:
+                if not mm.is_cuda_oom(e):
+                    raise
+                mm.free_vram_for_forward_pass(preserve=("vae",))
+                try:
+                    decoded = vae.decode(latents, return_dict=False)[0]
+                except Exception as retry_exc:
+                    if mm.is_cuda_oom(retry_exc):
+                        raise IArtisanZNodeError(
+                            "CUDA out of memory during VAE decode even after offloading.",
+                            "Flux2LatentsDecoderNode",
+                        ) from retry_exc
+                    raise
 
-        image = decoded[0]
-        image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.detach().cpu().permute(1, 2, 0).float().numpy()
-        image = (image * 255.0).round().clip(0, 255).astype(np.uint8)
-        image = np.ascontiguousarray(image)
+            image = decoded[0]
+            image = (image / 2 + 0.5).clamp(0, 1)
+            image = image.detach().cpu().permute(1, 2, 0).float().numpy()
+            image = (image * 255.0).round().clip(0, 255).astype(np.uint8)
+            image = np.ascontiguousarray(image)
 
         self.values["image"] = image
         return self.values

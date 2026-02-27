@@ -1,3 +1,4 @@
+import contextlib
 import types
 
 import torch
@@ -24,6 +25,10 @@ class FakeMM:
             if comp not in preserve and self.has(comp):
                 self.offload_to_cpu(comp)
         return 1
+
+    @contextlib.contextmanager
+    def use_components(self, *names, device=None, strategy_override=None):
+        yield
 
 
 class FakeVae:

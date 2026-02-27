@@ -121,6 +121,17 @@ class ModelManager:
         # None means use default ("native" / PyTorch SDPA).
         self._attention_backend: str | None = None
 
+        # Offload strategy settings (runtime config, not saved in graph JSON).
+        self._offload_strategy: str = "auto"
+        self._group_offload_use_stream: bool = False
+        self._group_offload_low_cpu_mem: bool = False
+
+        # Named nn.Module components managed by offload lifecycle.
+        self._managed_components: dict[str, Any] = {}
+
+        # Currently applied offload strategy (None = not yet applied).
+        self._applied_strategy: str | None = None
+
     @property
     def attention_backend(self) -> str:
         """Return the current attention backend. Defaults to 'native' (PyTorch SDPA)."""
@@ -132,6 +143,41 @@ class ModelManager:
         """Set the attention backend for transformer inference."""
         with self._lock:
             self._attention_backend = value if value and value != "native" else None
+
+    @property
+    def offload_strategy(self) -> str:
+        with self._lock:
+            return self._offload_strategy
+
+    @offload_strategy.setter
+    def offload_strategy(self, value: str) -> None:
+        with self._lock:
+            self._offload_strategy = value if value else "auto"
+
+    @property
+    def group_offload_use_stream(self) -> bool:
+        with self._lock:
+            return self._group_offload_use_stream
+
+    @group_offload_use_stream.setter
+    def group_offload_use_stream(self, value: bool) -> None:
+        with self._lock:
+            self._group_offload_use_stream = bool(value)
+
+    @property
+    def group_offload_low_cpu_mem(self) -> bool:
+        with self._lock:
+            return self._group_offload_low_cpu_mem
+
+    @group_offload_low_cpu_mem.setter
+    def group_offload_low_cpu_mem(self, value: bool) -> None:
+        with self._lock:
+            self._group_offload_low_cpu_mem = bool(value)
+
+    @property
+    def applied_strategy(self) -> str | None:
+        with self._lock:
+            return self._applied_strategy
 
     def get_available_attention_backends(self) -> list[tuple[str, str]]:
         """Return list of (backend_id, display_name) tuples for available backends.
@@ -326,6 +372,242 @@ class ModelManager:
                 )
             return self._components[component]
 
+    # ------------------------------------------------------------------
+    # Offload strategy lifecycle
+    # ------------------------------------------------------------------
+
+    def resolve_offload_strategy(self, device: torch.device | str | None = None) -> str:
+        """Resolve the effective offload strategy.
+
+        If strategy is "auto", use VRAM-based heuristics:
+          >=20 GB → "auto" (reactive OOM is fine)
+          >=12 GB → "model_offload"
+          >= 8 GB → "sequential_group_offload"
+          <  8 GB → "group_offload"
+        """
+        strategy = self.offload_strategy
+        if strategy != "auto":
+            return strategy
+
+        if device is None or not torch.cuda.is_available():
+            return "auto"
+
+        try:
+            dev = torch.device(device)
+            if dev.type != "cuda":
+                return "auto"
+            idx = dev.index if dev.index is not None else torch.cuda.current_device()
+            total_vram = torch.cuda.get_device_properties(idx).total_mem
+            total_gb = total_vram / (1024 ** 3)
+        except Exception:
+            return "auto"
+
+        if total_gb >= 20:
+            return "auto"
+        if total_gb >= 12:
+            return "model_offload"
+        if total_gb >= 8:
+            return "sequential_group_offload"
+        return "group_offload"
+
+    def register_managed_component(self, name: str, module: Any) -> None:
+        """Register a named nn.Module for offload lifecycle management.
+
+        Resets ``_applied_strategy`` when a component changes so that
+        ``apply_offload_strategy`` will re-apply on next call.
+        """
+        with self._lock:
+            old = self._managed_components.get(name)
+            if old is not module:
+                self._managed_components[name] = module
+                self._applied_strategy = None
+
+    def get_managed_component(self, name: str) -> Any:
+        with self._lock:
+            return self._managed_components.get(name)
+
+    @staticmethod
+    def remove_offload_hooks(module: torch.nn.Module) -> None:
+        """Remove diffusers group-offloading hooks from a module and all submodules."""
+        try:
+            from diffusers.hooks import HookRegistry
+
+            for submod in module.modules():
+                if hasattr(submod, "_diffusers_hook"):
+                    registry = submod._diffusers_hook
+                    if isinstance(registry, HookRegistry):
+                        try:
+                            registry.remove_hook("group_offloading", recurse=True)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    def prepare_strategy_transition(
+        self,
+        new_strategy: str,
+        device: torch.device | str,
+    ) -> None:
+        """Clean up old offload strategy before applying a new one."""
+        with self._lock:
+            old = self._applied_strategy
+
+        if old is None and new_strategy == "auto":
+            return
+
+        cpu = torch.device("cpu")
+        with self._lock:
+            for name, module in self._managed_components.items():
+                if not _is_torch_module(module):
+                    continue
+                # Remove any diffusers hooks from previous group offload
+                self.remove_offload_hooks(module)
+                # Move to CPU as neutral starting point
+                try:
+                    module.to(cpu)
+                except Exception:
+                    pass
+
+    def apply_offload_strategy(self, device: torch.device | str) -> str:
+        """Resolve and apply the offload strategy to all managed components.
+
+        Returns the resolved strategy name.
+        """
+        resolved = self.resolve_offload_strategy(device)
+
+        with self._lock:
+            if self._applied_strategy == resolved:
+                return resolved
+
+        self.prepare_strategy_transition(resolved, device)
+
+        if resolved == "auto":
+            # No-op: reactive OOM via mm.get() handles placement.
+            pass
+        elif resolved == "model_offload":
+            # Keep everything on CPU; use_components() does bulk transfers.
+            pass
+        elif resolved == "group_offload":
+            self._apply_group_offload_hooks(device)
+        elif resolved == "sequential_group_offload":
+            # Keep on CPU; hooks applied per-node in use_components().
+            pass
+
+        with self._lock:
+            self._applied_strategy = resolved
+
+        logger.debug("Applied offload strategy: %s", resolved)
+        return resolved
+
+    def _apply_group_offload_hooks(self, device: torch.device | str) -> None:
+        """Apply diffusers group_offloading hooks to all managed components."""
+        try:
+            from diffusers.hooks.group_offloading import apply_group_offloading
+        except ImportError:
+            logger.warning("diffusers.hooks.group_offloading not available; falling back to auto")
+            return
+
+        target_device = torch.device(device)
+        use_stream = self.group_offload_use_stream
+        low_cpu_mem = self.group_offload_low_cpu_mem
+
+        with self._lock:
+            components = dict(self._managed_components)
+
+        for name, module in components.items():
+            if not _is_torch_module(module):
+                continue
+            try:
+                apply_group_offloading(
+                    module,
+                    onload_device=target_device,
+                    offload_device=torch.device("cpu"),
+                    offload_type="leaf_level",
+                    use_stream=use_stream,
+                    low_cpu_mem_usage=low_cpu_mem,
+                )
+                logger.debug("Group offload hooks applied to '%s'", name)
+            except Exception:
+                logger.exception("Failed to apply group offload hooks to '%s'", name)
+
+    @contextlib.contextmanager
+    def use_components(
+        self,
+        *names: str,
+        device: torch.device | str,
+        strategy_override: str | None = None,
+    ):
+        """Context manager for component lifecycle during node execution.
+
+        - ``auto``: no-op yield (reactive OOM via ``mm.get()``).
+        - ``model_offload``: bulk move to GPU on enter, back to CPU on exit.
+        - ``group_offload``: no-op yield (hooks already applied at load time).
+        - ``sequential_group_offload``: apply hooks on enter, remove + CPU on exit.
+        """
+        strategy = strategy_override or self.resolve_offload_strategy(device)
+
+        if strategy == "auto" or strategy == "group_offload":
+            yield
+            return
+
+        target_device = torch.device(device)
+        cpu = torch.device("cpu")
+
+        with self._lock:
+            modules = [(n, self._managed_components.get(n)) for n in names]
+            modules = [(n, m) for n, m in modules if m is not None and _is_torch_module(m)]
+
+        if strategy == "model_offload":
+            # Move requested components to GPU
+            for name, module in modules:
+                try:
+                    module.to(target_device)
+                except Exception:
+                    logger.warning("Failed to move '%s' to %s", name, target_device)
+            try:
+                yield
+            finally:
+                for name, module in modules:
+                    try:
+                        module.to(cpu)
+                    except Exception:
+                        pass
+
+        elif strategy == "sequential_group_offload":
+            # Apply hooks temporarily
+            try:
+                from diffusers.hooks.group_offloading import apply_group_offloading
+            except ImportError:
+                yield
+                return
+
+            use_stream = self.group_offload_use_stream
+            low_cpu_mem = self.group_offload_low_cpu_mem
+
+            for name, module in modules:
+                try:
+                    apply_group_offloading(
+                        module,
+                        onload_device=target_device,
+                        offload_device=cpu,
+                        offload_type="leaf_level",
+                        use_stream=use_stream,
+                        low_cpu_mem_usage=low_cpu_mem,
+                    )
+                except Exception:
+                    logger.warning("Failed to apply sequential group offload to '%s'", name)
+            try:
+                yield
+            finally:
+                for name, module in modules:
+                    try:
+                        self.remove_offload_hooks(module)
+                        module.to(cpu)
+                    except Exception:
+                        pass
+        else:
+            yield
+
     def clear(self):
         with self._lock:
             self._components.clear()
@@ -333,6 +615,8 @@ class ModelManager:
             self._component_hashes.clear()
             self._lora_sources.clear()
             self._compiled_components.clear()
+            self._managed_components.clear()
+            self._applied_strategy = None
             if torch.cuda.is_available():
                 try:
                     torch.cuda.empty_cache()

@@ -174,6 +174,9 @@ class GenerationModule(BaseModule):
         mm = get_model_manager()
         mm.use_torch_compile = self.gen_settings.use_torch_compile
         mm.attention_backend = self.gen_settings.attention_backend
+        mm.offload_strategy = self.gen_settings.offload_strategy
+        mm.group_offload_use_stream = self.gen_settings.group_offload_use_stream
+        mm.group_offload_low_cpu_mem = self.gen_settings.group_offload_low_cpu_mem
 
     def on_generate(
         self,
@@ -588,6 +591,28 @@ class GenerationModule(BaseModule):
 
             mm = get_model_manager()
             mm.attention_backend = str(value) if value else "native"
+            return
+
+        # Special handling for offload strategy settings: update ModelManager runtime config
+        if attr == "offload_strategy":
+            from iartisanz.app.model_manager import get_model_manager
+
+            mm = get_model_manager()
+            mm.offload_strategy = str(value) if value else "auto"
+            return
+
+        if attr == "group_offload_use_stream":
+            from iartisanz.app.model_manager import get_model_manager
+
+            mm = get_model_manager()
+            mm.group_offload_use_stream = bool(value)
+            return
+
+        if attr == "group_offload_low_cpu_mem":
+            from iartisanz.app.model_manager import get_model_manager
+
+            mm = get_model_manager()
+            mm.group_offload_low_cpu_mem = bool(value)
             return
 
         # Forward to the graph:

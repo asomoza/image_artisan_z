@@ -174,6 +174,11 @@ class Flux2DenoiseNode(Node):
     @torch.no_grad()
     def __call__(self):
         mm = get_model_manager()
+
+        with mm.use_components("transformer", device=self.device):
+            return self._run_denoise(mm)
+
+    def _run_denoise(self, mm):
         transformer_input = self.transformer
         transformer_raw = mm.resolve(transformer_input)
 

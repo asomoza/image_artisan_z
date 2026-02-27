@@ -87,6 +87,9 @@ class GenerationSettings:
     model: ModelDataObject = field(default_factory=ModelDataObject)
     use_torch_compile: bool = False
     attention_backend: str = "native"
+    offload_strategy: str = "auto"
+    group_offload_use_stream: bool = False
+    group_offload_low_cpu_mem: bool = False
 
     GROUP: str = "generation"
 
@@ -153,6 +156,21 @@ class GenerationSettings:
                 settings.attention_backend,
             )
 
+            settings.offload_strategy = _coerce_str(
+                qsettings.value("offload_strategy", settings.offload_strategy),
+                settings.offload_strategy,
+            )
+
+            settings.group_offload_use_stream = _coerce_bool(
+                qsettings.value("group_offload_use_stream", settings.group_offload_use_stream),
+                settings.group_offload_use_stream,
+            )
+
+            settings.group_offload_low_cpu_mem = _coerce_bool(
+                qsettings.value("group_offload_low_cpu_mem", settings.group_offload_low_cpu_mem),
+                settings.group_offload_low_cpu_mem,
+            )
+
             return settings
         finally:
             qsettings.endGroup()
@@ -171,6 +189,9 @@ class GenerationSettings:
             qsettings.setValue("model", self.model.to_dict())
             qsettings.setValue("use_torch_compile", bool(self.use_torch_compile))
             qsettings.setValue("attention_backend", str(self.attention_backend))
+            qsettings.setValue("offload_strategy", str(self.offload_strategy))
+            qsettings.setValue("group_offload_use_stream", bool(self.group_offload_use_stream))
+            qsettings.setValue("group_offload_low_cpu_mem", bool(self.group_offload_low_cpu_mem))
         finally:
             qsettings.endGroup()
 
@@ -247,6 +268,18 @@ class GenerationSettings:
             # Return None for graph_value - this is handled by ModelManager, not the graph
             return (True, None)
 
+        if attr == "offload_strategy":
+            self.offload_strategy = _coerce_str(value, self.offload_strategy)
+            return (True, None)
+
+        if attr == "group_offload_use_stream":
+            self.group_offload_use_stream = _coerce_bool(value, self.group_offload_use_stream)
+            return (True, None)
+
+        if attr == "group_offload_low_cpu_mem":
+            self.group_offload_low_cpu_mem = _coerce_bool(value, self.group_offload_low_cpu_mem)
+            return (True, None)
+
         # Fallback: handled but not forwarded
         setattr(self, attr, value)
         return (True, None)
@@ -272,6 +305,9 @@ class GenerationSettings:
         self.strength = defaults.strength
         self.use_torch_compile = defaults.use_torch_compile
         self.attention_backend = defaults.attention_backend
+        self.offload_strategy = defaults.offload_strategy
+        self.group_offload_use_stream = defaults.group_offload_use_stream
+        self.group_offload_low_cpu_mem = defaults.group_offload_low_cpu_mem
 
         if preserve_model:
             self.model = current_model
