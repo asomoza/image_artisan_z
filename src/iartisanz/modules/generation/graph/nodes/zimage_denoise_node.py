@@ -81,10 +81,20 @@ class ZImageDenoiseNode(Node):
             offloaded = mm.free_vram_for_forward_pass(preserve=preserve)
             if offloaded == 0:
                 logger.error("[DenoiseNode] No models available to offload for OOM recovery.")
-                raise
+                raise IArtisanZNodeError(
+                    f"CUDA out of memory during {description}. No models available to offload.",
+                    "ZImageDenoiseNode",
+                ) from e
 
-            # Retry once after offloading
-            return forward_fn()
+            try:
+                return forward_fn()
+            except Exception as retry_exc:
+                if mm.is_cuda_oom(retry_exc):
+                    raise IArtisanZNodeError(
+                        f"CUDA out of memory during {description} even after offloading.",
+                        "ZImageDenoiseNode",
+                    ) from retry_exc
+                raise
 
     @staticmethod
     def _apply_prompt_mode_decay(block_samples: dict, decay: float) -> dict:

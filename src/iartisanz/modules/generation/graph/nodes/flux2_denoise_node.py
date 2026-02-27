@@ -156,9 +156,20 @@ class Flux2DenoiseNode(Node):
             offloaded = mm.free_vram_for_forward_pass(preserve=preserve)
             if offloaded == 0:
                 logger.error("[Flux2DenoiseNode] No models available to offload for OOM recovery.")
-                raise
+                raise IArtisanZNodeError(
+                    f"CUDA out of memory during {description}. No models available to offload.",
+                    "Flux2DenoiseNode",
+                ) from e
 
-            return forward_fn()
+            try:
+                return forward_fn()
+            except Exception as retry_exc:
+                if mm.is_cuda_oom(retry_exc):
+                    raise IArtisanZNodeError(
+                        f"CUDA out of memory during {description} even after offloading.",
+                        "Flux2DenoiseNode",
+                    ) from retry_exc
+                raise
 
     @torch.no_grad()
     def __call__(self):
