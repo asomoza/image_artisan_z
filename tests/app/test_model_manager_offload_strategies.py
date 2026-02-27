@@ -28,6 +28,9 @@ SIZE = 32
 STEPS = 2
 GUIDANCE_SCALE = 4.0
 
+DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+DTYPE = torch.float32
+
 
 def _module_device(module: torch.nn.Module) -> torch.device | None:
     """Return the device of the first parameter/buffer of a module."""
@@ -151,11 +154,7 @@ def _clean_model_manager():
     mm.group_offload_low_cpu_mem = False
 
 
-def _run_pipeline(
-    strategy: str,
-    device: torch.device,
-    dtype: torch.dtype,
-):
+def _run_pipeline(strategy: str):
     """Run the full pipeline under the given offload strategy and return
     (mm, nodes, image) for assertions.
     """
@@ -168,9 +167,9 @@ def _run_pipeline(
     mm.group_offload_use_stream = False
     mm.group_offload_low_cpu_mem = False
 
-    nodes = _build_graph(model_path, device, dtype)
+    nodes = _build_graph(model_path, DEVICE, DTYPE)
 
-    with mm.device_scope(device=device, dtype=dtype):
+    with mm.device_scope(device=DEVICE, dtype=DTYPE):
         for node in nodes:
             node()
 
@@ -194,10 +193,7 @@ def test_model_offload_strategy():
     if os.environ.get("IARTISANZ_RUN_HF_TESTS") != "1":
         pytest.skip("Set IARTISANZ_RUN_HF_TESTS=1 to enable Hugging Face integration tests")
 
-    device = torch.device("cpu")
-    dtype = torch.float32
-
-    mm, nodes, image = _run_pipeline("model_offload", device, dtype)
+    mm, nodes, image = _run_pipeline("model_offload")
 
     # Strategy should have been resolved and applied
     assert mm.applied_strategy == "model_offload"
@@ -240,10 +236,7 @@ def test_group_offload_strategy():
     if os.environ.get("IARTISANZ_RUN_HF_TESTS") != "1":
         pytest.skip("Set IARTISANZ_RUN_HF_TESTS=1 to enable Hugging Face integration tests")
 
-    device = torch.device("cpu")
-    dtype = torch.float32
-
-    mm, nodes, image = _run_pipeline("group_offload", device, dtype)
+    mm, nodes, image = _run_pipeline("group_offload")
 
     assert mm.applied_strategy == "group_offload"
 
@@ -276,10 +269,7 @@ def test_sequential_group_offload_strategy():
     if os.environ.get("IARTISANZ_RUN_HF_TESTS") != "1":
         pytest.skip("Set IARTISANZ_RUN_HF_TESTS=1 to enable Hugging Face integration tests")
 
-    device = torch.device("cpu")
-    dtype = torch.float32
-
-    mm, nodes, image = _run_pipeline("sequential_group_offload", device, dtype)
+    mm, nodes, image = _run_pipeline("sequential_group_offload")
 
     assert mm.applied_strategy == "sequential_group_offload"
 
@@ -321,11 +311,8 @@ def test_strategy_transition_group_to_model_offload():
     if os.environ.get("IARTISANZ_RUN_HF_TESTS") != "1":
         pytest.skip("Set IARTISANZ_RUN_HF_TESTS=1 to enable Hugging Face integration tests")
 
-    device = torch.device("cpu")
-    dtype = torch.float32
-
     # First run with group_offload
-    mm, nodes, image1 = _run_pipeline("group_offload", device, dtype)
+    mm, nodes, image1 = _run_pipeline("group_offload")
     assert mm.applied_strategy == "group_offload"
 
     transformer = mm.get_managed_component("transformer")
@@ -333,7 +320,7 @@ def test_strategy_transition_group_to_model_offload():
 
     # Switch to model_offload
     mm.offload_strategy = "model_offload"
-    mm.apply_offload_strategy(device)
+    mm.apply_offload_strategy(DEVICE)
 
     assert mm.applied_strategy == "model_offload"
 

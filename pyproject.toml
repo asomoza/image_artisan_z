@@ -70,4 +70,5 @@ package = true
 markers = [
   "slow: long-running tests (opt-in)",
   "hf: tests that download or use Hugging Face models (opt-in)",
+  "real_model: tests that use real local models (opt-in via IARTISANZ_RUN_REAL_MODEL_TESTS=1)",
 ]

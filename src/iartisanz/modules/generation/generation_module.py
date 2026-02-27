@@ -593,26 +593,22 @@ class GenerationModule(BaseModule):
             mm.attention_backend = str(value) if value else "native"
             return
 
-        # Special handling for offload strategy settings: update ModelManager runtime config
-        if attr == "offload_strategy":
+        # Special handling for offload strategy settings: update ModelManager runtime config.
+        # The setter resets _applied_strategy so the next apply_offload_strategy() call
+        # (from the graph runner) will re-apply.  We do NOT call apply_offload_strategy()
+        # here because this runs on the UI thread — calling it while the generation thread
+        # is using those components would crash.  The graph runner calls it unconditionally
+        # after the node loop as a safety net.
+        if attr in ("offload_strategy", "group_offload_use_stream", "group_offload_low_cpu_mem"):
             from iartisanz.app.model_manager import get_model_manager
 
             mm = get_model_manager()
-            mm.offload_strategy = str(value) if value else "auto"
-            return
-
-        if attr == "group_offload_use_stream":
-            from iartisanz.app.model_manager import get_model_manager
-
-            mm = get_model_manager()
-            mm.group_offload_use_stream = bool(value)
-            return
-
-        if attr == "group_offload_low_cpu_mem":
-            from iartisanz.app.model_manager import get_model_manager
-
-            mm = get_model_manager()
-            mm.group_offload_low_cpu_mem = bool(value)
+            if attr == "offload_strategy":
+                mm.offload_strategy = str(value) if value else "auto"
+            elif attr == "group_offload_use_stream":
+                mm.group_offload_use_stream = bool(value)
+            elif attr == "group_offload_low_cpu_mem":
+                mm.group_offload_low_cpu_mem = bool(value)
             return
 
         # Forward to the graph:

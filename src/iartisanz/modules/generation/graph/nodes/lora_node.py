@@ -385,6 +385,11 @@ class LoraNode(Node):
             except Exception as e:
                 raise IArtisanZNodeError(f"Failed to load LoRA adapter: {e}", self.name)
 
+            # PEFT adapter injection changes the module tree (wraps Linear → LoraLinear).
+            # If group offload hooks were applied before this, the new lora_A/lora_B
+            # sub-modules won't be tracked.  Re-apply hooks so all params move together.
+            mm.refresh_group_offload_hooks("transformer")
+
             mm.set_lora_source(self.adapter_name, self.path)
 
         scale = {

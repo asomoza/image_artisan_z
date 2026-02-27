@@ -141,6 +141,10 @@ class ImageArtisanZNodeGraph:
 
                     node.updated = False
 
+            # Ensure offload strategy is applied even when the model node was
+            # skipped (e.g. only the strategy changed, not the model).
+            mm.apply_offload_strategy(self.device)
+
     def to_json(self, additional_generation_data: dict | None = None):
         if additional_generation_data is None:
             additional_generation_data = self.additional_generation_data or {}
