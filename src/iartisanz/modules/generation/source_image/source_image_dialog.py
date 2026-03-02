@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QStackedWidget, Q
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 
 from iartisanz.app.base_dialog import BaseDialog
-from iartisanz.buttons.brush_erase_button import BrushEraseButton
+from iartisanz.buttons.drawing_tool_button import DrawingToolButton
 from iartisanz.buttons.color_button import ColorButton
 from iartisanz.buttons.eyedropper_button import EyeDropperButton
 from iartisanz.modules.generation.common.mask.image_section_widget import ImageSectionWidget
@@ -89,8 +89,8 @@ class SourceImageDialog(BaseDialog):
         self.brush_steps_slider.setValue(0.25)
         brush_layout.addWidget(self.brush_steps_slider)
 
-        self.brush_erase_button = BrushEraseButton()
-        brush_layout.addWidget(self.brush_erase_button)
+        self.drawing_tool_button = DrawingToolButton()
+        brush_layout.addWidget(self.drawing_tool_button)
 
         self.color_button = ColorButton("Color:")
         brush_layout.addWidget(self.color_button, 0)
@@ -195,7 +195,14 @@ class SourceImageDialog(BaseDialog):
         self.brush_hardness_slider.valueChanged.connect(editor.set_brush_hardness)
         self.brush_hardness_slider.sliderReleased.connect(editor.hide_brush_preview)
         self.brush_steps_slider.valueChanged.connect(editor.set_brush_steps)
-        self.brush_erase_button.brush_selected.connect(section_widget.image_widget.set_erase_mode)
+        self.drawing_tool_button.tool_selected.connect(
+            lambda draw_tool, erase_mode, w=section_widget.image_widget: self._set_widget_drawing_tool(
+                w, draw_tool, erase_mode
+            )
+        )
+        self._set_widget_drawing_tool(
+            section_widget.image_widget, self.drawing_tool_button.draw_tool, self.drawing_tool_button.erase_mode
+        )
 
         self.brush_size_slider.setValue(editor.brush_size)
         self.color_button.set_color(editor.brush_color.getRgb()[:3])
@@ -214,14 +221,16 @@ class SourceImageDialog(BaseDialog):
                 self.brush_hardness_slider.valueChanged.disconnect(self.active_editor.set_brush_hardness)
                 self.brush_hardness_slider.sliderReleased.disconnect(self.active_editor.hide_brush_preview)
                 self.brush_steps_slider.valueChanged.disconnect(self.active_editor.set_brush_steps)
-                self.brush_erase_button.brush_selected.disconnect(
-                    self.active_section_widget.image_widget.set_erase_mode
-                )
+                self.drawing_tool_button.tool_selected.disconnect()
             except TypeError:
                 logger.warning("Tried to disconnect signals that were not connected.")
 
             self.active_editor = None
             self.active_section_widget = None
+
+    def _set_widget_drawing_tool(self, widget, draw_tool: str, erase_mode: bool):
+        widget.set_draw_tool(draw_tool)
+        widget.set_erase_mode(erase_mode)
 
     def on_source_image_added(self, pixmap: QPixmap):
         if self.dialog_busy:
