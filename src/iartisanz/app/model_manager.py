@@ -169,14 +169,9 @@ class ModelManager:
         with self._lock:
             new_val = value if value else "auto"
             if new_val != self._offload_strategy:
-                logger.info(
-                    "offload_strategy changed: %s -> %s (resetting _applied_strategy from %s)",
-                    self._offload_strategy, new_val, self._applied_strategy,
-                )
+                logger.debug("Offload strategy: %s -> %s", self._offload_strategy, new_val)
                 self._offload_strategy = new_val
                 self._applied_strategy = None
-            else:
-                logger.debug("offload_strategy setter called with same value: %s", new_val)
 
     @property
     def group_offload_use_stream(self) -> bool:
@@ -507,12 +502,7 @@ class ModelManager:
 
         with self._lock:
             if self._applied_strategy == resolved:
-                logger.info("apply_offload_strategy: already applied '%s', skipping", resolved)
                 return resolved
-            logger.info(
-                "apply_offload_strategy: transitioning %s -> %s",
-                self._applied_strategy, resolved,
-            )
 
         self.prepare_strategy_transition(resolved, device)
 
@@ -624,11 +614,9 @@ class ModelManager:
         """
         # Self-heal: if the strategy hasn't been applied yet, apply it now.
         if self._applied_strategy is None and self._managed_components:
-            logger.info("use_components(%s): self-heal — _applied_strategy is None, applying now", names)
             self.apply_offload_strategy(device)
 
         strategy = strategy_override or self._applied_strategy or self.resolve_offload_strategy(device)
-        logger.info("use_components(%s): using strategy '%s'", names, strategy)
 
         if strategy == "auto" or strategy == "group_offload":
             yield

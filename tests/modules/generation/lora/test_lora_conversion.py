@@ -471,6 +471,55 @@ class TestConvertFlux2LoraToDiffusers:
         with pytest.raises(ValueError, match="Unexpected keys"):
             _convert_flux2_lora_to_diffusers(sd)
 
+    def test_attention_only_double_block(self):
+        """LoRAs that only target attention (no MLP) must convert without error."""
+        sd = {}
+        for idx in range(5):
+            for attn in ("img_attn", "txt_attn"):
+                sd[f"double_blocks.{idx}.{attn}.qkv.lora_A.weight"] = _w()
+                sd[f"double_blocks.{idx}.{attn}.qkv.lora_B.weight"] = _w((12, 4))
+                sd[f"double_blocks.{idx}.{attn}.proj.lora_A.weight"] = _w()
+                sd[f"double_blocks.{idx}.{attn}.proj.lora_B.weight"] = _w()
+        result = _convert_flux2_lora_to_diffusers(sd)
+        assert all(k.startswith("transformer.") for k in result)
+        # Attention keys present
+        assert "transformer.transformer_blocks.0.attn.to_q.lora_A.weight" in result
+        assert "transformer.transformer_blocks.0.attn.to_out.0.lora_A.weight" in result
+        # MLP keys absent
+        assert not any("ff.linear_in" in k for k in result)
+        assert not any("ff_context" in k for k in result)
+
+    def test_partial_single_block_linear1_only(self):
+        """LoRAs that only target linear1 (not linear2) in single blocks."""
+        sd = {
+            "single_blocks.0.linear1.lora_A.weight": _w(),
+            "single_blocks.0.linear1.lora_B.weight": _w((12, 4)),
+        }
+        result = _convert_flux2_lora_to_diffusers(sd)
+        assert "transformer.single_transformer_blocks.0.attn.to_qkv_mlp_proj.lora_A.weight" in result
+        assert not any("to_out" in k for k in result)
+
+    def test_diffusion_model_prefix_attention_only(self):
+        """ComfyUI-format LoRA with diffusion_model. prefix and attention-only layers."""
+        sd = {
+            "diffusion_model.double_blocks.0.img_attn.qkv.lora_A.weight": _w(),
+            "diffusion_model.double_blocks.0.img_attn.qkv.lora_B.weight": _w((12, 4)),
+            "diffusion_model.double_blocks.0.txt_attn.qkv.lora_A.weight": _w(),
+            "diffusion_model.double_blocks.0.txt_attn.qkv.lora_B.weight": _w((12, 4)),
+            "diffusion_model.double_blocks.0.img_attn.proj.lora_A.weight": _w(),
+            "diffusion_model.double_blocks.0.img_attn.proj.lora_B.weight": _w(),
+            "diffusion_model.double_blocks.0.txt_attn.proj.lora_A.weight": _w(),
+            "diffusion_model.double_blocks.0.txt_attn.proj.lora_B.weight": _w(),
+            "diffusion_model.single_blocks.0.linear1.lora_A.weight": _w(),
+            "diffusion_model.single_blocks.0.linear1.lora_B.weight": _w((12, 4)),
+            "diffusion_model.single_blocks.0.linear2.lora_A.weight": _w(),
+            "diffusion_model.single_blocks.0.linear2.lora_B.weight": _w(),
+        }
+        result = _convert_flux2_lora_to_diffusers(sd)
+        assert all(k.startswith("transformer.") for k in result)
+        assert "transformer.transformer_blocks.0.attn.to_q.lora_A.weight" in result
+        assert not any("ff.linear_in" in k for k in result)
+
 
 # ===========================================================================
 # _convert_flux2_lora

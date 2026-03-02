@@ -314,15 +314,24 @@ def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
     for sl in sorted(single_indices):
         src = f"single_blocks.{sl}"
         dst = f"single_transformer_blocks.{sl}.attn"
-        for lk in lora_keys:
-            converted[f"{dst}.to_qkv_mlp_proj.{lk}.weight"] = sd.pop(f"{src}.linear1.{lk}.weight")
-            converted[f"{dst}.to_out.{lk}.weight"] = sd.pop(f"{src}.linear2.{lk}.weight")
+        single_mappings = [
+            ("linear1", "to_qkv_mlp_proj"),
+            ("linear2", "to_out"),
+        ]
+        for org, diff in single_mappings:
+            for lk in lora_keys:
+                src_key = f"{src}.{org}.{lk}.weight"
+                if src_key in sd:
+                    converted[f"{dst}.{diff}.{lk}.weight"] = sd.pop(src_key)
 
     for dl in sorted(double_indices):
         tb = f"transformer_blocks.{dl}"
         for lk in lora_keys:
             for attn_type in ("img_attn", "txt_attn"):
-                fused = sd.pop(f"double_blocks.{dl}.{attn_type}.qkv.{lk}.weight")
+                src_key = f"double_blocks.{dl}.{attn_type}.qkv.{lk}.weight"
+                if src_key not in sd:
+                    continue
+                fused = sd.pop(src_key)
                 if lk == "lora_A":
                     proj_keys = (
                         ["to_q", "to_k", "to_v"]
@@ -346,19 +355,17 @@ def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
             ("img_attn.proj", "attn.to_out.0"),
             ("txt_attn.proj", "attn.to_add_out"),
         ]
-        for org, diff in proj_mappings:
-            for lk in lora_keys:
-                converted[f"{tb}.{diff}.{lk}.weight"] = sd.pop(f"double_blocks.{dl}.{org}.{lk}.weight")
-
         mlp_mappings = [
             ("img_mlp.0", "ff.linear_in"),
             ("img_mlp.2", "ff.linear_out"),
             ("txt_mlp.0", "ff_context.linear_in"),
             ("txt_mlp.2", "ff_context.linear_out"),
         ]
-        for org, diff in mlp_mappings:
+        for org, diff in proj_mappings + mlp_mappings:
             for lk in lora_keys:
-                converted[f"{tb}.{diff}.{lk}.weight"] = sd.pop(f"double_blocks.{dl}.{org}.{lk}.weight")
+                src_key = f"double_blocks.{dl}.{org}.{lk}.weight"
+                if src_key in sd:
+                    converted[f"{tb}.{diff}.{lk}.weight"] = sd.pop(src_key)
 
     root_mappings = {
         "double_stream_modulation_txt.lin": "double_stream_modulation_txt.linear",
