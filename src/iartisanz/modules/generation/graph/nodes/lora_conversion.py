@@ -297,8 +297,15 @@ def _convert_flux2_lora_to_diffusers(state_dict: dict) -> dict:
     """
     converted = {}
 
-    prefix = "diffusion_model."
-    sd = {k[len(prefix):] if k.startswith(prefix) else k: v for k, v in state_dict.items()}
+    # Strip known prefixes (diffusion_model. from ComfyUI, base_model.model. from PEFT)
+    strip_prefixes = ("base_model.model.", "diffusion_model.")
+    sd = {}
+    for k, v in state_dict.items():
+        for pfx in strip_prefixes:
+            if k.startswith(pfx):
+                k = k[len(pfx):]
+                break
+        sd[k] = v
     sd = _strip_lora_unet_prefix(sd)
 
     single_indices = set()

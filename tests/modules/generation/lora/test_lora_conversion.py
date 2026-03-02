@@ -499,6 +499,58 @@ class TestConvertFlux2LoraToDiffusers:
         assert "transformer.single_transformer_blocks.0.attn.to_qkv_mlp_proj.lora_A.weight" in result
         assert not any("to_out" in k for k in result)
 
+    def test_base_model_model_prefix_flux2_klein_4b(self):
+        """PEFT-format LoRA with base_model.model. prefix — Flux2 Klein 4B outpaint style.
+
+        5 double blocks (attn only + proj + modulation), 20 single blocks,
+        root mappings (txt_in, img_in, time_in, final_layer, modulations).
+        """
+        sd = {}
+        # 5 double blocks — attention only (no MLP)
+        for idx in range(5):
+            for attn in ("img_attn", "txt_attn"):
+                sd[f"base_model.model.double_blocks.{idx}.{attn}.qkv.lora_A.weight"] = _w()
+                sd[f"base_model.model.double_blocks.{idx}.{attn}.qkv.lora_B.weight"] = _w((12, 4))
+                sd[f"base_model.model.double_blocks.{idx}.{attn}.proj.lora_A.weight"] = _w()
+                sd[f"base_model.model.double_blocks.{idx}.{attn}.proj.lora_B.weight"] = _w()
+        # 20 single blocks
+        for idx in range(20):
+            sd[f"base_model.model.single_blocks.{idx}.linear1.lora_A.weight"] = _w()
+            sd[f"base_model.model.single_blocks.{idx}.linear1.lora_B.weight"] = _w((12, 4))
+            sd[f"base_model.model.single_blocks.{idx}.linear2.lora_A.weight"] = _w()
+            sd[f"base_model.model.single_blocks.{idx}.linear2.lora_B.weight"] = _w()
+        # Root mappings
+        root_keys = [
+            "double_stream_modulation_txt.lin",
+            "double_stream_modulation_img.lin",
+            "single_stream_modulation.lin",
+            "txt_in",
+            "img_in",
+            "final_layer.linear",
+            "time_in.in_layer",
+            "time_in.out_layer",
+        ]
+        for rk in root_keys:
+            sd[f"base_model.model.{rk}.lora_A.weight"] = _w()
+            sd[f"base_model.model.{rk}.lora_B.weight"] = _w()
+
+        result = _convert_flux2_lora_to_diffusers(sd)
+        assert all(k.startswith("transformer.") for k in result)
+        # Double block attention converted
+        assert "transformer.transformer_blocks.0.attn.to_q.lora_A.weight" in result
+        assert "transformer.transformer_blocks.4.attn.to_out.0.lora_B.weight" in result
+        # Single block converted
+        assert "transformer.single_transformer_blocks.0.attn.to_qkv_mlp_proj.lora_A.weight" in result
+        assert "transformer.single_transformer_blocks.19.attn.to_out.lora_B.weight" in result
+        # Root mappings converted
+        assert "transformer.context_embedder.lora_A.weight" in result
+        assert "transformer.x_embedder.lora_A.weight" in result
+        assert "transformer.proj_out.lora_A.weight" in result
+        assert "transformer.time_guidance_embed.timestep_embedder.linear_1.lora_A.weight" in result
+        assert "transformer.single_stream_modulation.linear.lora_B.weight" in result
+        # No MLP keys
+        assert not any("ff.linear_in" in k for k in result)
+
     def test_diffusion_model_prefix_attention_only(self):
         """ComfyUI-format LoRA with diffusion_model. prefix and attention-only layers."""
         sd = {
@@ -547,6 +599,27 @@ class TestConvertFlux2Lora:
         result = _convert_flux2_lora(sd)
         assert "transformer.single_transformer_blocks.0.attn.to_qkv_mlp_proj.lora_A.weight" in result
         assert all(k.startswith("transformer.") for k in result)
+
+    def test_peft_base_model_prefix(self):
+        """Full pipeline: PEFT base_model.model. prefix with lora_A/lora_B naming."""
+        sd = {
+            "base_model.model.single_blocks.0.linear1.lora_A.weight": _w(),
+            "base_model.model.single_blocks.0.linear1.lora_B.weight": _w((12, 4)),
+            "base_model.model.single_blocks.0.linear2.lora_A.weight": _w(),
+            "base_model.model.single_blocks.0.linear2.lora_B.weight": _w(),
+            "base_model.model.double_blocks.0.img_attn.qkv.lora_A.weight": _w(),
+            "base_model.model.double_blocks.0.img_attn.qkv.lora_B.weight": _w((12, 4)),
+            "base_model.model.double_blocks.0.img_attn.proj.lora_A.weight": _w(),
+            "base_model.model.double_blocks.0.img_attn.proj.lora_B.weight": _w(),
+            "base_model.model.double_blocks.0.txt_attn.qkv.lora_A.weight": _w(),
+            "base_model.model.double_blocks.0.txt_attn.qkv.lora_B.weight": _w((12, 4)),
+            "base_model.model.double_blocks.0.txt_attn.proj.lora_A.weight": _w(),
+            "base_model.model.double_blocks.0.txt_attn.proj.lora_B.weight": _w(),
+        }
+        result = _convert_flux2_lora(sd)
+        assert all(k.startswith("transformer.") for k in result)
+        assert "transformer.single_transformer_blocks.0.attn.to_qkv_mlp_proj.lora_A.weight" in result
+        assert "transformer.transformer_blocks.0.attn.to_q.lora_A.weight" in result
 
 
 # ===========================================================================
