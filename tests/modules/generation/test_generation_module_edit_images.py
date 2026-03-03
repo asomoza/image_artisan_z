@@ -179,6 +179,42 @@ class TestOnEditImagesEvent:
 
         assert module.edit_image_enabled[0] is True
 
+    def test_apply_loaded_edit_subset_restores_paths_and_mask(self, module):
+        module.edit_source_image_layers = [["src"]] * 4
+        module.edit_result_image_layers = [["res"]] * 4
+
+        module._apply_loaded_edit_subset(
+            {
+                "edit_image_0": "/tmp/e0.png",
+                "edit_image_2": "/tmp/e2.png",
+                "edit_image_mask": "/tmp/mask.png",
+                "edit_image_mask_strength": 0.42,
+            }
+        )
+
+        assert module.edit_image_paths == ["/tmp/e0.png", None, "/tmp/e2.png", None]
+        assert module.edit_image_thumb_paths == ["/tmp/e0.png", None, "/tmp/e2.png", None]
+        assert module.edit_image_enabled == [True, True, True, True]
+        assert module.edit_image_mask_path == "/tmp/mask.png"
+        assert module.edit_image_mask_thumb_path == "/tmp/mask.png"
+        assert module.edit_image_mask_strength == pytest.approx(0.42)
+        assert module.edit_source_image_layers == [None] * 4
+        assert module.edit_result_image_layers == [None] * 4
+
+    def test_apply_loaded_edit_subset_clears_mask_without_slot0(self, module):
+        module._apply_loaded_edit_subset(
+            {
+                "edit_image_1": "/tmp/e1.png",
+                "edit_image_mask": "/tmp/mask.png",
+                "edit_image_mask_strength": 0.8,
+            }
+        )
+
+        assert module.edit_image_paths == [None, "/tmp/e1.png", None, None]
+        assert module.edit_image_mask_path is None
+        assert module.edit_image_mask_thumb_path is None
+        assert module.edit_image_mask_strength == pytest.approx(1.0)
+
 
 class TestEditImagesDialogCloseKey:
     """Verify that dialog close events resolve to the correct dialog key."""
@@ -200,3 +236,31 @@ class TestEditImagesDialogCloseKey:
         data = {"dialog_type": "edit_images", "action": "close"}
         key = f"edit_images_{data.get('image_index', 0)}"
         assert key == "edit_images_0"
+
+
+def test_edit_images_dialog_factory_passes_source_and_result_paths(module):
+    """Regression: loaded graph edit-image paths must be passed to EditImagesDialog.
+
+    Without this, the Edit Images panel thumbnail could show an image while the
+    dialog itself opened empty after loading metadata from a dropped PNG.
+    """
+    module.directories = object()
+    module.preferences = object()
+    module.image_viewer = object()
+
+    module.edit_image_paths[1] = "/tmp/edit_slot_1.png"
+    module.edit_source_image_layers[1] = ["source_layer"]
+    module.edit_result_image_layers[1] = ["result_layer"]
+
+    with patch("iartisanz.modules.generation.generation_module.EditImagesDialog") as mock_dialog_cls:
+        specs = module._get_dialog_specs()
+        factory = specs["edit_images"]["factory"]
+
+        factory({"image_index": 1})
+
+    _, kwargs = mock_dialog_cls.call_args
+    assert kwargs["image_index"] == 1
+    assert kwargs["source_image_path"] == "/tmp/edit_slot_1.png"
+    assert kwargs["result_image_path"] == "/tmp/edit_slot_1.png"
+    assert kwargs["source_image_layers"] == ["source_layer"]
+    assert kwargs["result_image_layers"] == ["result_layer"]

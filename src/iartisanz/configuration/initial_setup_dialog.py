@@ -33,6 +33,7 @@ class InitialSetupDialog(QDialog):
         ("outputs_conditioning_images", "Select conditioning images outputs directory"),
         ("outputs_edit_source_images", "Select edit source images outputs directory"),
         ("outputs_edit_images", "Select edit images outputs directory"),
+        ("outputs_edit_masks", "Select edit masks outputs directory"),
     )
 
     def __init__(
@@ -209,6 +210,7 @@ class InitialSetupDialog(QDialog):
             "outputs_conditioning_images": os.path.join(base, "outputs", "conditioning_images"),
             "outputs_edit_source_images": os.path.join(base, "outputs", "edit_source_images"),
             "outputs_edit_images": os.path.join(base, "outputs", "edit_images"),
+            "outputs_edit_masks": os.path.join(base, "outputs", "edit_masks"),
         }
 
     def set_defaults(self) -> None:

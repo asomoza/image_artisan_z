@@ -68,6 +68,7 @@ def test_check_initial_setup_returns_true_when_all_required_directories_are_set(
         "outputs_conditioning_images": "/outputs/conditioning_images",
         "outputs_edit_source_images": "/outputs/edit_source_images",
         "outputs_edit_images": "/outputs/edit_images",
+        "outputs_edit_masks": "/outputs/edit_masks",
     }
     appmod = _import_app_module(monkeypatch, settings_store=settings)
 

@@ -335,6 +335,12 @@ class GenerationModule(BaseModule):
                     "source_image",
                     "strength",
                     "source_image_mask",
+                    "edit_image_0",
+                    "edit_image_1",
+                    "edit_image_2",
+                    "edit_image_3",
+                    "edit_image_mask",
+                    "edit_image_mask_strength",
                     # Note: use_torch_compile is intentionally NOT extracted from graphs
                     # as it's a runtime config on ModelManager, not a shareable setting
                 ]
@@ -349,6 +355,8 @@ class GenerationModule(BaseModule):
                 if "source_image_mask" in subset:
                     self.source_image_mask_path = subset.get("source_image_mask", None)
                     self.source_image_mask_thumb_path = None
+
+                self._apply_loaded_edit_subset(subset)
 
                 self.process_lora_data(subset.get("loras", []))
 
@@ -441,6 +449,34 @@ class GenerationModule(BaseModule):
             self.progress_bar.setMaximum(steps)
             if not self.generating:
                 self.progress_bar.setValue(0)
+
+    def _apply_loaded_edit_subset(self, subset: dict) -> None:
+        # Graph JSON only stores paths for edit images/mask, not layer snapshots.
+        self.edit_source_image_layers = [None] * 4
+        self.edit_result_image_layers = [None] * 4
+
+        for index in range(4):
+            key = f"edit_image_{index}"
+            path = subset.get(key)
+            self.edit_image_paths[index] = path
+            self.edit_image_thumb_paths[index] = path if path else None
+            self.edit_image_enabled[index] = True
+
+        mask_path = subset.get("edit_image_mask")
+        if self.edit_image_paths[0] is None:
+            mask_path = None
+
+        self.edit_image_mask_path = mask_path
+        self.edit_image_mask_thumb_path = mask_path
+
+        strength = subset.get("edit_image_mask_strength", 1.0)
+        try:
+            self.edit_image_mask_strength = float(strength)
+        except Exception:
+            self.edit_image_mask_strength = 1.0
+
+        if self.edit_image_mask_path is None:
+            self.edit_image_mask_strength = 1.0
 
     #########################################################
     ## SUBSCRIBED BUS EVENTS
@@ -718,6 +754,7 @@ class GenerationModule(BaseModule):
                     self.gen_settings.image_width,
                     self.gen_settings.image_height,
                     image_index=d.get("image_index", 0),
+                    source_image_path=self.edit_image_paths[d.get("image_index", 0)],
                     source_image_layers=self.edit_source_image_layers[d.get("image_index", 0)],
                     result_image_path=self.edit_image_paths[d.get("image_index", 0)],
                     result_image_layers=self.edit_result_image_layers[d.get("image_index", 0)],
@@ -922,6 +959,12 @@ class GenerationModule(BaseModule):
                 "source_image",
                 "strength",
                 "source_image_mask",
+                "edit_image_0",
+                "edit_image_1",
+                "edit_image_2",
+                "edit_image_3",
+                "edit_image_mask",
+                "edit_image_mask_strength",
                 "loras",
                 # Note: use_torch_compile is intentionally NOT extracted from graphs
                 # as it's a runtime config on ModelManager, not a shareable setting
@@ -936,6 +979,7 @@ class GenerationModule(BaseModule):
             self.source_image_layers = None
             self.source_image_mask_path = subset.get("source_image_mask")
             self.source_image_mask_thumb_path = None
+            self._apply_loaded_edit_subset(subset)
 
             self.process_lora_data(subset.get("loras", []))
 

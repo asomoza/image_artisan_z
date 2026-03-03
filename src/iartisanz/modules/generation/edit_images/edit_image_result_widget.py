@@ -20,6 +20,7 @@ class EditImageResultWidget(QWidget):
         image_height: int,
         output_path: str,
         temp_path: str,
+        image_path: str | None = None,
         layers: list[ImageEditorLayer] = None,
         delete_original_on_load: bool = False,
     ):
@@ -30,6 +31,7 @@ class EditImageResultWidget(QWidget):
         self.image_height = image_height
         self.output_path = output_path
         self.temp_path = temp_path
+        self.image_path = image_path
         self.delete_original_on_load = delete_original_on_load
 
         self.init_ui()
@@ -38,6 +40,8 @@ class EditImageResultWidget(QWidget):
             self.image_widget.restore_layers(layers)
         else:
             self.image_widget.add_layer()
+            if self.image_path:
+                self.image_widget.image_editor.change_layer_image(self.image_path)
             self.image_widget.set_enabled(True)
 
     def init_ui(self):

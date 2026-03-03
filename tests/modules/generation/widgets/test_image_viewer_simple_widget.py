@@ -67,6 +67,8 @@ def test_copy_source_image_and_mask_rewrites_paths(image_viewer_module, tmp_path
     viewer.directories = SimpleNamespace(
         outputs_source_images=str(outputs_source_images),
         outputs_source_masks=str(outputs_source_masks),
+        outputs_edit_source_images="",
+        outputs_edit_masks="",
     )
 
     ts = "20990101010101"
@@ -102,7 +104,103 @@ def test_copy_source_mask_noop_when_missing_node(image_viewer_module, tmp_path: 
     json_graph = json.dumps({"nodes": [{"class": "ImageLoadNode", "name": "other", "state": {"path": "x"}}]})
 
     viewer = ImageViewerSimpleWidget.__new__(ImageViewerSimpleWidget)
-    viewer.directories = SimpleNamespace(outputs_source_masks=str(outputs_source_masks), outputs_source_images="")
+    viewer.directories = SimpleNamespace(
+        outputs_source_masks=str(outputs_source_masks),
+        outputs_source_images="",
+        outputs_edit_source_images="",
+        outputs_edit_masks="",
+    )
 
     ts = "20990101010101"
     assert viewer._copy_source_mask_and_rewrite_graph(json_graph, ts) == json_graph
+
+
+def test_copy_edit_images_rewrites_paths(image_viewer_module, tmp_path: Path):
+    ImageViewerSimpleWidget = image_viewer_module.ImageViewerSimpleWidget
+
+    outputs_edit_source_images = tmp_path / "outputs" / "edit_source_images"
+    outputs_edit_source_images.mkdir(parents=True)
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    src_edit_0 = src_dir / "edit0.png"
+    src_edit_2 = src_dir / "edit2.jpg"
+    src_edit_0.write_bytes(b"edit0")
+    src_edit_2.write_bytes(b"edit2")
+
+    json_graph = json.dumps(
+        {
+            "nodes": [
+                {"class": "ImageLoadNode", "name": "edit_image_0", "state": {"path": str(src_edit_0)}},
+                {"class": "ImageLoadNode", "name": "edit_image_2", "state": {"path": str(src_edit_2)}},
+                {"class": "ImageLoadNode", "name": "edit_image_mask", "state": {"path": str(src_edit_0)}},
+            ]
+        }
+    )
+
+    viewer = ImageViewerSimpleWidget.__new__(ImageViewerSimpleWidget)
+    viewer.directories = SimpleNamespace(
+        outputs_source_images="",
+        outputs_source_masks="",
+        outputs_edit_source_images=str(outputs_edit_source_images),
+        outputs_edit_masks="",
+    )
+
+    ts = "20990101010101"
+    updated = viewer._copy_edit_images_and_rewrite_graph(json_graph, ts)
+
+    payload = json.loads(updated)
+    nodes = payload["nodes"]
+
+    new_edit_0_path = Path(_node_by_name(nodes, "edit_image_0")["state"]["path"])
+    new_edit_2_path = Path(_node_by_name(nodes, "edit_image_2")["state"]["path"])
+    unchanged_mask_path = Path(_node_by_name(nodes, "edit_image_mask")["state"]["path"])
+
+    assert new_edit_0_path.exists()
+    assert new_edit_2_path.exists()
+    assert str(new_edit_0_path).startswith(str(outputs_edit_source_images))
+    assert str(new_edit_2_path).startswith(str(outputs_edit_source_images))
+    assert new_edit_0_path.name.startswith(f"{ts}_edit_image_0")
+    assert new_edit_2_path.name.startswith(f"{ts}_edit_image_2")
+
+    # Non-slot nodes like edit_image_mask are intentionally ignored by this helper.
+    assert unchanged_mask_path == src_edit_0
+
+
+def test_copy_edit_mask_rewrites_path(image_viewer_module, tmp_path: Path):
+    ImageViewerSimpleWidget = image_viewer_module.ImageViewerSimpleWidget
+
+    outputs_edit_masks = tmp_path / "outputs" / "edit_masks"
+    outputs_edit_masks.mkdir(parents=True)
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    src_mask = src_dir / "edit_mask.png"
+    src_mask.write_bytes(b"mask")
+
+    json_graph = json.dumps(
+        {
+            "nodes": [
+                {"class": "ImageLoadNode", "name": "edit_image_mask", "state": {"path": str(src_mask)}},
+            ]
+        }
+    )
+
+    viewer = ImageViewerSimpleWidget.__new__(ImageViewerSimpleWidget)
+    viewer.directories = SimpleNamespace(
+        outputs_source_images="",
+        outputs_source_masks="",
+        outputs_edit_source_images="",
+        outputs_edit_masks=str(outputs_edit_masks),
+    )
+
+    ts = "20990101010101"
+    updated = viewer._copy_edit_mask_and_rewrite_graph(json_graph, ts)
+
+    payload = json.loads(updated)
+    nodes = payload["nodes"]
+    new_mask_path = Path(_node_by_name(nodes, "edit_image_mask")["state"]["path"])
+
+    assert new_mask_path.exists()
+    assert str(new_mask_path).startswith(str(outputs_edit_masks))
+    assert new_mask_path.name.startswith(f"{ts}_edit_image_mask")

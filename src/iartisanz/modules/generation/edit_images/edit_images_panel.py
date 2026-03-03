@@ -65,6 +65,7 @@ class EditImagesPanel(BasePanel):
         self._init_ui()
 
         self.event_bus.subscribe("edit_images", self.on_edit_images_event)
+        self.event_bus.subscribe("json_graph", self.on_json_graph_event)
 
     def _init_ui(self):
         outer = QVBoxLayout()
@@ -217,3 +218,35 @@ class EditImagesPanel(BasePanel):
                 self._set_slot_dimmed(i, False)
             if self.mask_button is not None:
                 self.mask_button.setVisible(False)
+
+    def on_json_graph_event(self, data: dict):
+        if data.get("action") != "loaded":
+            return
+
+        payload = data.get("data", {}) or {}
+
+        for i in range(self.MAX_SLOTS):
+            image_path = payload.get(f"edit_image_{i}")
+            if image_path:
+                self.thumb_paths[i] = image_path
+                self.thumb_labels[i].set_thumbnail(image_path)
+                self.remove_buttons[i].setVisible(True)
+                cb = self.enable_checkboxes[i]
+                cb.blockSignals(True)
+                cb.setChecked(True)
+                cb.blockSignals(False)
+                cb.setVisible(True)
+                self._set_slot_dimmed(i, False)
+            else:
+                self.thumb_paths[i] = None
+                self.thumb_labels[i].clear_thumbnail()
+                self.remove_buttons[i].setVisible(False)
+                cb = self.enable_checkboxes[i]
+                cb.blockSignals(True)
+                cb.setChecked(True)
+                cb.blockSignals(False)
+                cb.setVisible(False)
+                self._set_slot_dimmed(i, False)
+
+        if self.mask_button is not None:
+            self.mask_button.setVisible(bool(payload.get("edit_image_0")))

@@ -224,6 +224,7 @@ def _make_dirs(tmp_path: Path):
         outputs_conditioning_images=str(base / "outputs_conditioning_images"),
         outputs_edit_source_images=str(base / "outputs_edit_source_images"),
         outputs_edit_images=str(base / "outputs_edit_images"),
+        outputs_edit_masks=str(base / "outputs_edit_masks"),
         temp_path=str(base / "temp"),
     )
 
@@ -253,7 +254,11 @@ def test_init_connects_editor_and_sets_defaults(source_image_dialog_module, tmp_
     assert dialog.brush_size_slider.value() == editor.brush_size  # 42 from FakeImageEditor
     assert dialog.brush_hardness_slider.value() == pytest.approx(editor.hardness)  # 0.33
     assert dialog.brush_steps_slider.value() == pytest.approx(editor.steps)  # 2.5
-    assert dialog.color_button.color() == (editor.brush_color.red(), editor.brush_color.green(), editor.brush_color.blue())  # (10, 20, 30)
+    assert dialog.color_button.color() == (
+        editor.brush_color.red(),
+        editor.brush_color.green(),
+        editor.brush_color.blue(),
+    )  # (10, 20, 30)
 
     # If a source image path is provided and no layers are provided, the editor is instructed to load it.
     assert editor.changed_image_path == str(tmp_path / "some.png")

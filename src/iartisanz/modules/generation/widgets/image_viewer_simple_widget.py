@@ -308,6 +308,132 @@ class ImageViewerSimpleWidget(QGraphicsView):
         except Exception:
             return json_graph
 
+    def _copy_edit_images_and_rewrite_graph(self, json_graph: str, timestamp: str) -> str:
+        try:
+            data = json.loads(json_graph)
+        except Exception:
+            return json_graph
+
+        nodes = data.get("nodes")
+        if not isinstance(nodes, list):
+            return json_graph
+
+        updated = False
+        dest_dir = Path(self.directories.outputs_edit_source_images)
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if node.get("class") != "ImageLoadNode":
+                continue
+
+            node_name = node.get("name")
+            if not isinstance(node_name, str) or not node_name.startswith("edit_image_"):
+                continue
+
+            slot_str = node_name.removeprefix("edit_image_")
+            if not slot_str.isdigit():
+                continue
+
+            state = node.get("state")
+            if not isinstance(state, dict):
+                continue
+
+            src_path = state.get("path")
+            if not isinstance(src_path, str) or not src_path.strip():
+                continue
+
+            src = Path(src_path)
+            if not src.exists() or not src.is_file():
+                continue
+
+            ext = src.suffix if src.suffix else ".png"
+            base_name = f"{timestamp}_{node_name}{ext}"
+            dest = dest_dir / base_name
+
+            if dest.exists():
+                for i in range(1, 10_000):
+                    candidate = dest_dir / f"{timestamp}_{node_name}_{i}{ext}"
+                    if not candidate.exists():
+                        dest = candidate
+                        break
+
+            try:
+                shutil.copy2(src, dest)
+            except Exception:
+                continue
+
+            state["path"] = str(dest)
+            node["state"] = state
+            updated = True
+
+        if not updated:
+            return json_graph
+
+        try:
+            return json.dumps(data, ensure_ascii=False)
+        except Exception:
+            return json_graph
+
+    def _copy_edit_mask_and_rewrite_graph(self, json_graph: str, timestamp: str) -> str:
+        try:
+            data = json.loads(json_graph)
+        except Exception:
+            return json_graph
+
+        nodes = data.get("nodes")
+        if not isinstance(nodes, list):
+            return json_graph
+
+        updated = False
+        dest_dir = Path(self.directories.outputs_edit_masks)
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if node.get("class") != "ImageLoadNode" or node.get("name") != "edit_image_mask":
+                continue
+
+            state = node.get("state")
+            if not isinstance(state, dict):
+                continue
+
+            src_path = state.get("path")
+            if not isinstance(src_path, str) or not src_path.strip():
+                continue
+
+            src = Path(src_path)
+            if not src.exists() or not src.is_file():
+                continue
+
+            ext = src.suffix if src.suffix else ".png"
+            base_name = f"{timestamp}_edit_image_mask{ext}"
+            dest = dest_dir / base_name
+
+            if dest.exists():
+                for i in range(1, 10_000):
+                    candidate = dest_dir / f"{timestamp}_edit_image_mask_{i}{ext}"
+                    if not candidate.exists():
+                        dest = candidate
+                        break
+
+            try:
+                shutil.copy2(src, dest)
+            except Exception:
+                continue
+
+            state["path"] = str(dest)
+            node["state"] = state
+            updated = True
+
+        if not updated:
+            return json_graph
+
+        try:
+            return json.dumps(data, ensure_ascii=False)
+        except Exception:
+            return json_graph
+
     def save_image(self):
         if self.pixmap_item is None:
             self.event_bus.publish("show_snackbar", {"action": "show", "message": "No image to save"})
@@ -334,6 +460,8 @@ class ImageViewerSimpleWidget(QGraphicsView):
         if self.preferences.save_image_metadata and self.json_graph:
             json_graph_to_save = self._copy_source_image_and_rewrite_graph(self.json_graph, timestamp)
             json_graph_to_save = self._copy_source_mask_and_rewrite_graph(json_graph_to_save, timestamp)
+            json_graph_to_save = self._copy_edit_images_and_rewrite_graph(json_graph_to_save, timestamp)
+            json_graph_to_save = self._copy_edit_mask_and_rewrite_graph(json_graph_to_save, timestamp)
             writer.setText("iartisanz_json_graph", json_graph_to_save)
 
         if not writer.write(image):

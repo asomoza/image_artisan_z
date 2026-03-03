@@ -14,4 +14,5 @@ class DirectoriesObject:
     outputs_conditioning_images = attr.ib(type=str)
     outputs_edit_source_images = attr.ib(type=str)
     outputs_edit_images = attr.ib(type=str)
+    outputs_edit_masks = attr.ib(type=str)
     temp_path = attr.ib(type=str)

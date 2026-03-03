@@ -32,6 +32,7 @@ class EditImagesDialog(BaseDialog):
         self,
         *args,
         image_index: int = 0,
+        source_image_path=None,
         source_image_layers=None,
         result_image_path=None,
         result_image_layers=None,
@@ -44,6 +45,7 @@ class EditImagesDialog(BaseDialog):
         self.image_height = args[5] if len(args) > 5 else 1024
 
         self.image_index = image_index
+        self.source_image_path = source_image_path
         self.source_image_layers = source_image_layers
         self.result_image_path = result_image_path
         self.result_image_layers = result_image_layers
@@ -186,6 +188,7 @@ class EditImagesDialog(BaseDialog):
             self.image_height,
             self.directories.outputs_edit_source_images,
             self.directories.temp_path,
+            image_path=self.source_image_path,
             layers=self.source_image_layers,
             delete_original_on_load=False,
         )
@@ -198,6 +201,7 @@ class EditImagesDialog(BaseDialog):
             self.image_height,
             self.directories.outputs_edit_images,
             self.directories.temp_path,
+            image_path=self.result_image_path,
             layers=self.result_image_layers,
             delete_original_on_load=False,
         )

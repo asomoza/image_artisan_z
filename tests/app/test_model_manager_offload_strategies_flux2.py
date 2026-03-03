@@ -22,6 +22,7 @@ import tempfile
 
 import pytest
 
+
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import numpy as np
@@ -112,6 +113,7 @@ def _setup_app_singletons():
             outputs_conditioning_images="",
             outputs_edit_source_images="",
             outputs_edit_images="",
+            outputs_edit_masks="",
             temp_path="",
         )
     )
@@ -239,16 +241,18 @@ def _build_flux2_graph(device: torch.device, dtype: torch.dtype, lora_path: str 
     ]
     if lora_node is not None:
         nodes.append(lora_node)
-    nodes.extend([
-        prompt_node,
-        latents_node,
-        scheduler_node,
-        steps_node,
-        guidance_node,
-        guidance_start_end_node,
-        denoise_node,
-        decoder_node,
-    ])
+    nodes.extend(
+        [
+            prompt_node,
+            latents_node,
+            scheduler_node,
+            steps_node,
+            guidance_node,
+            guidance_start_end_node,
+            denoise_node,
+            decoder_node,
+        ]
+    )
     for node in nodes:
         node.device = device
         node.dtype = dtype
@@ -307,6 +311,7 @@ def _run_pipeline(strategy: str, lora_path: str | None = None):
 # model_offload: components should be on CPU between nodes
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.real_model
 @pytest.mark.slow
 def test_flux2_model_offload_strategy():
@@ -345,6 +350,7 @@ def test_flux2_model_offload_strategy():
 # group_offload: diffusers hooks applied at load time, persist through pipeline
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.real_model
 @pytest.mark.slow
 def test_flux2_group_offload_strategy():
@@ -373,6 +379,7 @@ def test_flux2_group_offload_strategy():
 # ---------------------------------------------------------------------------
 # sequential_group_offload: hooks applied per node, removed after
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.real_model
 @pytest.mark.slow
@@ -411,6 +418,7 @@ def test_flux2_sequential_group_offload_strategy():
 # ---------------------------------------------------------------------------
 # Strategy transition: switch from one strategy to another mid-session
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.real_model
 @pytest.mark.slow
