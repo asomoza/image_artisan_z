@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = "5"
+CURRENT_SCHEMA_VERSION = "7"
 
 
 def _get_meta(db: Database, key: str) -> str | None:
@@ -231,6 +231,21 @@ def run_migrations(db: Database, directories: DirectoriesObject) -> None:
             _remove_legacy_symlinks(directories)
         except Exception as e:
             logger.error("Legacy symlink removal failed: %s", e, exc_info=True)
+
+    if version is not None and version < "6":
+        logger.info("Adding dtype column to component table...")
+        try:
+            db.execute("ALTER TABLE component ADD COLUMN dtype TEXT")
+        except Exception as e:
+            # Column may already exist if table was freshly created
+            logger.debug("dtype column migration: %s", e)
+
+    if version is not None and version < "7":
+        logger.info("Clearing invalid dtype values...")
+        try:
+            db.execute("UPDATE component SET dtype = NULL WHERE dtype NOT IN ('bfloat16', 'float16', 'float32', 'float64')")
+        except Exception as e:
+            logger.debug("dtype cleanup: %s", e)
 
     _set_meta(db, "schema_version", CURRENT_SCHEMA_VERSION)
     logger.info("Migration to schema v%s complete.", CURRENT_SCHEMA_VERSION)

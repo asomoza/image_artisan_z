@@ -23,6 +23,7 @@ class ComponentInfo:
     size_bytes: int = 0
     architecture: Optional[str] = None
     config_json: Optional[str] = None
+    dtype: Optional[str] = None
 
 
 class ComponentRegistry:
@@ -81,6 +82,8 @@ class ComponentRegistry:
             except Exception:
                 pass
 
+        dtype = self._detect_dtype(source_path, config_json)
+
         db.insert(
             "component",
             {
@@ -90,6 +93,7 @@ class ComponentRegistry:
                 "size_bytes": size_bytes,
                 "architecture": architecture,
                 "config_json": config_json,
+                "dtype": dtype or None,
             },
         )
         component_id = db.last_insert_rowid()
@@ -102,6 +106,7 @@ class ComponentRegistry:
             size_bytes=size_bytes,
             architecture=architecture,
             config_json=config_json,
+            dtype=dtype or None,
         )
 
     def get_model_components(self, model_id: int) -> dict[str, ComponentInfo]:
@@ -110,7 +115,7 @@ class ComponentRegistry:
         rows = db.fetch_all(
             """
             SELECT c.id, c.component_type, c.content_hash, c.storage_path,
-                   c.size_bytes, c.architecture, c.config_json
+                   c.size_bytes, c.architecture, c.config_json, c.dtype
             FROM model_component mc
             JOIN component c ON mc.component_id = c.id
             WHERE mc.model_id = ?
@@ -127,6 +132,7 @@ class ComponentRegistry:
                 size_bytes=row[4] or 0,
                 architecture=row[5],
                 config_json=row[6],
+                dtype=row[7],
             )
             result[info.component_type] = info
         return result
@@ -165,7 +171,7 @@ class ComponentRegistry:
             rows = db.fetch_all(
                 f"""
                 SELECT id, component_type, content_hash, storage_path,
-                       size_bytes, architecture, config_json
+                       size_bytes, architecture, config_json, dtype
                 FROM component
                 WHERE component_type = ? AND architecture IN ({placeholders})
                 """,
@@ -181,6 +187,7 @@ class ComponentRegistry:
                         size_bytes=r[4] or 0,
                         architecture=r[5],
                         config_json=r[6],
+                        dtype=r[7],
                     )
                     for r in rows
                 ]
@@ -193,7 +200,7 @@ class ComponentRegistry:
         row = db.fetch_one(
             """
             SELECT id, component_type, content_hash, storage_path,
-                   size_bytes, architecture, config_json
+                   size_bytes, architecture, config_json, dtype
             FROM component
             WHERE content_hash = ?
             """,
@@ -209,7 +216,90 @@ class ComponentRegistry:
             size_bytes=row[4] or 0,
             architecture=row[5],
             config_json=row[6],
+            dtype=row[7],
         )
+
+    @staticmethod
+    def _detect_dtype(source_path: str, config_json: str | None) -> str:
+        """Detect dtype from config_json fields or safetensors header."""
+        import glob as glob_mod
+        import struct
+
+        if config_json:
+            try:
+                cfg = json.loads(config_json)
+                torch_dtype = cfg.get("torch_dtype") or cfg.get("dtype") or ""
+                if torch_dtype:
+                    return str(torch_dtype).removeprefix("torch.")
+            except Exception:
+                pass
+
+        if source_path and os.path.isdir(source_path):
+            files = glob_mod.glob(os.path.join(source_path, "*.safetensors"))
+            if files:
+                try:
+                    with open(files[0], "rb") as f:
+                        header_size = struct.unpack("<Q", f.read(8))[0]
+                        header = json.loads(f.read(header_size))
+                    dtype_map = {"BF16": "bfloat16", "F16": "float16", "F32": "float32", "F64": "float64"}
+                    for key, value in header.items():
+                        if key != "__metadata__" and isinstance(value, dict):
+                            dtype = value.get("dtype", "")
+                            if dtype in dtype_map:
+                                return dtype_map[dtype]
+                except Exception:
+                    pass
+
+        return ""
+
+    @staticmethod
+    def _format_dtype_label(dtype: str | None, config_json: str | None) -> str:
+        """Build a human-readable dtype/quantization label for display."""
+        if config_json:
+            try:
+                cfg = json.loads(config_json)
+                quant_cfg = cfg.get("quantization_config")
+                if quant_cfg:
+                    method = quant_cfg.get("quant_method", "")
+                    if method == "sdnq":
+                        weights_dtype = quant_cfg.get("weights_dtype", "")
+                        return f"sdnq {weights_dtype}" if weights_dtype else "sdnq"
+                    if method in ("bitsandbytes", "bnb"):
+                        bits = quant_cfg.get("load_in_4bit") and 4 or quant_cfg.get("load_in_8bit") and 8 or 4
+                        return f"bnb {bits}-bit"
+                    bits = quant_cfg.get("bits", quant_cfg.get("nbits", ""))
+                    if bits:
+                        return f"{method} {bits}-bit"
+                    return method
+            except Exception:
+                pass
+
+        return dtype or ""
+
+    def get_component_display_info(self, model_id: int) -> list[dict[str, str]]:
+        """Return a list of {type, architecture, dtype_label} for display in the UI."""
+        components = self.get_model_components(model_id)
+        db = self._db()
+        result = []
+        for comp_type in COMPONENT_TYPES:
+            info = components.get(comp_type)
+            if info is None:
+                continue
+            if comp_type == "tokenizer":
+                continue
+            if info.dtype is None:
+                info.dtype = self._detect_dtype(info.storage_path, info.config_json)
+                if info.dtype:
+                    db.execute("UPDATE component SET dtype = ? WHERE id = ?", (info.dtype, info.id))
+            dtype_label = self._format_dtype_label(info.dtype, info.config_json)
+            result.append(
+                {
+                    "type": comp_type,
+                    "architecture": info.architecture or "",
+                    "dtype_label": dtype_label,
+                }
+            )
+        return result
 
     def model_has_components(self, model_id: int) -> bool:
         """Check if a model has all 4 component mappings."""

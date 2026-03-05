@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
+from iartisanz.app.component_registry import ComponentRegistry
 from iartisanz.app.directories import DirectoriesObject
 from iartisanz.app.event_bus import EventBus
 from iartisanz.modules.generation.constants import MODEL_TYPES
 from iartisanz.modules.generation.data_objects.model_data_object import ModelDataObject
 from iartisanz.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
 from iartisanz.modules.generation.widgets.model_item_widget import ModelItemWidget
-
-
-if TYPE_CHECKING:
-    from iartisanz.app.directories import DirectoriesObject
 
 
 class ModelInfoWidget(QWidget):
@@ -82,6 +77,14 @@ class ModelInfoWidget(QWidget):
         main_layout.addWidget(self.tags_title_label)
         main_layout.addWidget(self.tags_label)
 
+        self.components_title_label = QLabel("Components:")
+        self.components_title_label.setObjectName("tags_title")
+        self.components_title_label.setVisible(False)
+        main_layout.addWidget(self.components_title_label)
+        self.components_grid = QGridLayout()
+        self.components_grid.setSpacing(2)
+        main_layout.addLayout(self.components_grid)
+
         main_layout.addStretch()
 
         self.delete_model_button = QPushButton("Delete")
@@ -124,6 +127,37 @@ class ModelInfoWidget(QWidget):
         if self.model_item.model_data.example is not None:
             self.json_graph = self.model_item.model_data.example
             self.generate_example_button.setVisible(True)
+
+        self._load_components()
+
+    def _load_components(self):
+        model_id = self.model_item.model_data.id
+        if model_id is None:
+            return
+
+        import os
+
+        db_path = os.path.join(self.directories.data_path, "app.db")
+        components_base_dir = os.path.join(self.directories.models_diffusers, "_components")
+        registry = ComponentRegistry(db_path, components_base_dir)
+
+        try:
+            display_info = registry.get_component_display_info(model_id)
+        except Exception:
+            return
+
+        if not display_info:
+            return
+
+        self.components_title_label.setVisible(True)
+        for row, comp in enumerate(display_info):
+            type_label = QLabel(comp["type"].replace("_", " "))
+            type_label.setObjectName("tags")
+            dtype_label = QLabel(comp["dtype_label"])
+            dtype_label.setObjectName("tags")
+            dtype_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            self.components_grid.addWidget(type_label, row, 0)
+            self.components_grid.addWidget(dtype_label, row, 1)
 
     def on_delete_clicked(self):
         confirm = QMessageBox.question(

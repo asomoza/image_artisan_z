@@ -187,6 +187,7 @@ class MainWindow(QMainWindow):
                 "size_bytes INTEGER DEFAULT 0",
                 "architecture TEXT",
                 "config_json TEXT",
+                "dtype TEXT",
                 "created_at TEXT DEFAULT (datetime('now'))",
             ],
         )
