@@ -79,6 +79,17 @@ def _has_group_offload_hooks(module: torch.nn.Module) -> bool:
     return False
 
 
+def _is_quantized(obj: Any) -> bool:
+    """Check whether a model has a quantization config (e.g. SDNQ, bitsandbytes)."""
+    if not _is_torch_module(obj):
+        return False
+    config = getattr(obj, "config", None)
+    if config is not None and getattr(config, "quantization_config", None) is not None:
+        return True
+    # hf_quantizer attribute set by HuggingFace quantization integration
+    return getattr(obj, "hf_quantizer", None) is not None
+
+
 def _module_device(module: torch.nn.Module) -> Optional[torch.device]:
     try:
         for p in module.parameters(recurse=True):
@@ -819,6 +830,7 @@ class ModelManager:
         with self._lock:
             self._components.pop(component, None)
             self._component_hashes.pop(component, None)
+            self._managed_components.pop(component, None)
             for key in [k for k in self._compiled_components.keys() if k[1] == component]:
                 self._compiled_components.pop(key, None)
             if torch.cuda.is_available():
@@ -993,6 +1005,11 @@ class ModelManager:
                 return obj
 
             target_device = torch.device(device)
+
+            # Quantized models (e.g. SDNQ) cannot be cast to a new dtype —
+            # only device moves are safe.
+            if dtype is not None and _is_quantized(obj):
+                dtype = None
 
             current_device = _module_device(obj)
             if current_device is None or current_device != target_device:

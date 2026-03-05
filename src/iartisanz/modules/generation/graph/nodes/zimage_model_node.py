@@ -32,6 +32,7 @@ class ZImageModelNode(Node):
         self.version = version
         self.model_type = model_type
         self.db_model_id = db_model_id
+        self._last_component_hashes: dict[str, str] = {}
 
     def update_model(self, path: str, model_name: str, version: str, model_type: str, db_model_id: int = None):
         current_sig = (self.path, self.model_name, self.version, self.model_type)
@@ -53,6 +54,11 @@ class ZImageModelNode(Node):
         node_dict["model_type"] = self.model_type
         if self.db_model_id is not None:
             node_dict["db_model_id"] = self.db_model_id
+        # Include resolved component hashes so update_from_json() detects
+        # override changes (e.g. user switched to SDNQ variant).
+        # The staging graph queries the DB (current overrides) while the
+        # run graph uses cached hashes from the last execution.
+        node_dict["_component_hashes"] = self._last_component_hashes
         return node_dict
 
     @classmethod
@@ -63,7 +69,16 @@ class ZImageModelNode(Node):
         node.version = node_dict["version"]
         node.model_type = node_dict["model_type"]
         node.db_model_id = node_dict.get("db_model_id")
+        # from_dict on the staging side queries the DB for current overrides
+        node._last_component_hashes = node._get_resolved_hashes()
         return node
+
+    def _get_resolved_hashes(self) -> dict[str, str]:
+        """Return resolved component hashes from registry (with overrides)."""
+        components = self._resolve_registry_components()
+        if components:
+            return {ct: info.content_hash for ct, info in components.items()}
+        return {}
 
     def update_inputs(self, node_dict, callbacks=None):
         new_sig = (
@@ -78,8 +93,8 @@ class ZImageModelNode(Node):
         self.path, self.model_name, self.version, self.model_type = new_sig
         self.db_model_id = node_dict.get("db_model_id", self.db_model_id)
 
-    def _resolve_component_paths(self) -> dict[str, str] | None:
-        """Resolve component paths from registry if db_model_id is available."""
+    def _resolve_registry_components(self) -> dict | None:
+        """Resolve component info from registry (with overrides) if db_model_id is available."""
         if self.db_model_id is None:
             return None
 
@@ -96,37 +111,11 @@ class ZImageModelNode(Node):
                 db_path,
                 os.path.join(directories.models_diffusers, "_components"),
             )
-            components = registry.get_model_components(self.db_model_id)
+            components = registry.resolve_model_components(self.db_model_id)
             if not components:
                 return None
 
-            return {comp_type: info.storage_path for comp_type, info in components.items()}
-        except Exception:
-            return None
-
-    def _get_target_component_hashes(self) -> dict[str, str] | None:
-        """Get target component hashes from registry for smart switching."""
-        if self.db_model_id is None:
-            return None
-
-        try:
-            from iartisanz.app.component_registry import ComponentRegistry
-            from iartisanz.app.app import get_app_database_path, get_app_directories
-
-            db_path = get_app_database_path()
-            directories = get_app_directories()
-            if db_path is None or directories is None:
-                return None
-
-            registry = ComponentRegistry(
-                db_path,
-                os.path.join(directories.models_diffusers, "_components"),
-            )
-            components = registry.get_model_components(self.db_model_id)
-            if not components:
-                return None
-
-            return {comp_type: info.content_hash for comp_type, info in components.items()}
+            return components
         except Exception:
             return None
 
@@ -134,21 +123,29 @@ class ZImageModelNode(Node):
         mm = get_model_manager()
         model_id = self.model_name or self.path
 
-        # Try smart switching via registry hashes
-        target_hashes = self._get_target_component_hashes()
-        registry_paths = self._resolve_component_paths()
-
-        if target_hashes:
-            return self._smart_load(mm, model_id, target_hashes, registry_paths)
+        # Try smart switching via registry (with overrides applied)
+        components = self._resolve_registry_components()
+        if components:
+            target_hashes = {ct: info.content_hash for ct, info in components.items()}
+            registry_paths = {ct: info.storage_path for ct, info in components.items()}
+            result = self._smart_load(mm, model_id, target_hashes, registry_paths)
+            # Cache hashes so to_dict() reflects what was actually loaded.
+            # update_from_json() compares this against the staging graph's
+            # freshly-queried hashes to detect override changes.
+            self._last_component_hashes = target_hashes
+            return result
         else:
             return self._legacy_load(mm, model_id)
 
     def _smart_load(self, mm, model_id, target_hashes, registry_paths):
         """Load model components, skipping any whose hash matches what's already loaded."""
-        # Fast path: model already fully loaded (e.g. consecutive runs, or
-        # transition from _legacy_load which doesn't set component hashes).
+        # Fast path: model already fully loaded AND all hashes match
+        # (covers consecutive runs and transition from _legacy_load).
         if mm.is_active_model(model_id) and all(
             mm.has(c) for c in ("tokenizer", "text_encoder", "transformer", "vae")
+        ) and all(
+            mm.get_component_hash(c) == target_hashes.get(c)
+            for c in ("tokenizer", "text_encoder", "transformer", "vae")
         ):
             self._set_output_handles(mm)
             return self.values
@@ -306,13 +303,29 @@ class ZImageModelNode(Node):
     def _load_text_encoder(self, text_encoder_path: str):
         mm = get_model_manager()
         try:
-            text_encoder = Qwen3Model.from_pretrained(
-                text_encoder_path,
-                use_safetensors=True,
-                dtype=self.dtype,
-                local_files_only=True,
-                low_cpu_mem_usage=True,
-            )
+            self._prepare_quantization(text_encoder_path)
+
+            # Detect architecture from config to choose the right class
+            arch = self._detect_architecture(text_encoder_path)
+            if arch == "Qwen3ForCausalLM":
+                from transformers import Qwen3ForCausalLM
+                text_encoder = Qwen3ForCausalLM.from_pretrained(
+                    text_encoder_path,
+                    use_safetensors=True,
+                    torch_dtype=self.dtype,
+                    local_files_only=True,
+                    low_cpu_mem_usage=True,
+                )
+            else:
+                text_encoder = Qwen3Model.from_pretrained(
+                    text_encoder_path,
+                    use_safetensors=True,
+                    dtype=self.dtype,
+                    local_files_only=True,
+                    low_cpu_mem_usage=True,
+                )
+
+            self._apply_quantization_options(text_encoder, text_encoder_path)
             mm.register_component("text_encoder", text_encoder)
         except OSError as e:
             raise IArtisanZNodeError(f"Error trying to load the text encoder: {e}", self.name) from e
@@ -320,6 +333,8 @@ class ZImageModelNode(Node):
     def _load_transformer(self, transformer_path: str):
         mm = get_model_manager()
         try:
+            self._prepare_quantization(transformer_path)
+
             transformer = ZImageTransformer2DModel.from_pretrained(
                 transformer_path,
                 use_safetensors=True,
@@ -327,9 +342,75 @@ class ZImageModelNode(Node):
                 local_files_only=True,
                 low_cpu_mem_usage=True,
             )
+
+            self._apply_quantization_options(transformer, transformer_path)
             mm.register_component("transformer", transformer)
         except OSError as e:
             raise IArtisanZNodeError(f"Error trying to load the transformer: {e}", self.name) from e
+
+    @staticmethod
+    def _detect_quantization(component_path: str) -> str | None:
+        """Detect quantization method from config.json."""
+        import json as _json
+        config_path = os.path.join(component_path, "config.json")
+        if not os.path.isfile(config_path):
+            return None
+        try:
+            with open(config_path, "r") as f:
+                cfg = _json.load(f)
+            quant_cfg = cfg.get("quantization_config")
+            if quant_cfg:
+                return quant_cfg.get("quant_method")
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _detect_architecture(component_path: str) -> str | None:
+        """Detect architecture from config.json."""
+        import json as _json
+        config_path = os.path.join(component_path, "config.json")
+        if not os.path.isfile(config_path):
+            return None
+        try:
+            with open(config_path, "r") as f:
+                cfg = _json.load(f)
+            return (
+                cfg.get("_class_name")
+                or (cfg.get("architectures") or [None])[0]
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _prepare_quantization(component_path: str) -> None:
+        """Import quantization codec if needed (must be called before from_pretrained)."""
+        quant = ZImageModelNode._detect_quantization(component_path)
+        if quant == "sdnq":
+            try:
+                from sdnq import SDNQConfig  # noqa: F401 — registers the codec
+                logger.info("SDNQ codec registered for %s", component_path)
+            except ImportError:
+                logger.warning(
+                    "sdnq package not installed — SDNQ model at %s will be loaded dequantized",
+                    component_path,
+                )
+
+    @staticmethod
+    def _apply_quantization_options(model, component_path: str) -> None:
+        """Apply post-load SDNQ optimizations (quantized matmul via triton kernels)."""
+        quant = ZImageModelNode._detect_quantization(component_path)
+        if quant == "sdnq":
+            try:
+                from sdnq.common import use_torch_compile as triton_is_available
+                if triton_is_available:
+                    from sdnq.loader import apply_sdnq_options_to_model
+                    apply_sdnq_options_to_model(model, use_quantized_matmul=True)
+                    logger.info("Applied SDNQ quantized matmul to %s", component_path)
+                else:
+                    logger.debug("triton not available — skipping SDNQ quantized matmul")
+            except ImportError:
+                logger.debug("sdnq.loader not available — skipping SDNQ quantized matmul")
 
     def _load_vae(self, vae_path: str):
         mm = get_model_manager()

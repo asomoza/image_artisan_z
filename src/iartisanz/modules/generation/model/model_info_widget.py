@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from iartisanz.app.component_registry import ComponentRegistry
 from iartisanz.app.directories import DirectoriesObject
@@ -139,10 +139,11 @@ class ModelInfoWidget(QWidget):
 
         db_path = os.path.join(self.directories.data_path, "app.db")
         components_base_dir = os.path.join(self.directories.models_diffusers, "_components")
-        registry = ComponentRegistry(db_path, components_base_dir)
+        self._registry = ComponentRegistry(db_path, components_base_dir)
+        self._model_id = model_id
 
         try:
-            display_info = registry.get_component_display_info(model_id)
+            display_info = self._registry.get_component_display_info(model_id)
         except Exception:
             return
 
@@ -151,13 +152,65 @@ class ModelInfoWidget(QWidget):
 
         self.components_title_label.setVisible(True)
         for row, comp in enumerate(display_info):
-            type_label = QLabel(comp["type"].replace("_", " "))
+            comp_type = comp["type"]
+            type_label = QLabel(comp_type.replace("_", " "))
             type_label.setObjectName("tags")
+            self.components_grid.addWidget(type_label, row, 0)
+
+            # Check for multiple variants (text_encoder and transformer only)
+            if comp_type in ("text_encoder", "transformer"):
+                variants = self._registry.get_component_variants(model_id, comp_type)
+                if len(variants) > 1:
+                    combo = QComboBox()
+                    combo.setObjectName("tags")
+                    default_components = self._registry.get_model_components(model_id)
+                    default_comp = default_components.get(comp_type)
+                    default_id = default_comp.id if default_comp else None
+                    override_id = self._registry.get_component_override(model_id, comp_type)
+                    active_id = override_id if override_id is not None else default_id
+
+                    for v in variants:
+                        label = self._registry._format_dtype_label(v.dtype, v.config_json)
+                        if not label:
+                            # Try detecting dtype from files if not cached
+                            detected = self._registry._detect_dtype(v.storage_path, v.config_json)
+                            label = detected or "unknown"
+                        if default_id is not None and v.id == default_id:
+                            label += " (default)"
+                        combo.addItem(label, v.id)
+
+                    # Select current active
+                    for i in range(combo.count()):
+                        if combo.itemData(i) == active_id:
+                            combo.setCurrentIndex(i)
+                            break
+
+                    combo.setProperty("comp_type", comp_type)
+                    combo.currentIndexChanged.connect(
+                        lambda idx, c=combo, ct=comp_type: self._on_variant_changed(c, ct)
+                    )
+                    self.components_grid.addWidget(combo, row, 1)
+                    continue
+
             dtype_label = QLabel(comp["dtype_label"])
             dtype_label.setObjectName("tags")
             dtype_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-            self.components_grid.addWidget(type_label, row, 0)
             self.components_grid.addWidget(dtype_label, row, 1)
+
+    def _on_variant_changed(self, combo: QComboBox, comp_type: str):
+        """Handle variant dropdown change."""
+        component_id = combo.currentData()
+        if component_id is None:
+            return
+
+        default_components = self._registry.get_model_components(self._model_id)
+        default_comp = default_components.get(comp_type)
+        default_id = default_comp.id if default_comp else None
+
+        if component_id == default_id:
+            self._registry.clear_component_override(self._model_id, comp_type)
+        else:
+            self._registry.set_component_override(self._model_id, comp_type, component_id)
 
     def on_delete_clicked(self):
         confirm = QMessageBox.question(

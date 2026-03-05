@@ -206,6 +206,30 @@ class MainWindow(QMainWindow):
         )
 
         self.database.create_table(
+            "model_component_variant",
+            [
+                "model_id INTEGER NOT NULL",
+                "component_type TEXT NOT NULL",
+                "component_id INTEGER NOT NULL",
+                "UNIQUE(model_id, component_type, component_id)",
+                "FOREIGN KEY (model_id) REFERENCES model(id)",
+                "FOREIGN KEY (component_id) REFERENCES component(id)",
+            ],
+        )
+
+        self.database.create_table(
+            "model_component_override",
+            [
+                "model_id INTEGER NOT NULL",
+                "component_type TEXT NOT NULL",
+                "component_id INTEGER NOT NULL",
+                "UNIQUE(model_id, component_type)",
+                "FOREIGN KEY (model_id) REFERENCES model(id)",
+                "FOREIGN KEY (component_id) REFERENCES component(id)",
+            ],
+        )
+
+        self.database.create_table(
             "app_meta",
             [
                 "key TEXT PRIMARY KEY",

@@ -46,6 +46,8 @@ class Flux2ModelNode(ZImageModelNode):
     def _load_text_encoder(self, text_encoder_path: str):
         mm = get_model_manager()
         try:
+            self._prepare_quantization(text_encoder_path)
+
             text_encoder = Qwen3ForCausalLM.from_pretrained(
                 text_encoder_path,
                 use_safetensors=True,
@@ -53,6 +55,8 @@ class Flux2ModelNode(ZImageModelNode):
                 local_files_only=True,
                 low_cpu_mem_usage=True,
             )
+
+            self._apply_quantization_options(text_encoder, text_encoder_path)
             mm.register_component("text_encoder", text_encoder)
         except OSError as e:
             raise IArtisanZNodeError(f"Error trying to load the text encoder: {e}", self.name) from e
@@ -60,6 +64,8 @@ class Flux2ModelNode(ZImageModelNode):
     def _load_transformer(self, transformer_path: str):
         mm = get_model_manager()
         try:
+            self._prepare_quantization(transformer_path)
+
             transformer = Flux2Transformer2DModel.from_pretrained(
                 transformer_path,
                 use_safetensors=True,
@@ -67,6 +73,8 @@ class Flux2ModelNode(ZImageModelNode):
                 local_files_only=True,
                 low_cpu_mem_usage=True,
             )
+
+            self._apply_quantization_options(transformer, transformer_path)
             mm.register_component("transformer", transformer)
         except OSError as e:
             raise IArtisanZNodeError(f"Error trying to load the transformer: {e}", self.name) from e

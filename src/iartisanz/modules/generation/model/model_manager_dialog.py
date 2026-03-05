@@ -117,6 +117,8 @@ class ModelManagerDialog(BaseDialog):
                 self._import_safetensors_model(path)
         elif os.path.isdir(path) and os.path.exists(os.path.join(path, "model_index.json")):
             self._import_diffusers_model(path)
+        elif os.path.isdir(path) and not os.path.exists(os.path.join(path, "model_index.json")):
+            self._import_component_directory(path)
 
     def _is_transformer_safetensors(self, path: str) -> bool:
         """Check if a .safetensors file is a standalone transformer."""
@@ -280,6 +282,163 @@ class ModelManagerDialog(BaseDialog):
         self.model_items_view.add_single_item_from_path(
             new_path, os.path.basename(new_path), component_mapping=component_mapping
         )
+
+    def _import_component_directory(self, path: str):
+        """Import a standalone component directory (e.g. a quantized transformer/ or text_encoder/)."""
+        import json
+
+        from PyQt6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel
+
+        from iartisanz.app.app import get_app_database_path
+        from iartisanz.app.component_registry import ComponentRegistry
+        from iartisanz.utils.model_utils import calculate_component_hash
+
+        db_path = get_app_database_path()
+        if db_path is None:
+            self.show_error("Database not available for component import.")
+            return
+
+        # Read config to detect architecture
+        config_json = None
+        architecture = None
+        for config_name in ("config.json", "tokenizer_config.json"):
+            config_path = os.path.join(path, config_name)
+            if os.path.isfile(config_path):
+                try:
+                    with open(config_path, "r") as f:
+                        config_json = f.read()
+                    cfg = json.loads(config_json)
+                    architecture = (
+                        cfg.get("_class_name")
+                        or (cfg.get("architectures") or [None])[0]
+                        or cfg.get("tokenizer_class")
+                        or cfg.get("model_type")
+                    )
+                    break
+                except Exception:
+                    pass
+
+        if architecture is None:
+            self.show_error("Could not detect architecture from component directory.")
+            return
+
+        # Infer component_type from architecture
+        arch_lower = architecture.lower()
+        if "transformer" in arch_lower:
+            component_type = "transformer"
+        elif any(k in arch_lower for k in ("qwen", "causal", "model", "encoder")):
+            component_type = "text_encoder"
+        elif "autoencoder" in arch_lower:
+            component_type = "vae"
+        elif "tokenizer" in arch_lower:
+            component_type = "tokenizer"
+        else:
+            self.show_error(f"Cannot determine component type for architecture '{architecture}'.")
+            return
+
+        # Hash and register
+        components_base_dir = os.path.join(self.directories.models_diffusers, "_components")
+        registry = ComponentRegistry(db_path, components_base_dir)
+
+        content_hash = calculate_component_hash(path)
+
+        # Check if already registered — skip file copy but still associate with models
+        existing = registry.get_component_by_hash(content_hash)
+
+        if existing is None:
+            # Find compatible models and ask user which to associate with
+            compatible_models = registry.get_compatible_model_ids(component_type, architecture)
+            if not compatible_models:
+                self.show_error(
+                    f"No compatible models found for this {component_type}. "
+                    "Import a full model first."
+                )
+                return
+
+            # Show model picker dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Import {component_type}")
+            layout = QFormLayout(dialog)
+
+            dtype_preview = registry._format_dtype_label(None, config_json)
+            layout.addRow(QLabel(f"Component: {component_type} ({dtype_preview or architecture})"))
+
+            model_combo = QComboBox()
+            for model_id, model_name in compatible_models:
+                model_combo.addItem(model_name, model_id)
+            layout.addRow("Associate with model:", model_combo)
+
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+            layout.addRow(buttons)
+
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            target_model_id = model_combo.currentData()
+            selected_model_name = model_combo.currentText()
+
+            # Copy to _components/{component_type}/{hash}/
+            canonical_dir = os.path.join(components_base_dir, component_type, content_hash)
+            if not os.path.exists(canonical_dir):
+                os.makedirs(os.path.dirname(canonical_dir), exist_ok=True)
+                if self.preferences.delete_model_on_import:
+                    shutil.move(path, canonical_dir)
+                else:
+                    shutil.copytree(path, canonical_dir)
+
+            comp_info = registry.register_component(
+                component_type=component_type,
+                source_path=canonical_dir,
+                content_hash=content_hash,
+                architecture=architecture,
+                config_json=config_json,
+            )
+        else:
+            # Component already on disk — reuse it and let the user associate with a model
+            comp_info = existing
+            compatible_models = registry.get_compatible_model_ids(component_type, architecture)
+            if not compatible_models:
+                self.show_error(f"No compatible models found for this {component_type}.")
+                return
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Associate {component_type}")
+            layout = QFormLayout(dialog)
+
+            dtype_label = registry._format_dtype_label(comp_info.dtype, comp_info.config_json)
+            layout.addRow(QLabel(f"Component: {component_type} ({dtype_label})"))
+            layout.addRow(QLabel("Already imported. Associate with another model:"))
+
+            model_combo = QComboBox()
+            for model_id, model_name in compatible_models:
+                model_combo.addItem(model_name, model_id)
+            layout.addRow("Model:", model_combo)
+
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+            layout.addRow(buttons)
+
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            target_model_id = model_combo.currentData()
+            selected_model_name = model_combo.currentText()
+
+        # Associate variant with the selected model and all models sharing the same default component
+        affected_ids = registry.add_component_variant_to_sharing_models(
+            target_model_id, component_type, comp_info.id
+        )
+
+        dtype_label = registry._format_dtype_label(comp_info.dtype, comp_info.config_json)
+        n_models = len(affected_ids)
+        if n_models > 1:
+            msg = f"Imported {component_type} ({dtype_label}) for {n_models} models"
+        else:
+            msg = f"Imported {component_type} ({dtype_label}) for {selected_model_name}"
+        self.event_bus.publish("show_snackbar", {"action": "show", "message": msg})
 
     def _get_unique_path(self, target_dir: str, name: str) -> str:
         new_path = os.path.join(target_dir, name)

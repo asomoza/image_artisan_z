@@ -276,6 +276,203 @@ class ComponentRegistry:
 
         return dtype or ""
 
+    def get_component_variants(self, model_id: int, component_type: str) -> list[ComponentInfo]:
+        """Return the default component plus any explicitly registered variants for this model.
+
+        Only returns variants that were explicitly associated with this model
+        via add_component_variant(). The default (from model_component) is always first.
+        """
+        components = self.get_model_components(model_id)
+        current = components.get(component_type)
+
+        db = self._db()
+        rows = db.fetch_all(
+            """
+            SELECT c.id, c.component_type, c.content_hash, c.storage_path,
+                   c.size_bytes, c.architecture, c.config_json, c.dtype
+            FROM model_component_variant mcv
+            JOIN component c ON mcv.component_id = c.id
+            WHERE mcv.model_id = ? AND mcv.component_type = ?
+            """,
+            (model_id, component_type),
+        )
+
+        variant_components = [
+            ComponentInfo(
+                id=r[0], component_type=r[1], content_hash=r[2], storage_path=r[3],
+                size_bytes=r[4] or 0, architecture=r[5], config_json=r[6], dtype=r[7],
+            )
+            for r in rows
+        ]
+
+        # Build result: default first, then variants (excluding default if it appears in both)
+        override_id = self.get_component_override(model_id, component_type)
+        active_id = override_id if override_id is not None else (current.id if current else None)
+
+        result = []
+        if current:
+            result.append(current)
+        for v in variant_components:
+            if current and v.id == current.id:
+                continue  # already in result as default
+            result.append(v)
+
+        # Sort active to front if it's not already the default
+        if active_id and result and result[0].id != active_id:
+            for i, v in enumerate(result):
+                if v.id == active_id:
+                    result.insert(0, result.pop(i))
+                    break
+
+        return result
+
+    def add_component_variant(self, model_id: int, component_type: str, component_id: int) -> None:
+        """Register a component as an available variant for a model's slot."""
+        db = self._db()
+        db.execute(
+            "INSERT OR IGNORE INTO model_component_variant (model_id, component_type, component_id) VALUES (?, ?, ?)",
+            (model_id, component_type, component_id),
+        )
+
+    def add_component_variant_to_sharing_models(
+        self, model_id: int, component_type: str, component_id: int
+    ) -> list[int]:
+        """Register a variant for the given model AND all models sharing the same default component.
+
+        Returns the list of all model_ids the variant was added to.
+        """
+        db = self._db()
+
+        # Find the default component_id for this model+type
+        row = db.fetch_one(
+            "SELECT component_id FROM model_component WHERE model_id = ? AND component_type = ?",
+            (model_id, component_type),
+        )
+        if row is None:
+            self.add_component_variant(model_id, component_type, component_id)
+            return [model_id]
+
+        default_component_id = row[0]
+
+        # Find all models that share this same default component
+        rows = db.fetch_all(
+            """
+            SELECT mc.model_id FROM model_component mc
+            JOIN model m ON mc.model_id = m.id
+            WHERE mc.component_type = ? AND mc.component_id = ? AND m.deleted = 0
+            """,
+            (component_type, default_component_id),
+        )
+
+        affected_model_ids = [r[0] for r in rows]
+        if model_id not in affected_model_ids:
+            affected_model_ids.append(model_id)
+
+        for mid in affected_model_ids:
+            db.execute(
+                "INSERT OR IGNORE INTO model_component_variant (model_id, component_type, component_id) VALUES (?, ?, ?)",
+                (mid, component_type, component_id),
+            )
+
+        return affected_model_ids
+
+    def get_compatible_model_ids(self, component_type: str, architecture: str) -> list[tuple[int, str]]:
+        """Return (model_id, model_name) pairs for models compatible with a component.
+
+        Uses ARCHITECTURE_COMPATIBILITY to find models whose transformer architecture
+        lists this component's architecture as compatible.
+        """
+        from iartisanz.modules.generation.component_compatibility import ARCHITECTURE_COMPATIBILITY
+
+        # Find which transformer architectures accept this component architecture
+        compatible_transformer_archs = []
+        for trans_arch, compat in ARCHITECTURE_COMPATIBILITY.items():
+            if component_type == "transformer":
+                if trans_arch == architecture:
+                    compatible_transformer_archs.append(trans_arch)
+            else:
+                if architecture in compat.get(component_type, []):
+                    compatible_transformer_archs.append(trans_arch)
+
+        if not compatible_transformer_archs:
+            return []
+
+        db = self._db()
+        placeholders = ", ".join(["?"] * len(compatible_transformer_archs))
+        rows = db.fetch_all(
+            f"""
+            SELECT DISTINCT m.id, m.name
+            FROM model m
+            JOIN model_component mc ON mc.model_id = m.id
+            JOIN component c ON mc.component_id = c.id
+            WHERE mc.component_type = 'transformer'
+              AND c.architecture IN ({placeholders})
+              AND m.deleted = 0
+            ORDER BY m.name
+            """,
+            tuple(compatible_transformer_archs),
+        )
+        return [(r[0], r[1]) for r in rows]
+
+    def get_component_override(self, model_id: int, component_type: str) -> int | None:
+        """Get the override component_id for a model+component_type, or None."""
+        db = self._db()
+        row = db.fetch_one(
+            "SELECT component_id FROM model_component_override WHERE model_id = ? AND component_type = ?",
+            (model_id, component_type),
+        )
+        return row[0] if row else None
+
+    def set_component_override(self, model_id: int, component_type: str, component_id: int) -> None:
+        """Set an override component for a model slot."""
+        db = self._db()
+        db.execute(
+            "INSERT OR REPLACE INTO model_component_override (model_id, component_type, component_id) VALUES (?, ?, ?)",
+            (model_id, component_type, component_id),
+        )
+
+    def clear_component_override(self, model_id: int, component_type: str) -> None:
+        """Remove the override for a model slot (reverts to default)."""
+        db = self._db()
+        db.execute(
+            "DELETE FROM model_component_override WHERE model_id = ? AND component_type = ?",
+            (model_id, component_type),
+        )
+
+    def resolve_model_components(self, model_id: int) -> dict[str, ComponentInfo]:
+        """Get model components with overrides applied.
+
+        For each component_type, checks model_component_override first;
+        if an override exists, substitutes the overridden component.
+        """
+        defaults = self.get_model_components(model_id)
+        db = self._db()
+
+        override_rows = db.fetch_all(
+            "SELECT component_type, component_id FROM model_component_override WHERE model_id = ?",
+            (model_id,),
+        )
+
+        if not override_rows:
+            return defaults
+
+        for comp_type, comp_id in override_rows:
+            row = db.fetch_one(
+                """
+                SELECT id, component_type, content_hash, storage_path,
+                       size_bytes, architecture, config_json, dtype
+                FROM component WHERE id = ?
+                """,
+                (comp_id,),
+            )
+            if row:
+                defaults[comp_type] = ComponentInfo(
+                    id=row[0], component_type=row[1], content_hash=row[2], storage_path=row[3],
+                    size_bytes=row[4] or 0, architecture=row[5], config_json=row[6], dtype=row[7],
+                )
+
+        return defaults
+
     def get_component_display_info(self, model_id: int) -> list[dict[str, str]]:
         """Return a list of {type, architecture, dtype_label} for display in the UI."""
         components = self.get_model_components(model_id)
