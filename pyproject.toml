@@ -14,10 +14,12 @@ dependencies = [
     "pillow>=12.1.0",
     "protobuf>=6.33.4",
     "pyqt6>=6.10.2",
+    "sdnq>=0.1.5",
     "superqt==0.7.4",
     "torch>=2.10.0",
     "torchvision>=0.25.0",
     "transformers>=5.0.0",
+    "triton>=3.6.0",
     "vcolorpicker>=1.4.4",
     "xxhash>=3.6.0",
 ]
