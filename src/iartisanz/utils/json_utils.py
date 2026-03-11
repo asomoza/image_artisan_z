@@ -187,6 +187,151 @@ def cast_scheduler(value) -> SchedulerDataObject:
     return SchedulerDataObject()
 
 
+def persist_image_paths_in_graph(
+    json_graph: str,
+    directories: Any,
+    timestamp: str,
+) -> str:
+    """Copy ImageLoadNode files to permanent output directories and rewrite paths.
+
+    This ensures that graph JSON stored in examples or PNG metadata references
+    files in stable output directories rather than temporary paths that get
+    cleaned up between sessions.
+
+    Uses content hashing to deduplicate: if an identical file was already saved
+    for the same kind (e.g. "source_image"), the existing copy is reused.
+
+    Handles: source_image, source_image_mask, edit_image_0-3, edit_image_mask.
+    """
+    import hashlib
+    import os
+    import shutil
+    from pathlib import Path
+
+    from iartisanz.utils.database import Database
+
+    try:
+        data = json.loads(json_graph)
+    except Exception:
+        return json_graph
+
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list):
+        return json_graph
+
+    # Map node names to (dest_dir, filename_prefix) for each ImageLoadNode we care about.
+    dest_map: dict[str, tuple[str, str]] = {
+        "source_image": (directories.outputs_source_images, "source_image"),
+        "source_image_mask": (directories.outputs_source_masks, "source_mask"),
+        "edit_image_mask": (directories.outputs_edit_masks, "edit_image_mask"),
+    }
+    for i in range(4):
+        dest_map[f"edit_image_{i}"] = (directories.outputs_edit_source_images, f"edit_image_{i}")
+
+    db = Database(os.path.join(directories.data_path, "app.db"))
+    updated = False
+
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("class") != "ImageLoadNode":
+            continue
+
+        node_name = node.get("name")
+        if node_name not in dest_map:
+            continue
+
+        state = node.get("state")
+        if not isinstance(state, dict):
+            continue
+
+        src_path = state.get("path")
+        if not isinstance(src_path, str) or not src_path.strip():
+            continue
+
+        src = Path(src_path)
+        if not src.exists() or not src.is_file():
+            continue
+
+        dest_dir_path, prefix = dest_map[node_name]
+        dest_dir = Path(dest_dir_path)
+
+        # Skip if already in the target directory.
+        try:
+            if src.parent.resolve() == dest_dir.resolve():
+                continue
+        except Exception:
+            pass
+
+        content_hash = hashlib.md5(src.read_bytes()).hexdigest()
+
+        # Check for existing identical file.
+        existing = _find_existing_source(db, node_name, content_hash)
+        if existing is not None:
+            state["path"] = existing
+            updated = True
+            continue
+
+        ext = src.suffix if src.suffix else ".png"
+        dest = dest_dir / f"{timestamp}_{prefix}{ext}"
+
+        if dest.exists():
+            for seq in range(1, 10_000):
+                candidate = dest_dir / f"{timestamp}_{prefix}_{seq}{ext}"
+                if not candidate.exists():
+                    dest = candidate
+                    break
+
+        try:
+            shutil.copy2(src, dest)
+        except Exception:
+            continue
+
+        dest_str = str(dest)
+        _record_source(db, node_name, content_hash, dest_str)
+        state["path"] = dest_str
+        updated = True
+
+    if not updated:
+        return json_graph
+
+    try:
+        return json.dumps(data, ensure_ascii=False)
+    except Exception:
+        return json_graph
+
+
+def _find_existing_source(db: Any, kind: str, content_hash: str) -> str | None:
+    """Look up an existing source file by kind and content hash.
+
+    Returns the filepath if found and the file still exists on disk.
+    Removes stale DB entries if the file has been deleted.
+    """
+    row = db.fetch_one(
+        "SELECT id, filepath FROM source_file WHERE kind = ? AND content_hash = ?",
+        (kind, content_hash),
+    )
+    if row is None:
+        return None
+
+    row_id, filepath = row
+    import os
+
+    if os.path.isfile(filepath):
+        return filepath
+
+    # Stale entry — file was deleted from disk.
+    db.execute("DELETE FROM source_file WHERE id = ?", (row_id,))
+    return None
+
+
+def _record_source(db: Any, kind: str, content_hash: str, filepath: str) -> None:
+    """Record a source file in the database, upserting on conflict."""
+    db.execute(
+        "INSERT INTO source_file (kind, content_hash, filepath) VALUES (?, ?, ?) "
+        "ON CONFLICT(kind, content_hash) DO UPDATE SET filepath = excluded.filepath",
+        (kind, content_hash, filepath),
+    )
+
+
 def cast_model(value: Any) -> ModelDataObject | None:
     if isinstance(value, ModelDataObject):
         return value

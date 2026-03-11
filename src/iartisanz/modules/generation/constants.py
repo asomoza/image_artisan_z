@@ -73,11 +73,14 @@ MODEL_TYPES = {
     4: "Flux.2 Klein Base 9B",
     5: "Flux.2 Klein 4B",
     6: "Flux.2 Klein Base 4B",
+    7: "Flux.2 Dev",
 }
 
 # Model family groupings — used to select the correct graph / pipeline.
 ZIMAGE_MODEL_TYPES = {1, 2}
-FLUX2_MODEL_TYPES = {3, 4, 5, 6}
+FLUX2_MODEL_TYPES = {3, 4, 5, 6, 7}
+FLUX2_KLEIN_MODEL_TYPES = {3, 4, 5, 6}
+FLUX2_DEV_MODEL_TYPES = {7}
 
 # Distilled variants use fewer steps and no CFG.
 FLUX2_DISTILLED_MODEL_TYPES = {3, 5}
@@ -89,6 +92,7 @@ FLUX2_LAYER_COUNTS = {
     4: (8, 24),   # Klein Base 9B
     5: (5, 20),   # Klein 4B
     6: (5, 20),   # Klein Base 4B
+    7: (8, 48),   # Dev
 }
 
 
@@ -112,6 +116,7 @@ MODEL_TYPE_DEFAULTS: dict[int, dict[str, int | float]] = {
     4: {"num_inference_steps": 30, "guidance_scale": 4.0},
     5: {"num_inference_steps": 4, "guidance_scale": 1.0},
     6: {"num_inference_steps": 30, "guidance_scale": 4.0},
+    7: {"num_inference_steps": 50, "guidance_scale": 4.0},
 }
 
 SCHEDULER_CLASS_MAPPING = {

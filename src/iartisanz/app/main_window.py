@@ -230,6 +230,17 @@ class MainWindow(QMainWindow):
         )
 
         self.database.create_table(
+            "source_file",
+            [
+                "id INTEGER PRIMARY KEY AUTOINCREMENT",
+                "kind TEXT NOT NULL",
+                "content_hash TEXT NOT NULL",
+                "filepath TEXT NOT NULL",
+                "UNIQUE(kind, content_hash)",
+            ],
+        )
+
+        self.database.create_table(
             "app_meta",
             [
                 "key TEXT PRIMARY KEY",

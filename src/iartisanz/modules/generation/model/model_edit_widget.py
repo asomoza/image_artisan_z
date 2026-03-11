@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QBuffer, QIODevice, Qt, pyqtSignal
@@ -126,7 +127,13 @@ class ModelEditWidget(QWidget):
         self.model_data.tags = self.tags_edit.text()
 
         if self.image_viewer.json_graph is not None:
-            self.model_data.example = self.image_viewer.json_graph
+            from iartisanz.utils.json_utils import persist_image_paths_in_graph
+
+            self.model_data.example = persist_image_paths_in_graph(
+                self.image_viewer.json_graph,
+                self.directories,
+                datetime.now().strftime("%Y%m%d%H%M%S"),
+            )
 
         database.update(
             "model",

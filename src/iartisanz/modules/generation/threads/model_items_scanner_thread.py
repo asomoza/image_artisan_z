@@ -165,10 +165,10 @@ class ModelItemsScannerThread(QThread):
         """Detect model type from transformer config.json and directory name.
 
         Uses the transformer class to identify Flux2 models, then the directory
-        name to distinguish 9B/4B and distilled/base variants.
+        name and config to distinguish Dev from Klein 9B/4B and distilled/base.
 
         Returns:
-            Model type int (1=Z-Image Turbo, 3-6=Flux.2 Klein variants).
+            Model type int (1=Z-Image Turbo, 3-6=Flux.2 Klein, 7=Flux.2 Dev).
         """
         import json
 
@@ -183,8 +183,15 @@ class ModelItemsScannerThread(QThread):
         if "Flux2" not in class_name:
             return 1
 
-        # Determine 9B vs 4B from directory name, falling back to config heuristic.
         dir_name = os.path.basename(model_path).lower()
+
+        # Flux.2 Dev: detected by directory name or config heuristic.
+        # Dev has 48 single-stream layers; Klein 9B has 24, Klein 4B has 20.
+        num_single_layers = config.get("num_single_layers", 0)
+        if "dev" in dir_name or num_single_layers >= 48:
+            return 7
+
+        # Determine 9B vs 4B from directory name, falling back to config heuristic.
         if "4b" in dir_name:
             is_4b = True
         elif "9b" in dir_name:

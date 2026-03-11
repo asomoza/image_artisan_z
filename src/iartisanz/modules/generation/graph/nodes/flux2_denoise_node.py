@@ -185,6 +185,13 @@ class Flux2DenoiseNode(Node):
         use_torch_compile = mm.use_torch_compile
         transformer = transformer_raw
 
+        # Flux2 Dev uses guidance embeddings baked into the transformer.
+        # When guidance_embeds=True, pass the guidance scale as a tensor.
+        has_guidance_embeds = getattr(transformer_raw.config, "guidance_embeds", False)
+        guidance_embed = None
+        if has_guidance_embeds:
+            guidance_embed = torch.tensor([float(self.guidance_scale)], device=self.device, dtype=torch.float32)
+
         mm.apply_attention_backend(transformer_raw)
 
         if use_torch_compile and not mm.is_attention_backend_compile_compatible(transformer_raw):
@@ -360,7 +367,7 @@ class Flux2DenoiseNode(Node):
                                 p1_noise_pred = transformer_raw(
                                     hidden_states=p1_latent_input,
                                     timestep=p1_timestep / 1000,
-                                    guidance=None,
+                                    guidance=guidance_embed,
                                     encoder_hidden_states=p1_prompt_embeds,
                                     txt_ids=p1_text_ids,
                                     img_ids=p1_latent_ids,
@@ -650,7 +657,7 @@ class Flux2DenoiseNode(Node):
                         return transformer(
                             hidden_states=latent_model_input,
                             timestep=timestep / 1000,
-                            guidance=None,
+                            guidance=guidance_embed,
                             encoder_hidden_states=prompt_embeds,
                             txt_ids=text_ids,
                             img_ids=loop_latent_ids,
@@ -659,7 +666,7 @@ class Flux2DenoiseNode(Node):
                 return transformer(
                     hidden_states=latent_model_input,
                     timestep=timestep / 1000,
-                    guidance=None,
+                    guidance=guidance_embed,
                     encoder_hidden_states=prompt_embeds,
                     txt_ids=text_ids,
                     img_ids=loop_latent_ids,
@@ -685,7 +692,7 @@ class Flux2DenoiseNode(Node):
                             return transformer(
                                 hidden_states=latent_model_input,
                                 timestep=timestep / 1000,
-                                guidance=None,
+                                guidance=guidance_embed,
                                 encoder_hidden_states=negative_prompt_embeds,
                                 txt_ids=negative_text_ids,
                                 img_ids=loop_latent_ids,
@@ -694,7 +701,7 @@ class Flux2DenoiseNode(Node):
                     return transformer(
                         hidden_states=latent_model_input,
                         timestep=timestep / 1000,
-                        guidance=None,
+                        guidance=guidance_embed,
                         encoder_hidden_states=negative_prompt_embeds,
                         txt_ids=negative_text_ids,
                         img_ids=loop_latent_ids,

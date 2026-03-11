@@ -322,19 +322,30 @@ class ModelManagerDialog(BaseDialog):
             self.show_error("Could not detect architecture from component directory.")
             return
 
-        # Infer component_type from architecture
-        arch_lower = architecture.lower()
-        if "transformer" in arch_lower:
-            component_type = "transformer"
-        elif any(k in arch_lower for k in ("qwen", "causal", "model", "encoder")):
-            component_type = "text_encoder"
-        elif "autoencoder" in arch_lower:
-            component_type = "vae"
-        elif "tokenizer" in arch_lower:
-            component_type = "tokenizer"
-        else:
-            self.show_error(f"Cannot determine component type for architecture '{architecture}'.")
-            return
+        # Infer component_type from architecture — first check ARCHITECTURE_COMPATIBILITY
+        # for a definitive match, then fall back to keyword heuristics.
+        from iartisanz.modules.generation.component_compatibility import ARCHITECTURE_COMPATIBILITY
+
+        component_type = None
+        for _trans_arch, compat in ARCHITECTURE_COMPATIBILITY.items():
+            for comp_type, arch_list in compat.items():
+                if architecture in arch_list:
+                    component_type = comp_type
+                    break
+            if component_type:
+                break
+
+        if component_type is None:
+            arch_lower = architecture.lower()
+            if "transformer" in arch_lower:
+                component_type = "transformer"
+            elif "autoencoder" in arch_lower:
+                component_type = "vae"
+            elif "tokenizer" in arch_lower:
+                component_type = "tokenizer"
+            else:
+                self.show_error(f"Cannot determine component type for architecture '{architecture}'.")
+                return
 
         # Hash and register
         components_base_dir = os.path.join(self.directories.models_diffusers, "_components")

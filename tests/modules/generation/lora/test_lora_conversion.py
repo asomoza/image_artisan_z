@@ -310,6 +310,61 @@ class TestConvertNonDiffusersZImage:
 # _convert_zimage_lora
 # ===========================================================================
 
+class TestTransformerPrefixedKohyaZImage:
+    """Regression: Z-Image LoRA with transformer. prefix but kohya lora_down/lora_up naming.
+
+    Keys like transformer.layers.N.attention.to_q.lora_down.weight — the transformer.
+    prefix must be stripped before conversion to avoid double-prefixing
+    (transformer.transformer.layers...).
+    """
+
+    def _build_sd(self, num_layers=2):
+        sd = {}
+        rank = 32
+        hidden = 3840
+        ffn = 10240
+        for i in range(num_layers):
+            for module, down_in, up_out in [
+                ("attention.to_q", hidden, hidden),
+                ("attention.to_k", hidden, hidden),
+                ("attention.to_v", hidden, hidden),
+                ("attention.to_out.0", hidden, hidden),
+                ("feed_forward.w1", hidden, ffn),
+                ("feed_forward.w2", ffn, hidden),
+                ("feed_forward.w3", hidden, ffn),
+            ]:
+                prefix = f"transformer.layers.{i}.{module}"
+                sd[f"{prefix}.lora_down.weight"] = torch.randn(rank, down_in)
+                sd[f"{prefix}.lora_up.weight"] = torch.randn(up_out, rank)
+                sd[f"{prefix}.alpha"] = torch.tensor(float(rank))
+        return sd
+
+    def test_no_double_transformer_prefix(self):
+        result = _convert_zimage_lora(self._build_sd())
+        assert all(k.startswith("transformer.") for k in result)
+        assert not any(k.startswith("transformer.transformer.") for k in result)
+
+    def test_all_keys_converted(self):
+        result = _convert_zimage_lora(self._build_sd())
+        assert all("lora_A" in k or "lora_B" in k for k in result)
+        assert not any("lora_down" in k for k in result)
+
+    def test_expected_keys_present(self):
+        result = _convert_zimage_lora(self._build_sd(num_layers=1))
+        assert "transformer.layers.0.attention.to_q.lora_A.weight" in result
+        assert "transformer.layers.0.attention.to_q.lora_B.weight" in result
+        assert "transformer.layers.0.feed_forward.w1.lora_A.weight" in result
+        assert "transformer.layers.0.attention.to_out.0.lora_A.weight" in result
+
+    def test_layer_count(self):
+        result = _convert_zimage_lora(self._build_sd(num_layers=30))
+        layer_indices = {
+            int(k.split("layers.")[1].split(".")[0])
+            for k in result if "layers." in k
+        }
+        assert layer_indices == set(range(30))
+
+
 class TestConvertZImageLora:
     def test_passthrough_diffusers_format(self):
         sd = {
@@ -673,3 +728,129 @@ class TestMapFlux2LokrLayerToTargets:
 
     def test_unknown_empty(self):
         assert _map_flux2_lokr_layer_to_targets("totally_unknown") == []
+
+
+# ===========================================================================
+# Regression: kohya lora_unet_ prefix with lora_down/lora_up (Klein 9B)
+# ===========================================================================
+
+class TestKohyaLoraUnetFlux2Klein9B:
+    """Regression test for kohya-format Flux2 Klein 9B LoRA.
+
+    Key format: lora_unet_{block_type}_{idx}_{layer}.lora_down.weight / .lora_up.weight / .alpha
+    8 double blocks (attn+mlp for img+txt), 24 single blocks (linear1+linear2).
+    Rank 64, alpha 32.0.
+    """
+
+    RANK = 64
+    HIDDEN = 4096
+    ALPHA = 32.0
+    NUM_DOUBLE = 8
+    NUM_SINGLE = 24
+
+    def _build_sd(self):
+        sd = {}
+        r, h, a = self.RANK, self.HIDDEN, self.ALPHA
+        for idx in range(self.NUM_DOUBLE):
+            for layer, up_dim in [
+                ("img_attn_proj", h),
+                ("img_attn_qkv", h * 3),
+                ("img_mlp_0", h * 6),
+                ("img_mlp_2", h),
+                ("txt_attn_proj", h),
+                ("txt_attn_qkv", h * 3),
+                ("txt_mlp_0", h * 6),
+                ("txt_mlp_2", h),
+            ]:
+                down_in = h if "mlp_2" not in layer else h * 3
+                prefix = f"lora_unet_double_blocks_{idx}_{layer}"
+                sd[f"{prefix}.lora_down.weight"] = torch.randn(r, down_in)
+                sd[f"{prefix}.lora_up.weight"] = torch.randn(up_dim, r)
+                sd[f"{prefix}.alpha"] = torch.tensor(a)
+
+        for idx_s in range(self.NUM_SINGLE):
+            for layer, down_in, up_dim in [
+                ("linear1", h, h * 9),
+                ("linear2", h * 4, h),
+            ]:
+                prefix = f"lora_unet_single_blocks_{idx_s}_{layer}"
+                sd[f"{prefix}.lora_down.weight"] = torch.randn(r, down_in)
+                sd[f"{prefix}.lora_up.weight"] = torch.randn(up_dim, r)
+                sd[f"{prefix}.alpha"] = torch.tensor(a)
+
+        return sd
+
+    def test_all_keys_converted_to_diffusers(self):
+        result = _convert_flux2_lora(self._build_sd())
+        assert all(k.startswith("transformer.") for k in result)
+        assert all("lora_A" in k or "lora_B" in k for k in result)
+        assert not any("lora_unet" in k for k in result)
+
+    def test_double_block_count(self):
+        result = _convert_flux2_lora(self._build_sd())
+        indices = {
+            int(k.split("transformer_blocks.")[1].split(".")[0])
+            for k in result
+            if "transformer_blocks." in k and "single_transformer_blocks." not in k
+        }
+        assert indices == set(range(self.NUM_DOUBLE))
+
+    def test_single_block_count(self):
+        result = _convert_flux2_lora(self._build_sd())
+        indices = {
+            int(k.split("single_transformer_blocks.")[1].split(".")[0])
+            for k in result if "single_transformer_blocks." in k
+        }
+        assert indices == set(range(self.NUM_SINGLE))
+
+    def test_qkv_split_in_double_blocks(self):
+        result = _convert_flux2_lora(self._build_sd())
+        for idx in range(self.NUM_DOUBLE):
+            tb = f"transformer.transformer_blocks.{idx}"
+            # img_attn QKV split
+            assert f"{tb}.attn.to_q.lora_A.weight" in result
+            assert f"{tb}.attn.to_k.lora_A.weight" in result
+            assert f"{tb}.attn.to_v.lora_A.weight" in result
+            assert f"{tb}.attn.to_q.lora_B.weight" in result
+            # txt_attn QKV split
+            assert f"{tb}.attn.add_q_proj.lora_A.weight" in result
+            assert f"{tb}.attn.add_k_proj.lora_B.weight" in result
+            assert f"{tb}.attn.add_v_proj.lora_B.weight" in result
+
+    def test_proj_and_mlp_in_double_blocks(self):
+        result = _convert_flux2_lora(self._build_sd())
+        for idx in range(self.NUM_DOUBLE):
+            tb = f"transformer.transformer_blocks.{idx}"
+            assert f"{tb}.attn.to_out.0.lora_A.weight" in result
+            assert f"{tb}.attn.to_add_out.lora_A.weight" in result
+            assert f"{tb}.ff.linear_in.lora_A.weight" in result
+            assert f"{tb}.ff.linear_out.lora_B.weight" in result
+            assert f"{tb}.ff_context.linear_in.lora_A.weight" in result
+            assert f"{tb}.ff_context.linear_out.lora_B.weight" in result
+
+    def test_single_block_mappings(self):
+        result = _convert_flux2_lora(self._build_sd())
+        for idx in range(self.NUM_SINGLE):
+            stb = f"transformer.single_transformer_blocks.{idx}"
+            assert f"{stb}.attn.to_qkv_mlp_proj.lora_A.weight" in result
+            assert f"{stb}.attn.to_qkv_mlp_proj.lora_B.weight" in result
+            assert f"{stb}.attn.to_out.lora_A.weight" in result
+            assert f"{stb}.attn.to_out.lora_B.weight" in result
+
+    def test_no_fused_qkv_keys_remain(self):
+        result = _convert_flux2_lora(self._build_sd())
+        assert not any(".qkv." in k for k in result)
+
+    def test_alpha_scaling_applied(self):
+        """Alpha/rank scaling must be baked into lora_A weights."""
+        r = self.RANK
+        scale = self.ALPHA / r  # 32/64 = 0.5
+        down = torch.ones(r, self.HIDDEN)
+        sd = {
+            "lora_unet_double_blocks_0_img_attn_proj.lora_down.weight": down.clone(),
+            "lora_unet_double_blocks_0_img_attn_proj.lora_up.weight": torch.ones(self.HIDDEN, r),
+            "lora_unet_double_blocks_0_img_attn_proj.alpha": torch.tensor(self.ALPHA),
+        }
+        result = _convert_flux2_lora(sd)
+        a_key = "transformer.transformer_blocks.0.attn.to_out.0.lora_A.weight"
+        assert torch.allclose(result[a_key], down * scale)

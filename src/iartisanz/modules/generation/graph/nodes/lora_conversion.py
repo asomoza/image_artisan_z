@@ -46,9 +46,18 @@ def _convert_non_diffusers_z_image_lora_to_diffusers(state_dict):
     - ``.lora_down.weight``/``.lora_up.weight`` → ``.lora_A.weight``/``.lora_B.weight``
       conversion with alpha scaling
     """
-    has_diffusion_model = any(k.startswith("diffusion_model.") for k in state_dict)
-    if has_diffusion_model:
-        state_dict = {k.removeprefix("diffusion_model."): v for k, v in state_dict.items()}
+    # Strip known prefixes — keys get re-prefixed with "transformer." at the end.
+    # "transformer." can appear on kohya-style keys (lora_down/lora_up naming)
+    # that still need conversion, so strip it here to avoid double-prefixing.
+    strip_prefixes = ("transformer.", "diffusion_model.")
+    stripped = {}
+    for k, v in state_dict.items():
+        for pfx in strip_prefixes:
+            if k.startswith(pfx):
+                k = k[len(pfx):]
+                break
+        stripped[k] = v
+    state_dict = stripped
 
     # FIX 1: Handle both lora_unet_ and lora_unet__ prefixes
     # (Fun-distilled format uses double underscore)
@@ -407,6 +416,14 @@ def _convert_flux2_lora(state_dict: dict) -> dict:
         return state_dict
 
     state_dict = _normalize_flux2_lora_keys(state_dict)
+
+    # Strip prefixes early so is_original_format check sees dot-separated keys
+    strip_prefixes = ("base_model.model.", "diffusion_model.")
+    state_dict = {
+        next((k[len(pfx):] for pfx in strip_prefixes if k.startswith(pfx)), k): v
+        for k, v in state_dict.items()
+    }
+    state_dict = _strip_lora_unet_prefix(state_dict)
 
     is_original_format = any(
         "double_blocks." in k or ("single_blocks." in k and "single_transformer_blocks." not in k)

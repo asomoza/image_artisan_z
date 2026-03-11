@@ -19,9 +19,9 @@ ARCHITECTURE_COMPATIBILITY: dict[str, dict[str, list[str]]] = {
         "tokenizer": ["Qwen2Tokenizer", "Qwen2TokenizerFast"],
     },
     "Flux2Transformer2DModel": {
-        "text_encoder": ["Qwen3ForCausalLM"],
+        "text_encoder": ["Qwen3ForCausalLM", "Mistral3ForConditionalGeneration"],
         "vae": ["AutoencoderKLFlux2"],
-        "tokenizer": ["Qwen2TokenizerFast"],
+        "tokenizer": ["Qwen2TokenizerFast", "PixtralProcessor"],
     },
 }
 
