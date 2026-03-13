@@ -146,7 +146,7 @@ class LoraInfoWidget(QWidget):
 
         lora_type_string = "Z-Image Turbo"
         if self.model_item.model_data.model_type is not None:
-            lora_type_string = MODEL_TYPES[self.model_item.model_data.model_type]
+            lora_type_string = MODEL_TYPES.get(self.model_item.model_data.model_type, "Unknown")
         self.model_type_label.setText(lora_type_string)
 
         self.version_label.setText(self.model_item.model_data.version)

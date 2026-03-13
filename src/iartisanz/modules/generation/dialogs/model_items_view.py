@@ -269,7 +269,13 @@ class ModelItemsView(QWidget):
             self.model_items_loader_thread.start()
 
     def add_single_item_from_path(
-        self, filepath: str, filename: str, *, component_mapping: dict | None = None
+        self,
+        filepath: str,
+        filename: str,
+        *,
+        component_mapping: dict | None = None,
+        model_type: int | None = None,
+        distilled: int | None = None,
     ):
         database = Database(os.path.join(self.directories.data_path, "app.db"))
         root_filename, _ = os.path.splitext(filename)
@@ -318,12 +324,22 @@ class ModelItemsView(QWidget):
                 self.error.emit("Model already exists, skipping import.")
                 return
         else:
+            if model_type is None or distilled is None:
+                from iartisanz.modules.generation.threads.model_items_scanner_thread import ModelItemsScannerThread
+
+                detected_type, detected_distilled = ModelItemsScannerThread._detect_model_type(filepath)
+                if model_type is None:
+                    model_type = detected_type
+                if distilled is None:
+                    distilled = int(detected_distilled)
+
             model_item = ModelItemDataObject(
                 root_filename=root_filename,
                 filepath=filepath,
                 name=(root_filename[:20] + "...") if len(root_filename) > 20 else root_filename,
                 version="1.0",
-                model_type=1,
+                model_type=model_type,
+                distilled=distilled,
                 hash=hash,
                 deleted=0,
             )

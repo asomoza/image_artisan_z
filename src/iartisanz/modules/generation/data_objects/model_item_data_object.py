@@ -17,6 +17,7 @@ class ModelItemDataObject:
     example: Optional[str] = None
     deleted: int = 0
     id: Optional[int] = None
+    distilled: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return attr.asdict(self)
@@ -27,14 +28,15 @@ class ModelItemDataObject:
 
     @classmethod
     def from_tuple(cls, data_tuple: tuple[Any, ...]) -> "ModelItemDataObject":
-        if len(data_tuple) != len(attr.fields(cls)):
-            raise ValueError(
-                f"Tuple length {len(data_tuple)} does not match the "
-                f"number of fields in {cls.__name__} ({len(attr.fields(cls))})"
-            )
-
         column_names = cls.get_column_names()
-        data_dict = dict(zip(column_names, data_tuple))
+        if len(data_tuple) < len(column_names):
+            # Pad with defaults for columns added in later migrations
+            defaults = {f.name: f.default for f in attr.fields(cls)}
+            data_dict = dict(zip(column_names, data_tuple))
+            for name in column_names[len(data_tuple):]:
+                data_dict[name] = defaults.get(name)
+        else:
+            data_dict = dict(zip(column_names, data_tuple))
         return cls(**data_dict)
 
     def __attrs_post_init__(self):

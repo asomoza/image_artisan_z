@@ -19,16 +19,17 @@ from iartisanz.modules.generation.graph.nodes.zimage_model_node import ZImageMod
 from iartisanz.modules.generation.graph.nodes.zimage_prompt_encode_node import ZImagePromptEncoderNode
 
 
-def create_default_graph(model_type: int = 1):
+def create_default_graph(model_type: int = 1, distilled: bool = True):
     """Create the default node graph for Z-Image text-to-image generation.
 
     Args:
         model_type: Model type int. Z-Image Turbo (1) uses 9 steps and no CFG;
             Z-Image base (2) uses 50 steps and guidance 5.0.
+        distilled: Unused for Z-Image, included for API consistency.
     """
-    from iartisanz.modules.generation.constants import MODEL_TYPE_DEFAULTS
+    from iartisanz.modules.generation.constants import get_model_type_defaults
 
-    defaults = MODEL_TYPE_DEFAULTS.get(model_type, MODEL_TYPE_DEFAULTS[1])
+    defaults = get_model_type_defaults(model_type, distilled)
 
     node_graph = ImageArtisanZNodeGraph()
 
@@ -101,16 +102,17 @@ def create_default_graph(model_type: int = 1):
     return node_graph
 
 
-def create_default_flux2_graph(model_type: int = 3):
+def create_default_flux2_graph(model_type: int = 3, distilled: bool = True):
     """Create the default node graph for Flux.2 Klein text-to-image generation.
 
     Args:
-        model_type: Model type int. Distilled variants (3, 5) use 4 steps and
-            guidance 1.0; base variants (4, 6) use 30 steps and guidance 4.0.
+        model_type: Model type int (3=Klein 9B, 5=Klein 4B).
+        distilled: True for distilled variants (few steps, no CFG),
+            False for base variants (more steps, higher guidance).
     """
-    from iartisanz.modules.generation.constants import MODEL_TYPE_DEFAULTS
+    from iartisanz.modules.generation.constants import get_model_type_defaults
 
-    defaults = MODEL_TYPE_DEFAULTS.get(model_type, MODEL_TYPE_DEFAULTS[3])
+    defaults = get_model_type_defaults(model_type, distilled)
 
     node_graph = ImageArtisanZNodeGraph()
 
@@ -187,7 +189,7 @@ def create_default_flux2_graph(model_type: int = 3):
     return node_graph
 
 
-def create_default_flux2_dev_graph(model_type: int = 7):
+def create_default_flux2_dev_graph(model_type: int = 7, distilled: bool = True):
     """Create the default node graph for Flux.2 Dev text-to-image generation.
 
     Uses Flux2DevModelNode (Mistral3 text encoder) and Flux2DevPromptEncoderNode.
@@ -195,10 +197,11 @@ def create_default_flux2_dev_graph(model_type: int = 7):
 
     Args:
         model_type: Model type int. Defaults to 7 (Flux.2 Dev).
+        distilled: Unused for Dev, included for API consistency.
     """
-    from iartisanz.modules.generation.constants import MODEL_TYPE_DEFAULTS
+    from iartisanz.modules.generation.constants import get_model_type_defaults
 
-    defaults = MODEL_TYPE_DEFAULTS.get(model_type, MODEL_TYPE_DEFAULTS[7])
+    defaults = get_model_type_defaults(model_type, distilled)
 
     node_graph = ImageArtisanZNodeGraph()
 
@@ -275,12 +278,12 @@ def create_default_flux2_dev_graph(model_type: int = 7):
     return node_graph
 
 
-def create_graph_for_model_type(model_type: int) -> ImageArtisanZNodeGraph:
+def create_graph_for_model_type(model_type: int, distilled: bool = True) -> ImageArtisanZNodeGraph:
     """Return the appropriate default graph for a given model type."""
     from iartisanz.modules.generation.constants import FLUX2_DEV_MODEL_TYPES, FLUX2_MODEL_TYPES
 
     if model_type in FLUX2_DEV_MODEL_TYPES:
-        return create_default_flux2_dev_graph(model_type)
+        return create_default_flux2_dev_graph(model_type, distilled)
     if model_type in FLUX2_MODEL_TYPES:
-        return create_default_flux2_graph(model_type)
-    return create_default_graph(model_type)
+        return create_default_flux2_graph(model_type, distilled)
+    return create_default_graph(model_type, distilled)

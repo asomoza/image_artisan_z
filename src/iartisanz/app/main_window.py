@@ -155,6 +155,7 @@ class MainWindow(QMainWindow):
                 "triggers TEXT",
                 "example TEXT",
                 "deleted BOOLEAN DEFAULT 0",
+                "distilled INT DEFAULT 1",
             ],
         )
 
@@ -174,6 +175,7 @@ class MainWindow(QMainWindow):
                 "triggers TEXT",
                 "example TEXT",
                 "deleted BOOLEAN DEFAULT 0",
+                "distilled INT DEFAULT 1",
             ],
         )
 

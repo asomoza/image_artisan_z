@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QBuffer, QIODevice, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QComboBox, QGridLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QGridLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
-from iartisanz.modules.generation.constants import MODEL_TYPES
+from iartisanz.modules.generation.constants import FLUX2_KLEIN_MODEL_TYPES, MODEL_TYPES
 from iartisanz.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
 from iartisanz.utils.database import Database
 
@@ -78,14 +78,20 @@ class ModelEditWidget(QWidget):
             self.model_type_combobox.addItem(type_name, model_type)
 
         if self.model_data.model_type is not None:
-            self.model_type_combobox.setCurrentText(MODEL_TYPES[self.model_data.model_type])
+            self.model_type_combobox.setCurrentText(MODEL_TYPES.get(self.model_data.model_type, "Z-Image Turbo"))
 
         model_layout.addWidget(self.model_type_combobox, 2, 1)
 
+        self.distilled_checkbox = QCheckBox("Distilled")
+        self.distilled_checkbox.setChecked(bool(self.model_data.distilled))
+        self.distilled_checkbox.setVisible(self.model_data.model_type in FLUX2_KLEIN_MODEL_TYPES)
+        self.model_type_combobox.currentIndexChanged.connect(self._on_type_changed)
+        model_layout.addWidget(self.distilled_checkbox, 3, 1)
+
         tags_label = QLabel("Tags:")
-        model_layout.addWidget(tags_label, 3, 0)
+        model_layout.addWidget(tags_label, 4, 0)
         self.tags_edit = QLineEdit(self.model_data.tags)
-        model_layout.addWidget(self.tags_edit, 3, 1)
+        model_layout.addWidget(self.tags_edit, 4, 1)
 
         model_layout.setColumnStretch(0, 1)
         model_layout.setColumnStretch(1, 4)
@@ -99,6 +105,10 @@ class ModelEditWidget(QWidget):
         main_layout.addWidget(self.save_button)
 
         self.setLayout(main_layout)
+
+    def _on_type_changed(self):
+        model_type = self.model_type_combobox.currentData()
+        self.distilled_checkbox.setVisible(model_type in FLUX2_KLEIN_MODEL_TYPES)
 
     def set_model_image(self):
         if self.image_viewer.pixmap_item is not None:
@@ -124,6 +134,7 @@ class ModelEditWidget(QWidget):
         self.model_data.name = self.name_edit.text()
         self.model_data.version = self.version_edit.text()
         self.model_data.model_type = self.model_type_combobox.currentData()
+        self.model_data.distilled = int(self.distilled_checkbox.isChecked())
         self.model_data.tags = self.tags_edit.text()
 
         if self.image_viewer.json_graph is not None:
@@ -141,6 +152,7 @@ class ModelEditWidget(QWidget):
                 "name": self.model_data.name,
                 "version": self.model_data.version,
                 "model_type": self.model_data.model_type,
+                "distilled": self.model_data.distilled,
                 "tags": self.model_data.tags,
                 "example": self.model_data.example,
             },

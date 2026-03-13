@@ -241,9 +241,64 @@ class ModelManagerDialog(BaseDialog):
         )
 
     def _import_diffusers_model(self, path: str):
+        import json
+
+        from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel
+
         from iartisanz.app.app import get_app_database_path
         from iartisanz.app.component_registry import COMPONENT_TYPES, ComponentRegistry
+        from iartisanz.modules.generation.constants import FLUX2_KLEIN_MODEL_TYPES, MODEL_TYPES
+        from iartisanz.modules.generation.threads.model_items_scanner_thread import ModelItemsScannerThread
         from iartisanz.utils.model_utils import calculate_component_hash
+
+        # Detect model type from transformer config
+        detected_type, detected_distilled = ModelItemsScannerThread._detect_model_type(path)
+
+        # Show import dialog for model type selection
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Import Model")
+        layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel(f"Importing: {os.path.basename(path)}"))
+
+        type_combo = QComboBox()
+        for model_type, type_name in MODEL_TYPES.items():
+            type_combo.addItem(type_name, model_type)
+        # Select detected type
+        for i in range(type_combo.count()):
+            if type_combo.itemData(i) == detected_type:
+                type_combo.setCurrentIndex(i)
+                break
+        layout.addRow("Model type:", type_combo)
+
+        distilled_checkbox = QCheckBox("Distilled")
+        distilled_checkbox.setChecked(detected_distilled)
+        distilled_checkbox.setVisible(detected_type in FLUX2_KLEIN_MODEL_TYPES)
+        layout.addRow(distilled_checkbox)
+
+        kv_cache_checkbox = QCheckBox("KV cache for edit images (model must be fine-tuned for this)")
+        kv_cache_checkbox.setVisible(detected_type in FLUX2_KLEIN_MODEL_TYPES)
+        layout.addRow(kv_cache_checkbox)
+
+        def on_type_changed():
+            mt = type_combo.currentData()
+            is_klein = mt in FLUX2_KLEIN_MODEL_TYPES
+            distilled_checkbox.setVisible(is_klein)
+            kv_cache_checkbox.setVisible(is_klein)
+
+        type_combo.currentIndexChanged.connect(lambda: on_type_changed())
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        selected_type = type_combo.currentData()
+        selected_distilled = distilled_checkbox.isChecked()
+        enable_kv_cache = kv_cache_checkbox.isChecked()
 
         model_dir = os.path.basename(path)
         target_dir = self.directories.models_diffusers
@@ -253,6 +308,19 @@ class ModelManagerDialog(BaseDialog):
             shutil.move(path, new_path)
         else:
             shutil.copytree(path, new_path)
+
+        # Write kv_cache_enabled flag into transformer config.json if requested
+        if enable_kv_cache:
+            config_path = os.path.join(new_path, "transformer", "config.json")
+            if os.path.isfile(config_path):
+                try:
+                    with open(config_path, "r") as f:
+                        cfg = json.loads(f.read())
+                    cfg["kv_cache_enabled"] = True
+                    with open(config_path, "w") as f:
+                        json.dump(cfg, f, indent=2)
+                except Exception:
+                    logger.exception("Failed to write kv_cache_enabled to config.json")
 
         # Register components in the registry
         db_path = get_app_database_path()
@@ -280,14 +348,18 @@ class ModelManagerDialog(BaseDialog):
                 component_mapping = None
 
         self.model_items_view.add_single_item_from_path(
-            new_path, os.path.basename(new_path), component_mapping=component_mapping
+            new_path,
+            os.path.basename(new_path),
+            component_mapping=component_mapping,
+            model_type=selected_type,
+            distilled=int(selected_distilled),
         )
 
     def _import_component_directory(self, path: str):
         """Import a standalone component directory (e.g. a quantized transformer/ or text_encoder/)."""
         import json
 
-        from PyQt6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel
+        from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel
 
         from iartisanz.app.app import get_app_database_path
         from iartisanz.app.component_registry import ComponentRegistry
@@ -379,6 +451,12 @@ class ModelManagerDialog(BaseDialog):
                 model_combo.addItem(model_name, model_id)
             layout.addRow("Associate with model:", model_combo)
 
+            # KV cache checkbox for transformer components
+            kv_cache_checkbox = None
+            if component_type == "transformer":
+                kv_cache_checkbox = QCheckBox("KV cache for edit images (model must be fine-tuned for this)")
+                layout.addRow(kv_cache_checkbox)
+
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
             buttons.accepted.connect(dialog.accept)
             buttons.rejected.connect(dialog.reject)
@@ -389,6 +467,7 @@ class ModelManagerDialog(BaseDialog):
 
             target_model_id = model_combo.currentData()
             selected_model_name = model_combo.currentText()
+            enable_kv_cache = kv_cache_checkbox is not None and kv_cache_checkbox.isChecked()
 
             # Copy to _components/{component_type}/{hash}/
             canonical_dir = os.path.join(components_base_dir, component_type, content_hash)
@@ -398,6 +477,21 @@ class ModelManagerDialog(BaseDialog):
                     shutil.move(path, canonical_dir)
                 else:
                     shutil.copytree(path, canonical_dir)
+
+            # Write kv_cache_enabled flag into config.json if requested
+            if enable_kv_cache:
+                config_path = os.path.join(canonical_dir, "config.json")
+                if os.path.isfile(config_path):
+                    try:
+                        with open(config_path, "r") as f:
+                            cfg = json.loads(f.read())
+                        cfg["kv_cache_enabled"] = True
+                        with open(config_path, "w") as f:
+                            json.dump(cfg, f, indent=2)
+                        # Update config_json for DB registration
+                        config_json = json.dumps(cfg)
+                    except Exception:
+                        logger.exception("Failed to write kv_cache_enabled to config.json")
 
             comp_info = registry.register_component(
                 component_type=component_type,
@@ -486,6 +580,7 @@ class ModelManagerDialog(BaseDialog):
             filepath=model_item_widget.model_data.filepath,
             model_type=model_item_widget.model_data.model_type,
             id=model_item_widget.model_data.id,
+            distilled=bool(model_item_widget.model_data.distilled),
         )
 
         model_info_widget = ModelInfoWidget(model_item_widget, self.directories)

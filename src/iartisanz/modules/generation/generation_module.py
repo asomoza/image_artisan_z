@@ -13,8 +13,8 @@ from iartisanz.modules.base_module import BaseModule
 from iartisanz.modules.generation.constants import (
     FLUX2_LATENT_RGB_FACTORS,
     FLUX2_MODEL_TYPES,
-    MODEL_TYPE_DEFAULTS,
     ZIMAGE_LATENT_RGB_FACTORS,
+    get_model_type_defaults,
 )
 from iartisanz.modules.generation.controlnet.controlnet_image_dialog import ControlNetImageDialog
 from iartisanz.modules.generation.controlnet.controlnet_mask_dialog import ControlNetMaskDialog
@@ -53,7 +53,9 @@ class GenerationModule(BaseModule):
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.dtype = torch.bfloat16
-        self.node_graph = create_graph_for_model_type(self.gen_settings.model.model_type)
+        self.node_graph = create_graph_for_model_type(
+            self.gen_settings.model.model_type, self.gen_settings.model.distilled
+        )
         self.generating = False
 
         self._last_generation_json_graph: str | None = None
@@ -488,7 +490,9 @@ class GenerationModule(BaseModule):
                 self.on_abort()
                 self.generation_thread.wait()
 
-            self.node_graph = create_graph_for_model_type(self.selected_model.model_type)
+            self.node_graph = create_graph_for_model_type(
+                self.selected_model.model_type, self.selected_model.distilled
+            )
             self.generation_thread.clean_up()
             self.generation_thread = None
             self.node_graph = None
@@ -499,7 +503,9 @@ class GenerationModule(BaseModule):
                 torch.cuda.ipc_collect()
                 torch.cuda.empty_cache()
 
-            self.node_graph = create_graph_for_model_type(self.selected_model.model_type)
+            self.node_graph = create_graph_for_model_type(
+                self.selected_model.model_type, self.selected_model.distilled
+            )
             self.create_generation_thread()
 
             # load loras if any
@@ -550,7 +556,9 @@ class GenerationModule(BaseModule):
             # Recreate staged graph/thread without clearing ModelManager / VRAM.
             old_thread = self.generation_thread
             self.generation_thread = None
-            self.node_graph = create_graph_for_model_type(self.selected_model.model_type)
+            self.node_graph = create_graph_for_model_type(
+                self.selected_model.model_type, self.selected_model.distilled
+            )
             self.create_generation_thread()
             if old_thread is not None:
                 try:
@@ -797,14 +805,14 @@ class GenerationModule(BaseModule):
             self._close_dialog(dialog_key)
 
     @staticmethod
-    def _needs_graph_rebuild(old_type: int, new_type: int) -> bool:
+    def _needs_graph_rebuild(old_type: int, new_type: int, old_distilled: bool = True, new_distilled: bool = True) -> bool:
         """Return True when switching model types requires a graph rebuild.
 
         This covers both cross-family switches (Z-Image <-> Flux2, different
         node topology) and within-family variant switches (e.g. Turbo <-> Base,
-        different default steps/guidance).
+        distilled <-> base — different default steps/guidance).
         """
-        return old_type != new_type
+        return old_type != new_type or old_distilled != new_distilled
 
     def _rebuild_graph_for_model(self, model_data) -> None:
         """Full teardown and rebuild when switching to a different model architecture.
@@ -815,7 +823,7 @@ class GenerationModule(BaseModule):
         """
         # Reset settings to model-specific defaults, preserving non-generation prefs.
         self.gen_settings.reset_to_defaults(preserve_model=True)
-        defaults = MODEL_TYPE_DEFAULTS.get(model_data.model_type, {})
+        defaults = get_model_type_defaults(model_data.model_type, model_data.distilled)
         for key, value in defaults.items():
             self.gen_settings.apply_change(key, value)
         self.gen_settings.apply_change("model", model_data)
@@ -855,7 +863,7 @@ class GenerationModule(BaseModule):
         # Recreate graph and thread.
         old_thread = self.generation_thread
         self.generation_thread = None
-        self.node_graph = create_graph_for_model_type(model_data.model_type)
+        self.node_graph = create_graph_for_model_type(model_data.model_type, model_data.distilled)
         self.create_generation_thread()
         if old_thread is not None:
             try:
@@ -895,10 +903,11 @@ class GenerationModule(BaseModule):
 
             if self.selected_model != model_data:
                 old_type = getattr(self.selected_model, "model_type", 0)
+                old_distilled = getattr(self.selected_model, "distilled", True)
                 self.selected_model = model_data
                 self.gen_settings.apply_change("model", model_data)
 
-                if self._needs_graph_rebuild(old_type, model_data.model_type):
+                if self._needs_graph_rebuild(old_type, model_data.model_type, old_distilled, model_data.distilled):
                     self._rebuild_graph_for_model(model_data)
                 else:
                     self.generation_thread.update_model(model_data)

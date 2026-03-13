@@ -558,6 +558,44 @@ class Flux2DenoiseNode(Node):
             edit_image_latents = edit_image_latents.to(self.device, dtype=transformer_dtype)
             edit_image_latent_ids = edit_image_latent_ids.to(self.device)
 
+        # KV cache: use when edit images are present, the transformer was fine-tuned for it,
+        # and no LoRA spatial masks or FreeFuse are active (they patch attention incompatibly)
+        kv_cache_enabled = getattr(transformer_raw.config, "kv_cache_enabled", False)
+        use_kv_cache = has_edit_images and kv_cache_enabled and not lora_masks_applied and not freefuse_patched
+        if has_edit_images and not use_kv_cache:
+            if not kv_cache_enabled:
+                logger.debug("[Flux2DenoiseNode] KV cache not enabled for this transformer; using concat-every-step")
+            else:
+                reasons = []
+                if lora_masks_applied:
+                    reasons.append("LoRA spatial masks")
+                if freefuse_patched:
+                    reasons.append("FreeFuse attention bias")
+                logger.info("[Flux2DenoiseNode] KV cache disabled due to: %s; using concat-every-step fallback",
+                            ", ".join(reasons))
+        original_attn_processors = None
+        if use_kv_cache:
+            try:
+                from diffusers.models.transformers.transformer_flux2 import (
+                    Flux2KVAttnProcessor,
+                    Flux2KVCache,  # noqa: F811
+                    Flux2KVParallelSelfAttnProcessor,
+                )
+
+                # Swap attention processors to KV-aware variants
+                original_attn_processors = transformer_raw.attn_processors.copy()
+                for block in transformer_raw.transformer_blocks:
+                    block.attn.set_processor(Flux2KVAttnProcessor())
+                for block in transformer_raw.single_transformer_blocks:
+                    block.attn.set_processor(Flux2KVParallelSelfAttnProcessor())
+
+                logger.info("[Flux2DenoiseNode] KV cache enabled for edit images (%d ref tokens)",
+                            edit_image_latents.shape[1])
+            except ImportError:
+                logger.warning("[Flux2DenoiseNode] Flux2KVCache not available in diffusers; falling back to concat")
+                use_kv_cache = False
+                original_attn_processors = None
+
         # Compute sigmas and empirical mu for Flux2 scheduling
         sigmas = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps).tolist()
         image_seq_len = latents.shape[1]
@@ -624,8 +662,15 @@ class Flux2DenoiseNode(Node):
 
         self.scheduler.set_begin_index(0)
 
+        kv_cache = None
+        num_ref_tokens = edit_image_latents.shape[1] if has_edit_images else 0
+
         for i, t in enumerate(timesteps):
             if self.abort:
+                if kv_cache is not None:
+                    kv_cache.clear()
+                if original_attn_processors is not None:
+                    transformer_raw.set_attn_processor(original_attn_processors)
                 return
 
             step_idx = i // order
@@ -639,15 +684,48 @@ class Flux2DenoiseNode(Node):
 
             timestep = t.expand(latents.shape[0]).to(latents.dtype)
 
-            if has_edit_images:
+            # Determine KV cache mode for this step
+            if use_kv_cache:
+                if i == 0:
+                    # Step 0: extract — concat ref tokens, build cache
+                    kv_mode = "extract"
+                    latent_model_input = torch.cat(
+                        [edit_image_latents, latents], dim=1
+                    ).to(transformer_dtype)
+                    loop_latent_ids = torch.cat(
+                        [edit_image_latent_ids, latent_ids], dim=1
+                    )
+                else:
+                    # Steps 1+: cached — noise tokens only, use cached ref K/V
+                    kv_mode = "cached"
+                    latent_model_input = latents.to(transformer_dtype)
+                    loop_latent_ids = latent_ids
+            elif has_edit_images:
+                # Fallback: concat every step (LoRA spatial masks or FreeFuse active)
+                kv_mode = None
                 latent_model_input = torch.cat([latents, edit_image_latents], dim=1).to(transformer_dtype)
                 loop_latent_ids = torch.cat([latent_ids, edit_image_latent_ids], dim=1)
             else:
+                kv_mode = None
                 latent_model_input = latents.to(transformer_dtype)
                 loop_latent_ids = latent_ids
 
             if mark is not None and callable(mark):
                 mark()
+
+            # Build KV cache kwargs for this step
+            kv_kwargs = {}
+            if kv_mode == "extract":
+                kv_kwargs = {
+                    "kv_cache_mode": "extract",
+                    "num_ref_tokens": num_ref_tokens,
+                    "ref_fixed_timestep": 0.0,
+                }
+            elif kv_mode == "cached" and kv_cache is not None:
+                kv_kwargs = {
+                    "kv_cache": kv_cache,
+                    "kv_cache_mode": "cached",
+                }
 
             # Conditional forward pass
             def _run_cond():
@@ -662,7 +740,8 @@ class Flux2DenoiseNode(Node):
                             txt_ids=text_ids,
                             img_ids=loop_latent_ids,
                             return_dict=False,
-                        )[0]
+                            **kv_kwargs,
+                        )
                 return transformer(
                     hidden_states=latent_model_input,
                     timestep=timestep / 1000,
@@ -671,22 +750,45 @@ class Flux2DenoiseNode(Node):
                     txt_ids=text_ids,
                     img_ids=loop_latent_ids,
                     return_dict=False,
-                )[0]
+                    **kv_kwargs,
+                )
 
-            noise_pred = self._run_with_oom_retry(
+            cond_result = self._run_with_oom_retry(
                 mm,
                 _run_cond,
                 preserve=("transformer",),
                 description="transformer (cond)",
             )
 
-            # Only keep the generated latent tokens
+            # Handle KV cache extract return: ((output,), kv_cache)
+            if kv_mode == "extract":
+                noise_pred, kv_cache = cond_result
+                noise_pred = noise_pred[0]
+                logger.debug("[Flux2DenoiseNode] KV cache extracted on step 0")
+            else:
+                noise_pred = cond_result[0]
+
+            # Only keep the generated latent tokens (needed for non-KV concat mode)
             noise_pred = noise_pred[:, : latents.size(1)]
 
             # Classifier-free guidance (gated by guidance window)
             if apply_cfg:
                 def _run_uncond():
                     ctx = getattr(transformer, "cache_context", None)
+                    # For uncond, reuse the same kv_cache (ref tokens are prompt-independent)
+                    uncond_kv_kwargs = {}
+                    if kv_mode == "extract":
+                        uncond_kv_kwargs = {
+                            "kv_cache_mode": "extract",
+                            "num_ref_tokens": num_ref_tokens,
+                            "ref_fixed_timestep": 0.0,
+                        }
+                    elif kv_mode == "cached" and kv_cache is not None:
+                        uncond_kv_kwargs = {
+                            "kv_cache": kv_cache,
+                            "kv_cache_mode": "cached",
+                        }
+
                     if ctx is not None:
                         with ctx("uncond"):
                             return transformer(
@@ -697,7 +799,8 @@ class Flux2DenoiseNode(Node):
                                 txt_ids=negative_text_ids,
                                 img_ids=loop_latent_ids,
                                 return_dict=False,
-                            )[0]
+                                **uncond_kv_kwargs,
+                            )
                     return transformer(
                         hidden_states=latent_model_input,
                         timestep=timestep / 1000,
@@ -706,14 +809,22 @@ class Flux2DenoiseNode(Node):
                         txt_ids=negative_text_ids,
                         img_ids=loop_latent_ids,
                         return_dict=False,
-                    )[0]
+                        **uncond_kv_kwargs,
+                    )
 
-                neg_noise_pred = self._run_with_oom_retry(
+                uncond_result = self._run_with_oom_retry(
                     mm,
                     _run_uncond,
                     preserve=("transformer",),
                     description="transformer (uncond)",
                 )
+
+                # Discard the uncond kv_cache from extract step (we keep the cond one)
+                if kv_mode == "extract":
+                    neg_noise_pred = uncond_result[0][0]
+                else:
+                    neg_noise_pred = uncond_result[0]
+
                 neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
                 noise_pred = neg_noise_pred + current_guidance_scale * (noise_pred - neg_noise_pred)
 
@@ -737,6 +848,14 @@ class Flux2DenoiseNode(Node):
             is_step_boundary = (i + 1) > num_warmup_steps and (i + 1) % order == 0
             if (is_last or is_step_boundary) and self.callback is not None:
                 self.callback(step_idx, t, latents)
+
+        # Clean up KV cache and restore original attention processors
+        if kv_cache is not None:
+            kv_cache.clear()
+            kv_cache = None
+        if original_attn_processors is not None:
+            transformer_raw.set_attn_processor(original_attn_processors)
+            original_attn_processors = None
 
         # Clean up FreeFuse attention bias patches
         if freefuse_patched:

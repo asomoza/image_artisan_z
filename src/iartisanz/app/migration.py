@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = "7"
+CURRENT_SCHEMA_VERSION = "8"
 
 
 def _get_meta(db: Database, key: str) -> str | None:
@@ -201,6 +201,35 @@ def _remove_legacy_symlinks(directories: DirectoriesObject) -> None:
         logger.info("Migration v5: removed %d legacy symlinks.", removed)
 
 
+def _consolidate_klein_model_types(db: Database) -> None:
+    """Merge Klein distilled/base model types and add distilled column.
+
+    Old types 3 (Klein 9B) and 4 (Klein Base 9B) → type 3, distinguished by distilled flag.
+    Old types 5 (Klein 4B) and 6 (Klein Base 4B) → type 5, distinguished by distilled flag.
+    """
+    for table in ("model", "lora_model"):
+        # Add distilled column (defaults to 1 = distilled)
+        try:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN distilled INT DEFAULT 1")
+        except Exception:
+            logger.debug("distilled column already exists on %s", table)
+
+        # Old type 3 (distilled) → keep type 3, distilled=1 (already default)
+        # Old type 4 (base) → remap to type 3, distilled=0
+        db.execute(f"UPDATE {table} SET model_type = 3, distilled = 0 WHERE model_type = 4")
+        # Old type 5 (distilled) → keep type 5, distilled=1 (already default)
+        # Old type 6 (base) → remap to type 5, distilled=0
+        db.execute(f"UPDATE {table} SET model_type = 5, distilled = 0 WHERE model_type = 6")
+
+    count_4 = db.fetch_one("SELECT COUNT(*) FROM model WHERE model_type = 4")
+    count_6 = db.fetch_one("SELECT COUNT(*) FROM model WHERE model_type = 6")
+    logger.info(
+        "Klein consolidation: remaining type 4=%d, type 6=%d (should both be 0)",
+        count_4[0] if count_4 else 0,
+        count_6[0] if count_6 else 0,
+    )
+
+
 def run_migrations(db: Database, directories: DirectoriesObject) -> None:
     """Run any pending database migrations."""
     version = _get_meta(db, "schema_version")
@@ -246,6 +275,13 @@ def run_migrations(db: Database, directories: DirectoriesObject) -> None:
             db.execute("UPDATE component SET dtype = NULL WHERE dtype NOT IN ('bfloat16', 'float16', 'float32', 'float64')")
         except Exception as e:
             logger.debug("dtype cleanup: %s", e)
+
+    if version is not None and version < "8":
+        logger.info("Consolidating Klein model types and adding distilled column...")
+        try:
+            _consolidate_klein_model_types(db)
+        except Exception as e:
+            logger.error("Klein model type consolidation failed: %s", e, exc_info=True)
 
     _set_meta(db, "schema_version", CURRENT_SCHEMA_VERSION)
     logger.info("Migration to schema v%s complete.", CURRENT_SCHEMA_VERSION)

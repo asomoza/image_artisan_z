@@ -8,6 +8,7 @@ class ModelDataObject:
     filepath: str = attr.ib(default="")
     model_type: int = attr.ib(default=0)
     id: int = attr.ib(default=0)
+    distilled: bool = attr.ib(default=True)
 
     @classmethod
     def get_column_names(cls) -> list[str]:

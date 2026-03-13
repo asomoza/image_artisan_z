@@ -118,7 +118,7 @@ class ModelItemsScannerThread(QThread):
                                 img_bytes = image_file.read()
                             image_buffer = BytesIO(img_bytes)
                 else:
-                    model_type = self._detect_model_type(filepath)
+                    model_type, distilled = self._detect_model_type(filepath)
                     model_item = ModelItemDataObject(
                         root_filename=root_filename,
                         filepath=filepath,
@@ -127,6 +127,7 @@ class ModelItemsScannerThread(QThread):
                         model_type=model_type,
                         hash=hash,
                         deleted=0,
+                        distilled=int(distilled),
                     )
 
                     self.database.insert(self.database_table, model_item.to_dict())
@@ -161,14 +162,13 @@ class ModelItemsScannerThread(QThread):
         return None
 
     @staticmethod
-    def _detect_model_type(model_path: str) -> int:
-        """Detect model type from transformer config.json and directory name.
-
-        Uses the transformer class to identify Flux2 models, then the directory
-        name and config to distinguish Dev from Klein 9B/4B and distilled/base.
+    def _detect_model_type(model_path: str) -> tuple[int, bool]:
+        """Detect model type and distilled flag from transformer config.json and directory name.
 
         Returns:
-            Model type int (1=Z-Image Turbo, 3-6=Flux.2 Klein, 7=Flux.2 Dev).
+            (model_type, distilled) tuple. model_type is one of:
+            1=Z-Image Turbo, 3=Flux.2 Klein 9B, 5=Flux.2 Klein 4B, 7=Flux.2 Dev.
+            distilled is True for distilled variants, False for base.
         """
         import json
 
@@ -177,11 +177,11 @@ class ModelItemsScannerThread(QThread):
             with open(config_path) as f:
                 config = json.load(f)
         except Exception:
-            return 1
+            return 1, True
 
         class_name = config.get("_class_name", "")
         if "Flux2" not in class_name:
-            return 1
+            return 1, True
 
         dir_name = os.path.basename(model_path).lower()
 
@@ -189,7 +189,7 @@ class ModelItemsScannerThread(QThread):
         # Dev has 48 single-stream layers; Klein 9B has 24, Klein 4B has 20.
         num_single_layers = config.get("num_single_layers", 0)
         if "dev" in dir_name or num_single_layers >= 48:
-            return 7
+            return 7, True
 
         # Determine 9B vs 4B from directory name, falling back to config heuristic.
         if "4b" in dir_name:
@@ -202,12 +202,10 @@ class ModelItemsScannerThread(QThread):
             is_4b = num_heads < 48
 
         # Determine distilled vs base from directory name.
-        is_base = "base" in dir_name
+        distilled = "base" not in dir_name
 
-        if is_4b:
-            return 6 if is_base else 5  # Klein 4B Base / Klein 4B
-        else:
-            return 4 if is_base else 3  # Klein 9B Base / Klein 9B
+        model_type = 5 if is_4b else 3
+        return model_type, distilled
 
     def _register_components(self, model_id: int, model_path: str) -> None:
         """Register component entries for a diffusers model if not already present."""

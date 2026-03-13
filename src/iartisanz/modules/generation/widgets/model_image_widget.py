@@ -32,7 +32,7 @@ class ModelImageWidget(QWidget):
 
         model_type_string = "SDXL"
         if self.model_data.model_type is not None:
-            model_type_string = MODEL_TYPES[self.model_data.model_type]
+            model_type_string = MODEL_TYPES.get(self.model_data.model_type, "Unknown")
 
         self.type_label = QLabel(model_type_string)
         self.type_label.setObjectName("item_type")
@@ -120,7 +120,7 @@ class ModelImageWidget(QWidget):
             self.version_label.setVisible(True)
 
     def set_model_type(self, model_type: int):
-        self.type_label.setText(MODEL_TYPES[model_type])
+        self.type_label.setText(MODEL_TYPES.get(model_type, "Unknown"))
 
     def set_model_image(self, pixmap: QPixmap):
         self.pixmap = pixmap

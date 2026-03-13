@@ -78,7 +78,7 @@ class LoraEditWidget(QWidget):
             self.model_type_combobox.addItem(type_name, model_type)
 
         if self.model_data.model_type is not None:
-            self.model_type_combobox.setCurrentText(MODEL_TYPES[self.model_data.model_type])
+            self.model_type_combobox.setCurrentText(MODEL_TYPES.get(self.model_data.model_type, "Z-Image Turbo"))
         model_layout.addWidget(self.model_type_combobox, 2, 1)
 
         tags_label = QLabel("Tags:")

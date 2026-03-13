@@ -113,7 +113,7 @@ class ModelInfoWidget(QWidget):
 
         model_type_string = "Z-Image Turbo"
         if self.model_item.model_data.model_type is not None:
-            model_type_string = MODEL_TYPES[self.model_item.model_data.model_type]
+            model_type_string = MODEL_TYPES.get(self.model_item.model_data.model_type, "Unknown")
         self.model_type_label.setText(model_type_string)
 
         self.version_label.setText(self.model_item.model_data.version)
@@ -236,5 +236,6 @@ class ModelInfoWidget(QWidget):
             filepath=self.model_item.model_data.filepath,
             model_type=self.model_item.model_data.model_type,
             id=self.model_item.model_data.id,
+            distilled=bool(self.model_item.model_data.distilled),
         )
         self.event_bus.publish("model", {"action": "update", "model_data_object": model_data_object})
