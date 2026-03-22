@@ -32,3 +32,4 @@ tmp/
 .ipynb_checkpoints/
 /docs/
 uv.lock
+.claude/
