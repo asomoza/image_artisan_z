@@ -8,17 +8,28 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from iartisanz.app.event_bus import EventBus
-from iartisanz.layouts.simple_flow_layout import SimpleFlowLayout
 from iartisanz.modules.generation.constants import MODEL_TYPES
 from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
 from iartisanz.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
 from iartisanz.modules.generation.widgets.model_item_widget import ModelItemWidget
+
+
+class _ClickableLabel(QLabel):
+    """A QLabel that emits ``clicked`` on mouse press."""
+
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class LoraInfoWidget(QWidget):
@@ -93,14 +104,18 @@ class LoraInfoWidget(QWidget):
         self.trigger_label.setObjectName("trigger_words")
         main_layout.addWidget(self.trigger_label)
 
-        trigger_words_container = QWidget()
-        self.triggers_layout = SimpleFlowLayout()
-        self.triggers_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        triggers_container = QWidget()
+        self.triggers_layout = QVBoxLayout()
         self.triggers_layout.setSpacing(4)
-        trigger_words_container.setLayout(self.triggers_layout)
-        main_layout.addWidget(trigger_words_container)
+        self.triggers_layout.setContentsMargins(0, 0, 0, 0)
+        triggers_container.setLayout(self.triggers_layout)
 
-        main_layout.addStretch()
+        self.triggers_scroll = QScrollArea()
+        self.triggers_scroll.setWidget(triggers_container)
+        self.triggers_scroll.setWidgetResizable(True)
+        self.triggers_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.triggers_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        main_layout.addWidget(self.triggers_scroll, 1)
 
         buttons_layout = QGridLayout()
 
@@ -157,16 +172,19 @@ class LoraInfoWidget(QWidget):
         if self.model_item.model_data.tags is None:
             self.tags_title_label.setVisible(False)
 
-        if self.model_item.model_data.triggers is not None:
+        if self.model_item.model_data.triggers:
             triggers_list = [tag.strip() for tag in self.model_item.model_data.triggers.split(",")]
-
             for trigger in triggers_list:
-                button = QPushButton(trigger)
-                button.setObjectName("trigger_item")
-                button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-                button.setCursor(Qt.CursorShape.PointingHandCursor)
-                button.clicked.connect(self.on_trigger_clicked)
-                self.triggers_layout.addWidget(button)
+                if not trigger:
+                    continue
+                label = _ClickableLabel(trigger)
+                label.setObjectName("trigger_item")
+                label.setWordWrap(True)
+                label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+                label.setCursor(Qt.CursorShape.PointingHandCursor)
+                label.clicked.connect(self._on_trigger_label_clicked)
+                self.triggers_layout.addWidget(label)
+            self.triggers_layout.addStretch()
         else:
             self.trigger_label.setVisible(False)
 
@@ -191,7 +209,7 @@ class LoraInfoWidget(QWidget):
     def on_generate_example(self):
         self.event_bus.publish("generate", {"action": "generate_from_json", "json_graph": self.json_graph})
 
-    def on_trigger_clicked(self):
-        button = self.sender()
-        self.trigger_clicked.emit(button.text())
-        self.event_bus.publish("lora", {"action": "trigger_clicked", "trigger": button.text()})
+    def _on_trigger_label_clicked(self):
+        label = self.sender()
+        self.trigger_clicked.emit(label.text())
+        self.event_bus.publish("lora", {"action": "trigger_clicked", "trigger": label.text()})

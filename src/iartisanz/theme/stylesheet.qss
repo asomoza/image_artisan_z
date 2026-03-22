@@ -273,8 +273,18 @@ QPushButton#trigger_item:hover {
     background-color: #434b6e;
 }
 
-QPushButton#trigger_item:pressed {    
+QPushButton#trigger_item:pressed {
     background-color: #555f8b;
+}
+
+QLabel#trigger_item {
+    background-color: #2d334b;
+    padding: 4px 6px;
+    border-radius: 5px;
+}
+
+QLabel#trigger_item:hover {
+    background-color: #434b6e;
 }
 
 QLabel#prompt_label {    

@@ -90,7 +90,7 @@ class LoraEditWidget(QWidget):
         model_layout.setColumnStretch(1, 4)
         main_layout.addLayout(model_layout)
 
-        triggers_char_limit = 550
+        triggers_char_limit = 1024
         triggers_label = QLabel("Trigger words:")
         main_layout.addWidget(triggers_label)
         self.triggers_edit = SimpleCustomTextEdit(char_limit=triggers_char_limit)
