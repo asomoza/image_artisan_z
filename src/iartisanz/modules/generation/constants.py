@@ -102,16 +102,16 @@ def get_default_granular_weights(model_type: int) -> dict:
 
 # Default generation parameters per model type.
 # Klein types (3, 5) have different defaults for distilled vs base variants.
-MODEL_TYPE_DEFAULTS: dict[int, dict[str, int | float]] = {
-    1: {"num_inference_steps": 9, "guidance_scale": 1.0},
-    2: {"num_inference_steps": 50, "guidance_scale": 5.0},
-    3: {"num_inference_steps": 4, "guidance_scale": 1.0},
-    5: {"num_inference_steps": 4, "guidance_scale": 1.0},
-    7: {"num_inference_steps": 50, "guidance_scale": 4.0},
+MODEL_TYPE_DEFAULTS: dict[int, dict] = {
+    1: {"num_inference_steps": 9, "guidance_scale": 1.0, "shift": 3.0, "use_dynamic_shifting": False},
+    2: {"num_inference_steps": 50, "guidance_scale": 5.0, "shift": 6.0, "use_dynamic_shifting": False},
+    3: {"num_inference_steps": 4, "guidance_scale": 1.0, "use_dynamic_shifting": True},
+    5: {"num_inference_steps": 4, "guidance_scale": 1.0, "use_dynamic_shifting": True},
+    7: {"num_inference_steps": 50, "guidance_scale": 4.0, "use_dynamic_shifting": True},
 }
 
 # Base (non-distilled) Klein defaults — used when distilled=False.
-_KLEIN_BASE_DEFAULTS: dict[str, int | float] = {"num_inference_steps": 30, "guidance_scale": 4.0}
+_KLEIN_BASE_DEFAULTS: dict = {"num_inference_steps": 30, "guidance_scale": 4.0, "use_dynamic_shifting": True}
 
 
 def get_model_type_defaults(model_type: int, distilled: bool = True) -> dict[str, int | float]:

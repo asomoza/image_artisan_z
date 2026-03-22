@@ -126,9 +126,9 @@ class Flux2DenoiseNode(Node):
         "lora",
         "edit_image_latents",
         "edit_image_latent_ids",
-        "edit_image_base_latents",
-        "edit_image_mask",
-        "edit_image_mask_strength",
+        "noise",
+        "strength",
+        "source_mask",
         "positive_prompt_text",
     ]
     OUTPUTS = ["latents", "latent_ids"]
@@ -596,59 +596,74 @@ class Flux2DenoiseNode(Node):
                 use_kv_cache = False
                 original_attn_processors = None
 
-        # Compute sigmas and empirical mu for Flux2 scheduling
-        sigmas = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps).tolist()
-        image_seq_len = latents.shape[1]
-        mu = compute_empirical_mu(image_seq_len, num_inference_steps)
+        # Source image img2img: strength controls how many steps to run
+        strength = getattr(self, "strength", None)
+        noise = getattr(self, "noise", None)
 
-        timesteps, num_inference_steps = self.retrieve_timesteps(
+        # Compute sigmas and empirical mu for Flux2 scheduling
+        # When strength < 1.0, compute more sigmas then truncate
+        total_steps = num_inference_steps
+        if strength is not None and float(strength) < 1.0:
+            total_steps = int(num_inference_steps / float(strength))
+
+        sigmas = np.linspace(1.0, 1.0 / total_steps, total_steps).tolist()
+        image_seq_len = latents.shape[1]
+        mu = compute_empirical_mu(image_seq_len, total_steps)
+
+        timesteps, total_steps = self.retrieve_timesteps(
             self.scheduler,
-            num_inference_steps,
+            total_steps,
             self.device,
             sigmas=sigmas,
             mu=mu,
         )
 
-        # Differential diffusion setup (edit image inpainting mask)
-        edit_base_latents = getattr(self, "edit_image_base_latents", None)
-        edit_mask_np = getattr(self, "edit_image_mask", None)
-        has_dd = edit_base_latents is not None and edit_mask_np is not None
+        # Save total step count BEFORE strength truncation for DD threshold schedule.
+        # This matches Z-Image: thresholds span the full schedule so that when
+        # strength < 1.0, only the low-threshold (mostly-preserve) masks are used.
+        total_time_steps = total_steps
+
+        # Truncate timesteps based on strength (img2img: fewer steps = more faithful)
+        if strength is not None and float(strength) < 1.0:
+            timesteps, num_inference_steps = self.get_timesteps(total_steps, float(strength))
+        else:
+            num_inference_steps = total_steps
+
+        # Differential diffusion setup (source image mask)
+        source_mask_np = getattr(self, "source_mask", None)
+        has_dd = noise is not None and source_mask_np is not None
         dd_masks = None
         initial_noise = None
         original_base = None
 
-        if has_dd:
-            original_base = edit_base_latents.to(self.device, dtype=latents.dtype)
-            initial_noise = latents.clone()
+        if noise is not None:
+            noise = noise.to(self.device)
+            original_base = latents.clone()
+            initial_noise = noise
 
-            # Mask from dialog: painted dark (0) = change, unpainted white (1) = preserve.
-            # This matches Z-Image DD convention — use directly as preserve_mask.
-            mask_t = numpy_to_pt(edit_mask_np[None, ...]).to(self.device, dtype=latents.dtype)
-            preserve_mask = mask_t  # (1, 1, H, W)
+            # Blend source image with noise at the first timestep
+            latents = self.scheduler.scale_noise(latents, timesteps[:1], noise)
 
-            # Apply strength: 1.0 = full DD, 0.0 = ignore mask (all change)
-            mask_strength = getattr(self, "edit_image_mask_strength", None)
-            if mask_strength is not None:
-                preserve_mask = preserve_mask * float(mask_strength)
+            if source_mask_np is not None:
+                # Mask convention: painted dark (0) = change, unpainted white (1) = preserve
+                mask_t = numpy_to_pt(source_mask_np[None, ...]).to(self.device, dtype=latents.dtype)
+                preserve_mask = mask_t  # (1, 1, H, W)
 
-            # Derive patchified spatial dims from latent_ids (T, H, W, L)
-            patch_h = int(latent_ids[0, :, 1].max().item()) + 1
-            patch_w = int(latent_ids[0, :, 2].max().item()) + 1
+                # Derive patchified spatial dims from latent_ids (T, H, W, L)
+                patch_h = int(latent_ids[0, :, 1].max().item()) + 1
+                patch_w = int(latent_ids[0, :, 2].max().item()) + 1
 
-            preserve_mask = F.interpolate(
-                preserve_mask, size=(patch_h, patch_w), mode="bilinear", align_corners=False
-            )
-            preserve_mask = preserve_mask.reshape(1, -1)  # (1, seq_len)
+                preserve_mask = F.interpolate(
+                    preserve_mask, size=(patch_h, patch_w), mode="bilinear", align_corners=False
+                )
+                preserve_mask = preserve_mask.reshape(1, -1)  # (1, seq_len)
 
-            # Per-step threshold schedule
-            mask_thresholds = (
-                torch.arange(num_inference_steps, dtype=preserve_mask.dtype) / num_inference_steps
-            )
-            mask_thresholds = mask_thresholds.reshape(-1, 1).to(self.device)
-            dd_masks = (preserve_mask > mask_thresholds).float()  # (steps, seq_len)
-
-            # Start from noised edit image (like img2img at full strength)
-            latents = self.scheduler.scale_noise(original_base, timesteps[:1], initial_noise)
+                # Per-step threshold schedule using total steps (before strength truncation)
+                mask_thresholds = (
+                    torch.arange(total_time_steps, dtype=preserve_mask.dtype) / total_time_steps
+                )
+                mask_thresholds = mask_thresholds.reshape(-1, 1).to(self.device)
+                dd_masks = (preserve_mask > mask_thresholds).float()  # (total_steps, seq_len)
 
         order = getattr(self.scheduler, "order", 1)
         num_warmup_steps = max(len(timesteps) - num_inference_steps * order, 0)
@@ -660,7 +675,8 @@ class Flux2DenoiseNode(Node):
         else:
             mark = None
 
-        self.scheduler.set_begin_index(0)
+        if strength is None or float(strength) >= 1.0:
+            self.scheduler.set_begin_index(0)
 
         kv_cache = None
         num_ref_tokens = edit_image_latents.shape[1] if has_edit_images else 0
@@ -831,15 +847,12 @@ class Flux2DenoiseNode(Node):
             # Scheduler step
             latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
-            # Differential diffusion blending
-            if has_dd and dd_masks is not None:
+            # Differential diffusion blending (skip last step — matches Z-Image)
+            if has_dd and dd_masks is not None and i < len(timesteps) - 1:
+                image_latent = self.scheduler.scale_noise(
+                    original_base, timesteps[i + 1 : i + 2], initial_noise
+                )
                 step_mask = dd_masks[i].unsqueeze(0).unsqueeze(-1)  # (1, seq_len, 1)
-                if i < len(timesteps) - 1:
-                    image_latent = self.scheduler.scale_noise(
-                        original_base, timesteps[i + 1 : i + 2], initial_noise
-                    )
-                else:
-                    image_latent = original_base
                 # mask=1 -> preserve original, mask=0 -> use denoised
                 latents = image_latent * step_mask + latents * (1 - step_mask)
 
@@ -912,3 +925,11 @@ class Flux2DenoiseNode(Node):
             scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
             timesteps = scheduler.timesteps
         return timesteps, num_inference_steps
+
+    def get_timesteps(self, num_inference_steps, strength):
+        init_timestep = min(num_inference_steps * strength, num_inference_steps)
+        t_start = int(max(num_inference_steps - init_timestep, 0))
+        timesteps = self.scheduler.timesteps[t_start * self.scheduler.order :]
+        if hasattr(self.scheduler, "set_begin_index"):
+            self.scheduler.set_begin_index(t_start * self.scheduler.order)
+        return timesteps, num_inference_steps - t_start

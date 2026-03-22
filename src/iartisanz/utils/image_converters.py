@@ -6,7 +6,7 @@ from PIL import Image
 from PyQt6.QtGui import QImage, QPixmap
 
 
-def convert_latents_to_rgb(latents, latent_rgb_factors) -> np.ndarray:
+def convert_latents_to_rgb(latents, latent_rgb_factors, image_height: int = 0, image_width: int = 0) -> np.ndarray:
     latent_rgb_factors = torch.tensor(latent_rgb_factors, dtype=latents.dtype).to(device=latents.device)
     num_factor_channels = latent_rgb_factors.shape[0]
 
@@ -16,11 +16,21 @@ def convert_latents_to_rgb(latents, latent_rgb_factors) -> np.ndarray:
         # Flux2 packed format: (seq_len, C) where C = num_channels * 4 (patchified)
         seq_len, channels = latent_image.shape
 
-        # Infer spatial dims from sequence length
-        h = int(seq_len**0.5)
-        while h > 0 and seq_len % h != 0:
-            h -= 1
-        w = seq_len // h
+        # Derive spatial dims from actual image dimensions (VAE scale 8, patchify 2 → ÷16)
+        if image_height > 0 and image_width > 0:
+            h = max(1, image_height // 16)
+            w = max(1, image_width // 16)
+            if h * w != seq_len:
+                # Fallback if dimensions don't match (e.g. stale settings)
+                h = int(seq_len**0.5)
+                while h > 0 and seq_len % h != 0:
+                    h -= 1
+                w = seq_len // h
+        else:
+            h = int(seq_len**0.5)
+            while h > 0 and seq_len % h != 0:
+                h -= 1
+            w = seq_len // h
 
         latent_image = latent_image.reshape(h, w, channels)
 

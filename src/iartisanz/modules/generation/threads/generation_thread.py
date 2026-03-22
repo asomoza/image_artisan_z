@@ -769,10 +769,6 @@ class NodeGraphThread(QThread):
             encode_node.disconnect(f"image_{image_index}", image_node, "image")
         self.node_graph.delete_node_by_name(node_name)
 
-        # Removing edit image 0 invalidates the DD inpainting base
-        if image_index == 0:
-            self.remove_edit_image_mask()
-
         if not self._has_any_edit_images():
             self._remove_edit_image_encoder()
 
@@ -809,72 +805,6 @@ class NodeGraphThread(QThread):
             self.node_graph.get_node_by_name(f"edit_image_{i}") is not None
             for i in range(4)
         )
-
-    # ──────────────────────────────────────────────────────────
-    # Edit image inpainting mask (differential diffusion)
-    # ──────────────────────────────────────────────────────────
-
-    def add_edit_image_mask(self, mask_path: str, strength: float = 1.0):
-        """Wire mask and base latents nodes for DD inpainting on edit image 0."""
-        if self.node_graph.get_node_by_name("edit_image_mask") is not None:
-            return
-
-        from iartisanz.modules.generation.graph.nodes.flux2_inpaint_base_latents_node import (
-            Flux2InpaintBaseLatentsNode,
-        )
-
-        # Mask node (grayscale)
-        mask_node = ImageLoadNode(path=mask_path, grayscale=True)
-        self.node_graph.add_node(mask_node, "edit_image_mask")
-
-        # Strength node
-        strength_node = NumberNode(number=float(strength))
-        self.node_graph.add_node(strength_node, "edit_image_mask_strength")
-
-        # Base latents node
-        base_node = Flux2InpaintBaseLatentsNode()
-        models_node = self.node_graph.get_node_by_name("model")
-        edit_image_0 = self.node_graph.get_node_by_name("edit_image_0")
-        width_node = self.node_graph.get_node_by_name("image_width")
-        height_node = self.node_graph.get_node_by_name("image_height")
-
-        base_node.connect("vae", models_node, "vae")
-        base_node.connect("vae_scale_factor", models_node, "vae_scale_factor")
-        base_node.connect("image", edit_image_0, "image")
-        base_node.connect("width", width_node, "value")
-        base_node.connect("height", height_node, "value")
-        self.node_graph.add_node(base_node, "edit_image_base_latents")
-
-        # Wire to denoise
-        denoise = self.node_graph.get_node_by_name("denoise")
-        denoise.connect("edit_image_mask", mask_node, "image")
-        denoise.connect("edit_image_base_latents", base_node, "base_latents")
-        denoise.connect("edit_image_mask_strength", strength_node, "value")
-
-    def update_edit_image_mask(self, mask_path: str):
-        node = self.node_graph.get_node_by_name("edit_image_mask")
-        if node is not None:
-            node.update_value(mask_path)
-
-    def update_edit_image_mask_strength(self, strength: float):
-        node = self.node_graph.get_node_by_name("edit_image_mask_strength")
-        if node is not None:
-            node.update_value(float(strength))
-
-    def remove_edit_image_mask(self):
-        denoise = self.node_graph.get_node_by_name("denoise")
-        mask_node = self.node_graph.get_node_by_name("edit_image_mask")
-        base_node = self.node_graph.get_node_by_name("edit_image_base_latents")
-        strength_node = self.node_graph.get_node_by_name("edit_image_mask_strength")
-        if denoise is not None and mask_node is not None:
-            denoise.disconnect("edit_image_mask", mask_node, "image")
-        if denoise is not None and base_node is not None:
-            denoise.disconnect("edit_image_base_latents", base_node, "base_latents")
-        if denoise is not None and strength_node is not None:
-            denoise.disconnect("edit_image_mask_strength", strength_node, "value")
-        self.node_graph.delete_node_by_name("edit_image_mask")
-        self.node_graph.delete_node_by_name("edit_image_base_latents")
-        self.node_graph.delete_node_by_name("edit_image_mask_strength")
 
     def remove_controlnet(self):
         denoise_node = self.node_graph.get_node_by_name("denoise")

@@ -19,7 +19,7 @@ from iartisanz.modules.generation.constants import (
 from iartisanz.modules.generation.controlnet.controlnet_image_dialog import ControlNetImageDialog
 from iartisanz.modules.generation.controlnet.controlnet_mask_dialog import ControlNetMaskDialog
 from iartisanz.modules.generation.data_objects.lora_data_object import LoraDataObject
-from iartisanz.modules.generation.edit_images.edit_image_mask_dialog import EditImageMaskDialog
+
 from iartisanz.modules.generation.edit_images.edit_images_dialog import EditImagesDialog
 from iartisanz.modules.generation.generation_settings import GenerationSettings
 from iartisanz.modules.generation.graph.new_graph import create_graph_for_model_type
@@ -93,9 +93,6 @@ class GenerationModule(BaseModule):
         self.edit_source_image_layers: list = [None] * 4
         self.edit_result_image_layers: list = [None] * 4
         self.edit_image_enabled: list[bool] = [True] * 4
-        self.edit_image_mask_path: str | None = None
-        self.edit_image_mask_thumb_path: str | None = None
-        self.edit_image_mask_strength: float = 1.0
 
         self.create_generation_thread()
 
@@ -225,10 +222,13 @@ class GenerationModule(BaseModule):
             rgb_factors = FLUX2_LATENT_RGB_FACTORS
         else:
             rgb_factors = ZIMAGE_LATENT_RGB_FACTORS
-        numpy_image = convert_latents_to_rgb(latents, rgb_factors)
+        numpy_image = convert_latents_to_rgb(
+            latents, rgb_factors, self.gen_settings.image_height, self.gen_settings.image_width
+        )
+        total_steps = max(self.gen_settings.num_inference_steps - 1, 1)
         high = 50
         low = 3
-        denoise_strength = high + (low - high) * step / (9 - 1)
+        denoise_strength = max(high + (low - high) * step / total_steps, low)
         numpy_image = fast_upscale_and_denoise(numpy_image, 1, denoise_strength)
 
         qpixmap = convert_numpy_to_pixmap(numpy_image)
@@ -341,8 +341,6 @@ class GenerationModule(BaseModule):
                     "edit_image_1",
                     "edit_image_2",
                     "edit_image_3",
-                    "edit_image_mask",
-                    "edit_image_mask_strength",
                     # Note: use_torch_compile is intentionally NOT extracted from graphs
                     # as it's a runtime config on ModelManager, not a shareable setting
                 ]
@@ -464,22 +462,6 @@ class GenerationModule(BaseModule):
             self.edit_image_thumb_paths[index] = path if path else None
             self.edit_image_enabled[index] = True
 
-        mask_path = subset.get("edit_image_mask")
-        if self.edit_image_paths[0] is None:
-            mask_path = None
-
-        self.edit_image_mask_path = mask_path
-        self.edit_image_mask_thumb_path = mask_path
-
-        strength = subset.get("edit_image_mask_strength", 1.0)
-        try:
-            self.edit_image_mask_strength = float(strength)
-        except Exception:
-            self.edit_image_mask_strength = 1.0
-
-        if self.edit_image_mask_path is None:
-            self.edit_image_mask_strength = 1.0
-
     #########################################################
     ## SUBSCRIBED BUS EVENTS
     #########################################################
@@ -549,9 +531,6 @@ class GenerationModule(BaseModule):
             self.edit_source_image_layers = [None] * 4
             self.edit_result_image_layers = [None] * 4
             self.edit_image_enabled = [True] * 4
-            self.edit_image_mask_path = None
-            self.edit_image_mask_thumb_path = None
-            self.edit_image_mask_strength = 1.0
 
             # Recreate staged graph/thread without clearing ModelManager / VRAM.
             old_thread = self.generation_thread
@@ -768,20 +747,6 @@ class GenerationModule(BaseModule):
                     result_image_layers=self.edit_result_image_layers[d.get("image_index", 0)],
                 ),
             },
-            "edit_image_mask": {
-                "key": lambda _data: "edit_image_mask",
-                "factory": lambda _data: EditImageMaskDialog(
-                    "edit_image_mask",
-                    self.directories,
-                    self.preferences,
-                    self.image_viewer,
-                    self.gen_settings.image_width,
-                    self.gen_settings.image_height,
-                    edit_image_mask_path=self.edit_image_mask_path,
-                    edit_image_path=self.edit_image_paths[0],
-                    mask_strength=self.edit_image_mask_strength,
-                ),
-            },
         }
 
     def on_manage_dialog_event(self, data):
@@ -825,7 +790,12 @@ class GenerationModule(BaseModule):
         self.gen_settings.reset_to_defaults(preserve_model=True)
         defaults = get_model_type_defaults(model_data.model_type, model_data.distilled)
         for key, value in defaults.items():
-            self.gen_settings.apply_change(key, value)
+            if key == "use_dynamic_shifting":
+                self.gen_settings.scheduler.use_dynamic_shifting = value
+            elif key == "shift":
+                self.gen_settings.scheduler.shift = value
+            else:
+                self.gen_settings.apply_change(key, value)
         self.gen_settings.apply_change("model", model_data)
 
         # Clear all runtime state for optional graph branches.
@@ -851,9 +821,6 @@ class GenerationModule(BaseModule):
         self.edit_source_image_layers = [None] * 4
         self.edit_result_image_layers = [None] * 4
         self.edit_image_enabled = [True] * 4
-        self.edit_image_mask_path = None
-        self.edit_image_mask_thumb_path = None
-        self.edit_image_mask_strength = 1.0
 
         # Reset prompts widget state so all values get pushed to the new graph.
         self.prompts_widget.previous_seed = None
@@ -972,8 +939,6 @@ class GenerationModule(BaseModule):
                 "edit_image_1",
                 "edit_image_2",
                 "edit_image_3",
-                "edit_image_mask",
-                "edit_image_mask_strength",
                 "loras",
                 # Note: use_torch_compile is intentionally NOT extracted from graphs
                 # as it's a runtime config on ModelManager, not a shareable setting
@@ -1205,10 +1170,6 @@ class GenerationModule(BaseModule):
                 self.edit_source_image_layers[index] = None
                 self.edit_result_image_layers[index] = None
                 self.edit_image_enabled[index] = True
-                if index == 0:
-                    self.edit_image_mask_path = None
-                    self.edit_image_mask_thumb_path = None
-                    self.edit_image_mask_strength = 1.0
                 self.generation_thread.remove_edit_image(index)
 
         elif action == "enable":
@@ -1231,38 +1192,10 @@ class GenerationModule(BaseModule):
             if index is not None and 0 <= index < 4:
                 self.edit_source_image_layers[index] = data.get("layers")
 
-        elif action == "add_mask":
-            mask_path = data.get("mask_path")
-            self.edit_image_mask_path = mask_path
-            self.edit_image_mask_thumb_path = data.get("mask_thumb_path")
-            if mask_path:
-                self.generation_thread.add_edit_image_mask(mask_path, self.edit_image_mask_strength)
-
-        elif action == "update_mask":
-            mask_path = data.get("mask_path")
-            self.edit_image_mask_path = mask_path
-            self.edit_image_mask_thumb_path = data.get("mask_thumb_path")
-            if mask_path:
-                self.generation_thread.update_edit_image_mask(mask_path)
-
-        elif action == "update_mask_strength":
-            strength = data.get("strength", 1.0)
-            self.edit_image_mask_strength = float(strength)
-            self.generation_thread.update_edit_image_mask_strength(self.edit_image_mask_strength)
-
-        elif action == "remove_mask":
-            self.generation_thread.remove_edit_image_mask()
-            self.edit_image_mask_path = None
-            self.edit_image_mask_thumb_path = None
-            self.edit_image_mask_strength = 1.0
-
         elif action == "reset":
             self.edit_image_paths = [None] * 4
             self.edit_image_thumb_paths = [None] * 4
             self.edit_source_image_layers = [None] * 4
             self.edit_result_image_layers = [None] * 4
             self.edit_image_enabled = [True] * 4
-            self.edit_image_mask_path = None
-            self.edit_image_mask_thumb_path = None
-            self.edit_image_mask_strength = 1.0
             self.generation_thread.remove_all_edit_images()

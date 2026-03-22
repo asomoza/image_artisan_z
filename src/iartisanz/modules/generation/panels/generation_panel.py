@@ -120,6 +120,11 @@ class GenerationPanel(BasePanel):
         self.shift_slider.valueChanged.connect(self.on_shift_value_changed)
         scheduler_config_layout.addWidget(self.shift_slider, 0, 1)
 
+        self.auto_shift_checkbox = QCheckBox("Auto")
+        self.auto_shift_checkbox.setChecked(False)
+        self.auto_shift_checkbox.toggled.connect(self.on_auto_shift_toggled)
+        scheduler_config_layout.addWidget(self.auto_shift_checkbox, 0, 2)
+
         main_layout.addLayout(scheduler_config_layout)
 
         main_layout.addSpacing(10)
@@ -229,7 +234,12 @@ class GenerationPanel(BasePanel):
         blocker = QSignalBlocker(self.scheduler_combobox)
         try:
             self.scheduler_combobox.setCurrentIndex(index)
-            self.shift_slider.setValue(float(getattr(self.scheduler_data_object, "shift", 0.0)))
+            self.shift_slider.setValue(float(getattr(self.scheduler_data_object, "shift", 1.0)))
+            auto_shift = bool(getattr(self.scheduler_data_object, "use_dynamic_shifting", False))
+            self.auto_shift_checkbox.blockSignals(True)
+            self.auto_shift_checkbox.setChecked(auto_shift)
+            self.auto_shift_checkbox.blockSignals(False)
+            self.shift_slider.setEnabled(not auto_shift)
         finally:
             del blocker
 
@@ -244,6 +254,11 @@ class GenerationPanel(BasePanel):
 
     def on_shift_value_changed(self, value: float):
         self.scheduler_data_object.shift = value
+        self.event_bus.publish("generation_change", {"attr": "scheduler", "value": self.scheduler_data_object})
+
+    def on_auto_shift_toggled(self, checked: bool):
+        self.scheduler_data_object.use_dynamic_shifting = checked
+        self.shift_slider.setEnabled(not checked)
         self.event_bus.publish("generation_change", {"attr": "scheduler", "value": self.scheduler_data_object})
 
     def update_panel(

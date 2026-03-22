@@ -8,7 +8,6 @@ from .flux2_denoise_node import Flux2DenoiseNode
 from .flux2_dev_model_node import Flux2DevModelNode
 from .flux2_dev_prompt_encode_node import Flux2DevPromptEncoderNode
 from .flux2_edit_image_encode_node import Flux2EditImageEncodeNode
-from .flux2_inpaint_base_latents_node import Flux2InpaintBaseLatentsNode
 from .flux2_latents_decoder_node import Flux2LatentsDecoderNode
 from .flux2_latents_node import Flux2LatentsNode
 from .flux2_model_node import Flux2ModelNode
@@ -36,7 +35,6 @@ NODE_CLASSES = {
     "Flux2DevModelNode": Flux2DevModelNode,
     "Flux2DevPromptEncoderNode": Flux2DevPromptEncoderNode,
     "Flux2EditImageEncodeNode": Flux2EditImageEncodeNode,
-    "Flux2InpaintBaseLatentsNode": Flux2InpaintBaseLatentsNode,
     "Flux2LatentsDecoderNode": Flux2LatentsDecoderNode,
     "Flux2LatentsNode": Flux2LatentsNode,
     "Flux2ModelNode": Flux2ModelNode,

@@ -187,7 +187,7 @@ class GenerationRightMenu(QFrame):
     def update_panels_for_model_type(self, model_type: int):
         is_flux2 = model_type in FLUX2_MODEL_TYPES
         self.set_panel_visible("ControlNet", not is_flux2)
-        self.set_panel_visible("Source Image", not is_flux2)
+        self.set_panel_visible("Source Image", True)
         self.set_panel_visible("Edit Images", is_flux2)
 
     def closeEvent(self, event):

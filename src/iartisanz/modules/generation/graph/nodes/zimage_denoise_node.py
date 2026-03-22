@@ -429,9 +429,13 @@ class ZImageDenoiseNode(Node):
 
                         try:
                             phase1_steps = 3
+                            p1_retrieve_kwargs = {}
+                            if getattr(self.scheduler.config, "use_dynamic_shifting", False):
+                                p1_image_seq_len = (self.latents.shape[2] // 2) * (self.latents.shape[3] // 2)
+                                p1_retrieve_kwargs["mu"] = self._calculate_shift(p1_image_seq_len)
                             p1_timesteps, _ = self.retrieve_timesteps(
                                 self.scheduler, num_inference_steps, self.device,
-                                sigmas=self.sigmas,
+                                sigmas=self.sigmas, **p1_retrieve_kwargs,
                             )
                             phase1_steps = min(phase1_steps, len(p1_timesteps))
                             phase1_latents = self.latents.clone()
@@ -714,11 +718,19 @@ class ZImageDenoiseNode(Node):
                 )
                 control_image_latents_typed = torch.cat([control_image_latents_typed, pad], dim=1)
 
+        # Compute mu for dynamic shifting (resolution-dependent sigma schedule).
+        # When use_dynamic_shifting=False the scheduler ignores mu.
+        retrieve_kwargs = {}
+        if getattr(self.scheduler.config, "use_dynamic_shifting", False):
+            image_seq_len = (self.latents.shape[2] // 2) * (self.latents.shape[3] // 2)
+            retrieve_kwargs["mu"] = self._calculate_shift(image_seq_len)
+
         timesteps, num_inference_steps = self.retrieve_timesteps(
             self.scheduler,
             num_inference_steps,
             self.device,
             sigmas=self.sigmas,
+            **retrieve_kwargs,
         )
         total_time_steps = num_inference_steps
 
@@ -1033,3 +1045,15 @@ class ZImageDenoiseNode(Node):
             self.scheduler.set_begin_index(t_start * self.scheduler.order)
 
         return timesteps, num_inference_steps - t_start
+
+    @staticmethod
+    def _calculate_shift(
+        image_seq_len: int,
+        base_seq_len: int = 256,
+        max_seq_len: int = 4096,
+        base_shift: float = 0.5,
+        max_shift: float = 1.15,
+    ) -> float:
+        m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
+        b = base_shift - m * base_seq_len
+        return image_seq_len * m + b

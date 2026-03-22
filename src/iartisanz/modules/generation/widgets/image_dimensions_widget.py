@@ -7,7 +7,7 @@ from iartisanz.buttons.linked_button import LinkedButton
 
 _MIN_DIM = 512
 _MAX_DIM = 3072
-_STEP = 32
+_STEP = 16
 ALLOWED_VALUES = list(range(_MIN_DIM, _MAX_DIM + 1, _STEP))
 
 
@@ -22,8 +22,7 @@ class ImageDimensionsWidget(QWidget):
 
         self.event_bus = EventBus()
         self._updating_linked = False
-        self._prev_width = _MIN_DIM
-        self._prev_height = _MIN_DIM
+        self._aspect_ratio: float | None = None  # width / height, captured when link activated
 
         self.init_ui()
 
@@ -63,10 +62,19 @@ class ImageDimensionsWidget(QWidget):
 
         self.width_slider.valueChanged.connect(self.on_slider_value_changed)
         self.height_slider.valueChanged.connect(self.on_slider_value_changed)
+        self.linked_button.clicked.connect(self._on_link_toggled)
 
         main_layout.addLayout(image_sliders_layout)
 
         self.setLayout(main_layout)
+
+    def _on_link_toggled(self):
+        if self.linked_button.linked:
+            w = _snap(self.width_slider.value())
+            h = _snap(self.height_slider.value())
+            self._aspect_ratio = w / h if h > 0 else 1.0
+        else:
+            self._aspect_ratio = None
 
     def on_slider_value_changed(self):
         if self._updating_linked:
@@ -76,26 +84,20 @@ class ImageDimensionsWidget(QWidget):
         nearest_value = _snap(slider.value())
 
         if slider == self.width_slider:
-            delta = nearest_value - self._prev_width
-            self._prev_width = nearest_value
             self.image_width_value_label.setText(str(nearest_value))
             self.event_bus.publish("generation_change", {"attr": "image_width", "value": nearest_value})
 
-            if self.linked_button.linked and delta != 0:
-                new_height = _snap(self._prev_height + delta)
-                self._prev_height = new_height
+            if self.linked_button.linked and self._aspect_ratio is not None:
+                new_height = _snap(round(nearest_value / self._aspect_ratio))
                 self._update_other_slider(
                     self.height_slider, self.image_height_value_label, "image_height", new_height
                 )
         else:
-            delta = nearest_value - self._prev_height
-            self._prev_height = nearest_value
             self.image_height_value_label.setText(str(nearest_value))
             self.event_bus.publish("generation_change", {"attr": "image_height", "value": nearest_value})
 
-            if self.linked_button.linked and delta != 0:
-                new_width = _snap(self._prev_width + delta)
-                self._prev_width = new_width
+            if self.linked_button.linked and self._aspect_ratio is not None:
+                new_width = _snap(round(nearest_value * self._aspect_ratio))
                 self._update_other_slider(
                     self.width_slider, self.image_width_value_label, "image_width", new_width
                 )
