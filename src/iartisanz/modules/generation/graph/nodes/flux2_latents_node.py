@@ -75,11 +75,20 @@ class Flux2LatentsNode(Node):
                 # Patchify: (B, C, H, W) -> (B, C*4, H/2, W/2)
                 latents = self._patchify_latents(latents)
 
+                # BN normalize to match the space the transformer operates in.
+                # The decoder applies the inverse (BN denormalization) before VAE decode.
+                bn = vae.bn
+                bn_mean = bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)
+                bn_std = torch.sqrt(bn.running_var.view(1, -1, 1, 1) + vae.config.batch_norm_eps).to(
+                    latents.device, latents.dtype
+                )
+                latents = (latents - bn_mean) / bn_std
+
                 # Generate position IDs from patchified shape
                 latent_ids = self._prepare_latent_ids(latents)
                 latent_ids = latent_ids.to(self.device)
 
-                # Pack: (B, C, H, W) -> (B, H*W, C) — NO BN normalization
+                # Pack: (B, C, H, W) -> (B, H*W, C)
                 latents = self._pack_latents(latents)
 
                 # Generate noise in the same packed shape
