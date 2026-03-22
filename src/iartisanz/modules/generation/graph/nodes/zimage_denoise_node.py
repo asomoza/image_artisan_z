@@ -732,8 +732,6 @@ class ZImageDenoiseNode(Node):
             sigmas=self.sigmas,
             **retrieve_kwargs,
         )
-        total_time_steps = num_inference_steps
-
         if hasattr(self, "strength") and self.strength is not None:
             timesteps, num_inference_steps = self.get_timesteps(num_inference_steps, self.strength)
 
@@ -760,7 +758,7 @@ class ZImageDenoiseNode(Node):
                     original_mask, size=(latents.shape[2], latents.shape[3])
                 )
 
-                mask_thresholds = torch.arange(total_time_steps, dtype=original_mask.dtype) / total_time_steps
+                mask_thresholds = torch.arange(num_inference_steps, dtype=original_mask.dtype) / num_inference_steps
                 mask_thresholds = mask_thresholds.reshape(-1, 1, 1, 1).to(self.device)
                 masks = original_mask > mask_thresholds
             # end differential diffusion

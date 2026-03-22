@@ -618,11 +618,6 @@ class Flux2DenoiseNode(Node):
             mu=mu,
         )
 
-        # Save total step count BEFORE strength truncation for DD threshold schedule.
-        # This matches Z-Image: thresholds span the full schedule so that when
-        # strength < 1.0, only the low-threshold (mostly-preserve) masks are used.
-        total_time_steps = total_steps
-
         # Truncate timesteps based on strength (img2img: fewer steps = more faithful)
         if strength is not None and float(strength) < 1.0:
             timesteps, num_inference_steps = self.get_timesteps(total_steps, float(strength))
@@ -658,9 +653,9 @@ class Flux2DenoiseNode(Node):
                 )
                 preserve_mask = preserve_mask.reshape(1, -1)  # (1, seq_len)
 
-                # Per-step threshold schedule using total steps (before strength truncation)
+                # Per-step threshold schedule over actual steps (matches reference DD paper)
                 mask_thresholds = (
-                    torch.arange(total_time_steps, dtype=preserve_mask.dtype) / total_time_steps
+                    torch.arange(num_inference_steps, dtype=preserve_mask.dtype) / num_inference_steps
                 )
                 mask_thresholds = mask_thresholds.reshape(-1, 1).to(self.device)
                 dd_masks = (preserve_mask > mask_thresholds).float()  # (total_steps, seq_len)
