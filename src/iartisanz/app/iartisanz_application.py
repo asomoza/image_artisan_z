@@ -7,7 +7,7 @@ import tempfile
 from importlib.resources import files
 
 from PyQt6.QtCore import QSettings, Qt
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication, QSplashScreen
 
 from iartisanz.app.directories import DirectoriesObject
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 class BaseTorchAppApplication(QApplication):
     SPLASH_IMG = str(files("iartisanz.theme.images").joinpath("splash.webp"))
+    ICON_IMG = str(files("iartisanz.theme.images").joinpath("icon.png"))
 
     def __init__(self, *args, **kwargs):
         myappid = "zcode.iartisanz.010"
@@ -33,6 +34,7 @@ class BaseTorchAppApplication(QApplication):
         style_data = files("iartisanz.theme").joinpath("stylesheet.qss").read_bytes()
         stylesheet = style_data.decode("utf-8")
         self.setStyleSheet(stylesheet)
+        self.setWindowIcon(QIcon(self.ICON_IMG))
 
         self.temp_path = tempfile.mkdtemp(prefix="iartisanz_")
 
