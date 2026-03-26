@@ -1,14 +1,10 @@
 # Image Artisan Z
 
 Image Artisan Z is a desktop app for generating images with local models.
-It is made to run on your computer without needing a browser.
+It is made to run on your computer without needing a browser. 
+For the moment it just runs Z-Image models and Flux.2 models
 
 This project is under active development.
-
-## What you can do
-
-- Generate images from a text prompt
-- Keep models and results on disk, under folders you choose
 
 ## Requirements
 
